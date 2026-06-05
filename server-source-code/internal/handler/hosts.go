@@ -8,10 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"slices"
-	"strings"
-	"sync"
 
 	"github.com/PatchMon/PatchMon/server-source-code/internal/agentregistry"
 	hostctx "github.com/PatchMon/PatchMon/server-source-code/internal/context"
@@ -21,6 +17,7 @@ import (
 	"github.com/PatchMon/PatchMon/server-source-code/internal/models"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/notifications"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/queue"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/serverident"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/store"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -549,70 +546,11 @@ func (h *HostsHandler) FetchReportBulk(w http.ResponseWriter, r *http.Request) {
 // (or scripted) select-all from rebooting an entire fleet in one call.
 const maxRebootBatchSize = 100
 
-// isContainerized reports whether the server runs inside a container
-// (Docker creates /.dockerenv, Podman /run/.containerenv).
-var isContainerized = sync.OnceValue(func() bool {
-	for _, p := range []string{"/.dockerenv", "/run/.containerenv"} {
-		if _, err := os.Stat(p); err == nil {
-			return true
-		}
-	}
-	return false
-})
-
-// normalizeMachineID canonicalizes a machine identifier for comparison:
-// agents report gopsutil's host.HostID() (on Linux the dashed DMI product
-// UUID), while operators may configure the undashed /etc/machine-id form.
-func normalizeMachineID(s string) string {
-	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "-", "")
-}
-
-// serverMachineIDs caches the normalized candidate identifiers of the machine
-// running the PatchMon server itself, for the reboot self-exclusion check.
-//
-// Agents report gopsutil's host.HostID(), which on Linux prefers the DMI
-// product UUID and falls back to /etc/machine-id (e.g. in LXC or VMs without
-// DMI). The server therefore collects every identifier its own host may be
-// known by: the PM_SERVER_MACHINE_ID override, the DMI product UUID (sysfs is
-// host-wide even inside containers), the host's machine-id bind-mounted to
-// /run/host-machine-id (see docker-compose), and the local machine-id files
-// outside containers. An empty result means self-exclusion cannot work;
-// RebootBulk fails closed in that case.
-var serverMachineIDs = sync.OnceValue(func() []string {
-	var ids []string
-	add := func(s string) {
-		if n := normalizeMachineID(s); n != "" && !slices.Contains(ids, n) {
-			ids = append(ids, n)
-		}
-	}
-	add(os.Getenv("PM_SERVER_MACHINE_ID"))
-	if b, err := os.ReadFile("/sys/class/dmi/id/product_uuid"); err == nil {
-		add(string(b))
-	}
-	// The Docker host's machine-id, bind-mounted read-only into the container.
-	if b, err := os.ReadFile("/run/host-machine-id"); err == nil {
-		add(string(b))
-	}
-	if !isContainerized() {
-		for _, p := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
-			if b, err := os.ReadFile(p); err == nil {
-				add(string(b))
-			}
-		}
-	}
-	return ids
-})
-
 // isSelfHost reports whether the given host is the machine the PatchMon server
-// itself runs on. Matches on machine_id only: a hostname fallback would let a
-// host that merely shares the server's (short) hostname dodge reboots, and
-// hostnames are agent-reported and freely choosable.
+// itself runs on. The actual matching lives in the serverident package so the
+// scheduled-reboot queue worker applies the identical exclusion logic.
 func isSelfHost(host *models.Host) bool {
-	if host.MachineID == nil {
-		return false
-	}
-	id := normalizeMachineID(*host.MachineID)
-	return id != "" && slices.Contains(serverMachineIDs(), id)
+	return serverident.IsSelf(host.MachineID)
 }
 
 // AllowRebootBulk handles PUT /hosts/bulk/allow-reboot. Sets the allow_reboot
@@ -723,7 +661,7 @@ func (h *HostsHandler) RebootBulk(w http.ResponseWriter, r *http.Request) {
 
 	// Fail closed: without a known server machine identity the self-exclusion
 	// check cannot work, so no reboot is allowed at all.
-	if len(serverMachineIDs()) == 0 {
+	if len(serverident.MachineIDs()) == 0 {
 		slog.Error("refusing reboot request: self-exclusion not configured (no DMI product UUID, no /run/host-machine-id mount, no PM_SERVER_MACHINE_ID)")
 		Error(w, http.StatusServiceUnavailable, "Reboot refused: self-exclusion is not configured. Mount the host's /etc/machine-id to /run/host-machine-id or set PM_SERVER_MACHINE_ID.")
 		return
