@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
 	AlertTriangle,
 	BookOpen,
+	CalendarClock,
 	ChevronDown,
 	ChevronLeft,
 	ChevronRight,
@@ -305,6 +306,16 @@ const Layout = ({ children }) => {
 				});
 			}
 
+			// Scheduled remote reboots; gated by the same permission as the
+			// manual reboot actions on the hosts page.
+			if (hasPermission("can_reboot_hosts")) {
+				opsItems.push({
+					name: "Reboot Schedules",
+					href: "/reboot-schedules",
+					icon: CalendarClock,
+				});
+			}
+
 			// Compliance is a Max-tier feature (module key: "compliance").
 			if (canViewReports()) {
 				const complianceLocked = !hasModule("compliance");
@@ -498,6 +509,7 @@ const Layout = ({ children }) => {
 		if (path === "/docker") return "Docker";
 		if (path === "/pro-action") return "Pro-Action";
 		if (path === "/automation") return "Automation";
+		if (path === "/reboot-schedules") return "Reboot Schedules";
 		if (path === "/patching" || path.startsWith("/patching/"))
 			return "Patching";
 		if (path === "/compliance" || path.startsWith("/compliance/"))

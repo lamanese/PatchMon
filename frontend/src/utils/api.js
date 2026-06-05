@@ -177,6 +177,14 @@ export const adminHostsAPI = {
 		}),
 };
 
+// Reboot Schedules API (scheduled remote reboots per host group)
+export const rebootSchedulesAPI = {
+	list: () => api.get("/reboot-schedules"),
+	create: (data) => api.post("/reboot-schedules", data),
+	update: (id, data) => api.put(`/reboot-schedules/${id}`, data),
+	delete: (id) => api.delete(`/reboot-schedules/${id}`),
+};
+
 // Host Groups API
 export const hostGroupsAPI = {
 	list: () => api.get("/host-groups"),
