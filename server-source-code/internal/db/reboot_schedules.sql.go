@@ -11,6 +11,35 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const consumeRebootScheduleSlot = `-- name: ConsumeRebootScheduleSlot :one
+UPDATE reboot_schedules
+SET last_run_at = $1,
+    enabled = CASE WHEN schedule_type = 'once' THEN false ELSE enabled END
+WHERE id = $2
+  AND enabled = true
+  AND (last_run_at IS NULL OR last_run_at < $3)
+RETURNING id
+`
+
+type ConsumeRebootScheduleSlotParams struct {
+	LastRunAt pgtype.Timestamp `json:"last_run_at"`
+	ID        string           `json:"id"`
+	Slot      pgtype.Timestamp `json:"slot"`
+}
+
+// Atomically claims a schedule slot (compare-and-set on last_run_at) so that
+// concurrent dispatchers cannot run the same slot twice. Returns no row when
+// the slot was already consumed. One-shot schedules are disabled in the same
+// statement so a claim can never leave them armed.
+// updated_at is intentionally left alone: it tracks config changes and the
+// dispatcher skips slots older than it (no instant fire on create/enable).
+func (q *Queries) ConsumeRebootScheduleSlot(ctx context.Context, arg ConsumeRebootScheduleSlotParams) (string, error) {
+	row := q.db.QueryRow(ctx, consumeRebootScheduleSlot, arg.LastRunAt, arg.ID, arg.Slot)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const createRebootSchedule = `-- name: CreateRebootSchedule :one
 INSERT INTO reboot_schedules (
     id, name, host_group_id, schedule_type, run_at, weekday, time_of_day,
@@ -371,17 +400,18 @@ func (q *Queries) UpdateRebootSchedule(ctx context.Context, arg UpdateRebootSche
 	return i, err
 }
 
-const updateRebootScheduleLastRun = `-- name: UpdateRebootScheduleLastRun :exec
-UPDATE reboot_schedules SET last_run_at = $1, updated_at = NOW()
-WHERE id = $2
+const userCanRebootHosts = `-- name: UserCanRebootHosts :one
+SELECT u.is_active AND rp.can_reboot_hosts AS allowed
+FROM users u
+JOIN role_permissions rp ON rp.role = u.role
+WHERE u.id = $1
 `
 
-type UpdateRebootScheduleLastRunParams struct {
-	LastRunAt pgtype.Timestamp `json:"last_run_at"`
-	ID        string           `json:"id"`
-}
-
-func (q *Queries) UpdateRebootScheduleLastRun(ctx context.Context, arg UpdateRebootScheduleLastRunParams) error {
-	_, err := q.db.Exec(ctx, updateRebootScheduleLastRun, arg.LastRunAt, arg.ID)
-	return err
+// Execution-time revalidation of the schedule creator: the schedule must stop
+// firing once its creator is deleted, deactivated or loses can_reboot_hosts.
+func (q *Queries) UserCanRebootHosts(ctx context.Context, id string) (*bool, error) {
+	row := q.db.QueryRow(ctx, userCanRebootHosts, id)
+	var allowed *bool
+	err := row.Scan(&allowed)
+	return allowed, err
 }

@@ -44,13 +44,32 @@ RETURNING *;
 -- name: DeleteRebootSchedule :exec
 DELETE FROM reboot_schedules WHERE id = $1;
 
--- name: UpdateRebootScheduleLastRun :exec
-UPDATE reboot_schedules SET last_run_at = sqlc.arg('last_run_at'), updated_at = NOW()
-WHERE id = sqlc.arg('id');
+-- name: ConsumeRebootScheduleSlot :one
+-- Atomically claims a schedule slot (compare-and-set on last_run_at) so that
+-- concurrent dispatchers cannot run the same slot twice. Returns no row when
+-- the slot was already consumed. One-shot schedules are disabled in the same
+-- statement so a claim can never leave them armed.
+-- updated_at is intentionally left alone: it tracks config changes and the
+-- dispatcher skips slots older than it (no instant fire on create/enable).
+UPDATE reboot_schedules
+SET last_run_at = sqlc.arg('last_run_at'),
+    enabled = CASE WHEN schedule_type = 'once' THEN false ELSE enabled END
+WHERE id = sqlc.arg('id')
+  AND enabled = true
+  AND (last_run_at IS NULL OR last_run_at < sqlc.arg('slot'))
+RETURNING id;
 
 -- name: MarkRebootScheduleMissed :exec
 UPDATE reboot_schedules SET enabled = false, missed_at = sqlc.arg('missed_at'), updated_at = NOW()
 WHERE id = sqlc.arg('id');
+
+-- name: UserCanRebootHosts :one
+-- Execution-time revalidation of the schedule creator: the schedule must stop
+-- firing once its creator is deleted, deactivated or loses can_reboot_hosts.
+SELECT u.is_active AND rp.can_reboot_hosts AS allowed
+FROM users u
+JOIN role_permissions rp ON rp.role = u.role
+WHERE u.id = $1;
 
 -- name: ListRebootScheduleGroupHosts :many
 SELECT h.id, h.api_id, h.friendly_name, h.hostname, h.machine_id, h.allow_reboot, h.needs_reboot

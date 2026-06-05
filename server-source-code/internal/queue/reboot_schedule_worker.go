@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/PatchMon/PatchMon/server-source-code/internal/serverident"
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/jackc/pgx/v5"
 )
 
 // rebootScheduleTolerance is how far past its slot a schedule still fires.
@@ -44,7 +46,9 @@ func NewRebootSchedulesDispatchHandler(defaultDB *database.DB, poolCache *hostct
 
 // ProcessTask implements asynq.Handler. Mirrors the scheduled-reports
 // dispatcher: a payload pins one tenant DB, no payload means the default DB
-// plus every cached tenant pool.
+// plus every cached tenant pool. Like for scheduled reports, tenants whose
+// pool is not currently cached are not evaluated; their due slots expire
+// fail-closed (no reboot) until traffic re-populates the pool.
 func (h *RebootSchedulesDispatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error {
 	payload := t.Payload()
 	if len(payload) > 0 && h.poolCache != nil {
@@ -100,11 +104,25 @@ func (h *RebootSchedulesDispatchHandler) processDB(ctx context.Context, d *datab
 			continue
 		}
 		// Dedupe: last_run_at at or after the slot means this slot already ran.
+		// (Repeated authoritatively by the compare-and-set in runSchedule.)
 		if s.LastRunAt.Valid && !s.LastRunAt.Time.Before(slot) {
+			continue
+		}
+		// A slot older than the schedule's last config change never fires:
+		// otherwise creating or enabling "Thursday 03:00" shortly after
+		// 03:00 would reboot the group immediately instead of next week.
+		if slotPredatesConfig(s, slot) {
 			continue
 		}
 		h.runSchedule(ctx, d, s, slot, now, tenantHost)
 	}
+}
+
+// slotPredatesConfig reports whether the slot lies before the schedule's last
+// configuration change (create, edit or enable all bump updated_at; claiming
+// a slot intentionally does not).
+func slotPredatesConfig(s db.RebootSchedule, slot time.Time) bool {
+	return s.UpdatedAt.Valid && slot.Before(s.UpdatedAt.Time)
 }
 
 // rebootScheduleSlot evaluates a schedule against now and returns the slot
@@ -163,40 +181,83 @@ func rebootScheduleSlot(s db.RebootSchedule, now time.Time) (slot time.Time, due
 	}
 }
 
-// runSchedule executes one due schedule: resolve the group's hosts, apply
-// self-exclusion and the allow_reboot allowlist, audit, consume the slot and
-// enqueue the per-host reboot tasks.
+// runSchedule executes one due schedule. The slot is claimed first via an
+// atomic compare-and-set so that at most one dispatcher (concurrent task or
+// extra replica) ever runs a given slot. After the claim every refusal is
+// final for this slot: a refused or failed run expires instead of retrying,
+// matching the no-catch-up policy for missed schedules. Execution applies
+// the same safety layers as the bulk endpoint: creator revalidation,
+// self-exclusion (fail closed when unconfigured), the allow_reboot
+// allowlist, the batch-size cap and a fail-closed audit intent entry.
 func (h *RebootSchedulesDispatchHandler) runSchedule(ctx context.Context, d *database.DB, s db.RebootSchedule, slot, now time.Time, tenantHost string) {
 	if h.qc == nil {
-		// Leave the slot unconsumed; without a queue client nothing can run.
+		// Transient infra gap: leave the slot unclaimed so the next dispatch
+		// within the tolerance window can retry.
 		h.logError("reboot schedule: no queue client available", "schedule_id", s.ID)
 		return
 	}
-	// Fail closed: without a known server machine identity the self-exclusion
-	// check cannot work, so no scheduled reboot may run at all. The slot is
-	// consumed so a config problem does not turn into a reboot storm once
-	// fixed hours later.
-	if len(serverident.MachineIDs()) == 0 {
-		h.logError("reboot schedule refused: self-exclusion not configured (no DMI product UUID, no /run/host-machine-id mount, no PM_SERVER_MACHINE_ID)",
-			"schedule_id", s.ID, "schedule_name", s.Name)
+
+	// Claim the slot. The CAS on last_run_at also disables one-shot
+	// schedules, so a claim can never leave them armed.
+	if _, err := d.Queries.ConsumeRebootScheduleSlot(ctx, db.ConsumeRebootScheduleSlotParams{
+		ID:        s.ID,
+		LastRunAt: pgtime.From(now),
+		Slot:      pgtime.From(slot),
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Another dispatcher claimed this slot.
+			return
+		}
+		// Real DB error: leave unclaimed, next dispatch retries in-window.
+		h.logError("reboot schedule: slot claim failed", "schedule_id", s.ID, "error", err)
+		return
+	}
+
+	// refuse records a slot that was claimed but must not run. Best effort:
+	// nothing destructive has happened (or will happen) on this path.
+	refuse := func(reason string) {
+		h.logError("reboot schedule refused: "+reason, "schedule_id", s.ID, "schedule_name", s.Name)
 		if err := h.writeAudit(ctx, d, s, "host_reboot_scheduled_run", false, map[string]interface{}{
 			"schedule_id":   s.ID,
 			"schedule_name": s.Name,
 			"slot":          slot,
-			"error":         "self-exclusion is not configured",
+			"error":         reason,
 		}); err != nil {
 			h.logError("reboot schedule: audit write failed", "schedule_id", s.ID, "error", err)
+		}
+	}
+
+	// Revalidate the creator at execution time: can_reboot_hosts only gates
+	// the HTTP routes, so a schedule must stop firing once its creator is
+	// deleted, deactivated or loses the permission. Such schedules are
+	// disabled outright, not just skipped.
+	creatorAllowed := false
+	if s.CreatedBy != nil {
+		allowed, err := d.Queries.UserCanRebootHosts(ctx, *s.CreatedBy)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			refuse("failed to revalidate schedule creator: " + err.Error())
 			return
 		}
-		h.consumeSlot(ctx, d, s, now)
+		creatorAllowed = err == nil && allowed != nil && *allowed
+	}
+	if !creatorAllowed {
+		refuse("schedule creator no longer exists, is inactive or lacks can_reboot_hosts; schedule disabled")
+		if _, err := d.Queries.SetRebootScheduleEnabled(ctx, db.SetRebootScheduleEnabledParams{ID: s.ID, Enabled: false}); err != nil {
+			h.logError("reboot schedule: disable failed", "schedule_id", s.ID, "error", err)
+		}
+		return
+	}
+
+	// Fail closed: without a known server machine identity the self-exclusion
+	// check cannot work, so no scheduled reboot may run at all.
+	if len(serverident.MachineIDs()) == 0 {
+		refuse("self-exclusion is not configured (no DMI product UUID, no /run/host-machine-id mount, no PM_SERVER_MACHINE_ID)")
 		return
 	}
 
 	hosts, err := d.Queries.ListRebootScheduleGroupHosts(ctx, s.HostGroupID)
 	if err != nil {
-		// Transient lookup failure: leave the slot unconsumed, the next
-		// minute's dispatch retries within the tolerance window.
-		h.logError("reboot schedule: list group hosts", "schedule_id", s.ID, "error", err)
+		refuse("failed to resolve host group members: " + err.Error())
 		return
 	}
 
@@ -225,9 +286,15 @@ func (h *RebootSchedulesDispatchHandler) runSchedule(ctx context.Context, d *dat
 		requested = append(requested, map[string]string{"hostId": row.ID, "hostname": hostname})
 	}
 
+	// The fleet-protection cap of the bulk endpoint applies per run as well.
+	if len(targets) > MaxRebootBatchSize {
+		refuse(fmt.Sprintf("host group resolves to %d rebootable hosts, exceeding the maximum of %d per run", len(targets), MaxRebootBatchSize))
+		return
+	}
+
 	// Audit the intent BEFORE enqueueing, attributed to the schedule's
-	// creator. Fail closed: a reboot that cannot be audited must not happen;
-	// the slot stays unconsumed so the next dispatch retries.
+	// creator. Fail closed: a reboot that cannot be audited must not happen.
+	// The slot is already claimed, so a failed audit expires the run.
 	if err := h.writeAudit(ctx, d, s, "host_reboot_scheduled_run", len(requested) > 0, map[string]interface{}{
 		"schedule_id":      s.ID,
 		"schedule_name":    s.Name,
@@ -240,10 +307,6 @@ func (h *RebootSchedulesDispatchHandler) runSchedule(ctx context.Context, d *dat
 		h.logError("reboot schedule refused: audit log write failed", "schedule_id", s.ID, "error", err)
 		return
 	}
-
-	// Consume the slot before enqueueing to narrow the double-dispatch
-	// window; the per-host TaskID cooldown in NewRebootTask closes the rest.
-	h.consumeSlot(ctx, d, s, now)
 
 	enqueued := 0
 	failed := []map[string]string{}
@@ -259,7 +322,7 @@ func (h *RebootSchedulesDispatchHandler) runSchedule(ctx context.Context, d *dat
 		}
 		if _, err := h.qc.Enqueue(task); err != nil {
 			reason := "Failed to enqueue reboot task"
-			if err == asynq.ErrDuplicateTask || err == asynq.ErrTaskIDConflict {
+			if errors.Is(err, asynq.ErrDuplicateTask) || errors.Is(err, asynq.ErrTaskIDConflict) {
 				reason = "Reboot already pending for this host (cooldown)"
 			}
 			failed = append(failed, map[string]string{"hostId": t.hostID, "hostname": t.hostname, "reason": reason})
@@ -282,21 +345,6 @@ func (h *RebootSchedulesDispatchHandler) runSchedule(ctx context.Context, d *dat
 	h.logInfo("reboot schedule executed",
 		"schedule_id", s.ID, "schedule_name", s.Name, "slot", slot,
 		"enqueued", enqueued, "skipped", len(skipped), "failed", len(failed))
-}
-
-// consumeSlot records the run and disables one-shot schedules.
-func (h *RebootSchedulesDispatchHandler) consumeSlot(ctx context.Context, d *database.DB, s db.RebootSchedule, now time.Time) {
-	if err := d.Queries.UpdateRebootScheduleLastRun(ctx, db.UpdateRebootScheduleLastRunParams{
-		ID:        s.ID,
-		LastRunAt: pgtime.From(now),
-	}); err != nil {
-		h.logError("reboot schedule: update last_run_at failed", "schedule_id", s.ID, "error", err)
-	}
-	if s.ScheduleType == "once" {
-		if _, err := d.Queries.SetRebootScheduleEnabled(ctx, db.SetRebootScheduleEnabledParams{ID: s.ID, Enabled: false}); err != nil {
-			h.logError("reboot schedule: disable one-shot failed", "schedule_id", s.ID, "error", err)
-		}
-	}
 }
 
 // writeAudit inserts an audit_logs entry attributed to the schedule's creator.

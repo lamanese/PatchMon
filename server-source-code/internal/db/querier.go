@@ -91,6 +91,13 @@ type Querier interface {
 	BulkUpsertPackages(ctx context.Context, payload []byte) ([]BulkUpsertPackagesRow, error)
 	CancelStalledPatchRuns(ctx context.Context, arg CancelStalledPatchRunsParams) (int64, error)
 	ClearScheduledAt(ctx context.Context, id string) error
+	// Atomically claims a schedule slot (compare-and-set on last_run_at) so that
+	// concurrent dispatchers cannot run the same slot twice. Returns no row when
+	// the slot was already consumed. One-shot schedules are disabled in the same
+	// statement so a claim can never leave them armed.
+	// updated_at is intentionally left alone: it tracks config changes and the
+	// dispatcher skips slots older than it (no instant fire on create/enable).
+	ConsumeRebootScheduleSlot(ctx context.Context, arg ConsumeRebootScheduleSlotParams) (string, error)
 	CountActiveAdmins(ctx context.Context) (int64, error)
 	CountActiveRepositories(ctx context.Context) (int32, error)
 	CountAdmins(ctx context.Context) (int64, error)
@@ -475,7 +482,6 @@ type Querier interface {
 	// a duplicate of the streamed progress.
 	UpdatePatchRunValidated(ctx context.Context, arg UpdatePatchRunValidatedParams) error
 	UpdateRebootSchedule(ctx context.Context, arg UpdateRebootScheduleParams) (RebootSchedule, error)
-	UpdateRebootScheduleLastRun(ctx context.Context, arg UpdateRebootScheduleLastRunParams) error
 	UpdateRepository(ctx context.Context, arg UpdateRepositoryParams) error
 	UpdateScheduledReport(ctx context.Context, arg UpdateScheduledReportParams) (ScheduledReport, error)
 	UpdateScheduledReportRunTimes(ctx context.Context, arg UpdateScheduledReportRunTimesParams) error
@@ -521,6 +527,9 @@ type Querier interface {
 	// always-populated for a simpler caller contract.
 	UpsertRepository(ctx context.Context, arg UpsertRepositoryParams) (string, error)
 	UpsertRolePermissions(ctx context.Context, arg UpsertRolePermissionsParams) (RolePermission, error)
+	// Execution-time revalidation of the schedule creator: the schedule must stop
+	// firing once its creator is deleted, deactivated or loses can_reboot_hosts.
+	UserCanRebootHosts(ctx context.Context, id string) (*bool, error)
 }
 
 var _ Querier = (*Queries)(nil)

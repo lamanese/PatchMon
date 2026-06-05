@@ -542,10 +542,6 @@ func (h *HostsHandler) FetchReportBulk(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// maxRebootBatchSize caps a single bulk reboot request. Prevents an accidental
-// (or scripted) select-all from rebooting an entire fleet in one call.
-const maxRebootBatchSize = 100
-
 // isSelfHost reports whether the given host is the machine the PatchMon server
 // itself runs on. The actual matching lives in the serverident package so the
 // scheduled-reboot queue worker applies the identical exclusion logic.
@@ -678,8 +674,8 @@ func (h *HostsHandler) RebootBulk(w http.ResponseWriter, r *http.Request) {
 		seen[id] = struct{}{}
 		hostIDs = append(hostIDs, id)
 	}
-	if len(hostIDs) > maxRebootBatchSize {
-		Error(w, http.StatusBadRequest, fmt.Sprintf("Too many hosts: maximum %d per reboot request", maxRebootBatchSize))
+	if len(hostIDs) > queue.MaxRebootBatchSize {
+		Error(w, http.StatusBadRequest, fmt.Sprintf("Too many hosts: maximum %d per reboot request", queue.MaxRebootBatchSize))
 		return
 	}
 

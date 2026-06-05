@@ -137,6 +137,34 @@ func TestRebootScheduleSlotWeeklyLocalTimeAcrossDST(t *testing.T) {
 	}
 }
 
+func TestSlotPredatesConfig(t *testing.T) {
+	slot := time.Date(2026, 6, 4, 3, 0, 0, 0, time.UTC) // Thursday 03:00
+
+	cases := []struct {
+		name      string
+		updatedAt time.Time
+		want      bool
+	}{
+		// Created Thursday 03:02 with "Thursday 03:00": must NOT fire now.
+		{"created after slot", slot.Add(2 * time.Minute), true},
+		{"created before slot", slot.Add(-time.Hour), false},
+		{"created exactly at slot", slot, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := db.RebootSchedule{UpdatedAt: pgtime.From(c.updatedAt)}
+			if got := slotPredatesConfig(s, slot); got != c.want {
+				t.Errorf("slotPredatesConfig = %v, want %v", got, c.want)
+			}
+		})
+	}
+
+	// No updated_at (defensive): never blocks.
+	if slotPredatesConfig(db.RebootSchedule{}, slot) {
+		t.Error("invalid updated_at must not block the slot")
+	}
+}
+
 func TestRebootScheduleSlotInvalid(t *testing.T) {
 	cases := []db.RebootSchedule{
 		{ScheduleType: "once"}, // no run_at

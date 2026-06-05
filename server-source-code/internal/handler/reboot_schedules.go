@@ -21,6 +21,13 @@ import (
 // schedules only gate WHEN a reboot fires; the execution-time safety layers
 // (allow_reboot allowlist, server self-exclusion, audit) live in the queue
 // dispatcher.
+//
+// Known accepted residual risk: group membership is resolved at execution
+// time, so a user with only can_manage_hosts can add hosts to a group that
+// has an armed schedule. The blast radius is limited to hosts an operator
+// with can_reboot_hosts already allowlisted, and every run audits the
+// resolved host list; the schedule's host preview in the UI makes the
+// current membership visible when arming.
 type RebootSchedulesHandler struct {
 	db database.DBProvider
 }

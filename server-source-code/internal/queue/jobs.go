@@ -196,6 +196,12 @@ type RebootPayload struct {
 	OnlyIfRequired bool   `json:"only_if_required"`
 }
 
+// MaxRebootBatchSize caps the number of hosts a single reboot action may
+// target, shared by the bulk endpoint (per request) and the schedule
+// dispatcher (per run). Prevents an accidental select-all or an
+// over-broad host group from rebooting an entire fleet in one shot.
+const MaxRebootBatchSize = 100
+
 // rebootCooldown is how long a completed reboot task is retained in the queue
 // backend. While retained, its TaskID blocks re-enqueueing, giving each host a
 // per-host cooldown. Chosen to outlast the agent's 1-minute reboot delay so a

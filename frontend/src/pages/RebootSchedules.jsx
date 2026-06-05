@@ -366,6 +366,16 @@ const RebootScheduleFormModal = ({
 
 	const set = (field, value) => setForm((f) => ({ ...f, [field]: value }));
 
+	// Preview which hosts the schedule would affect, so arming a reboot is
+	// never blind. Best effort: without can_view_hosts the preview is hidden.
+	const { data: groupHosts } = useQuery({
+		queryKey: ["hostGroupHosts", form.host_group_id],
+		queryFn: () =>
+			hostGroupsAPI.getHosts(form.host_group_id).then((res) => res.data),
+		enabled: !!form.host_group_id,
+		retry: false,
+	});
+
 	const handleSubmit = (e) => {
 		e.preventDefault();
 		const data = {
@@ -434,6 +444,39 @@ const RebootScheduleFormModal = ({
 								</option>
 							))}
 						</select>
+						{Array.isArray(groupHosts) && (
+							<div className="mt-2 text-xs text-secondary-500 dark:text-secondary-300">
+								<p>
+									{groupHosts.length} host{groupHosts.length !== 1 ? "s" : ""}{" "}
+									in this group,{" "}
+									{groupHosts.filter((h) => h.allow_reboot).length} with reboot
+									allowed. Hosts without reboot allowed are skipped.
+								</p>
+								{groupHosts.length > 0 && (
+									<ul className="mt-1 max-h-28 overflow-y-auto border border-secondary-200 dark:border-secondary-600 rounded-md divide-y divide-secondary-100 dark:divide-secondary-700">
+										{groupHosts.map((h) => (
+											<li
+												key={h.id}
+												className="flex items-center justify-between px-2 py-1"
+											>
+												<span className="truncate">
+													{h.hostname || h.friendly_name}
+												</span>
+												<span
+													className={`ml-2 flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+														h.allow_reboot
+															? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+															: "bg-secondary-100 text-secondary-600 dark:bg-secondary-700 dark:text-secondary-300"
+													}`}
+												>
+													{h.allow_reboot ? "will reboot" : "skipped"}
+												</span>
+											</li>
+										))}
+									</ul>
+								)}
+							</div>
+						)}
 					</div>
 
 					<div>
