@@ -139,6 +139,7 @@ type Querier interface {
 	CreatePatchPolicyExclusion(ctx context.Context, arg CreatePatchPolicyExclusionParams) error
 	// patch_runs
 	CreatePatchRun(ctx context.Context, arg CreatePatchRunParams) error
+	CreateRebootSchedule(ctx context.Context, arg CreateRebootScheduleParams) (RebootSchedule, error)
 	CreateScheduledReport(ctx context.Context, arg CreateScheduledReportParams) (ScheduledReport, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) error
 	CreateTrustedDevice(ctx context.Context, arg CreateTrustedDeviceParams) error
@@ -176,6 +177,7 @@ type Querier interface {
 	DeletePatchRun(ctx context.Context, id string) error
 	DeletePendingConfig(ctx context.Context, hostID string) error
 	DeletePreviousCompletedScansByHostAndProfile(ctx context.Context, arg DeletePreviousCompletedScansByHostAndProfileParams) error
+	DeleteRebootSchedule(ctx context.Context, id string) error
 	DeleteRepositoriesByIDs(ctx context.Context, dollar_1 []string) error
 	DeleteRepository(ctx context.Context, id string) error
 	DeleteRolePermissions(ctx context.Context, role string) error
@@ -287,6 +289,7 @@ type Querier interface {
 	// Returns WUA GUIDs that are still pending (needs_update=true, not yet installed) for a host.
 	// Used by the server to tell the agent which updates to install.
 	GetPendingWindowsUpdateGUIDs(ctx context.Context, hostID string) ([]*string, error)
+	GetRebootScheduleByID(ctx context.Context, id string) (RebootSchedule, error)
 	GetRecentComplianceScans(ctx context.Context) ([]GetRecentComplianceScansRow, error)
 	GetRecentHosts(ctx context.Context, limit int32) ([]GetRecentHostsRow, error)
 	GetRecentUsers(ctx context.Context, limit int32) ([]GetRecentUsersRow, error)
@@ -351,6 +354,7 @@ type Querier interface {
 	ListContainers(ctx context.Context, arg ListContainersParams) ([]DockerContainer, error)
 	ListDashboardPreferencesByUserID(ctx context.Context, userID string) ([]DashboardPreference, error)
 	ListDockerHostsPaginated(ctx context.Context, arg ListDockerHostsPaginatedParams) ([]ListDockerHostsPaginatedRow, error)
+	ListEnabledRebootSchedules(ctx context.Context) ([]RebootSchedule, error)
 	ListHostGroups(ctx context.Context) ([]HostGroup, error)
 	ListHostGroupsWithHostCount(ctx context.Context) ([]ListHostGroupsWithHostCountRow, error)
 	ListHosts(ctx context.Context) ([]Host, error)
@@ -389,6 +393,8 @@ type Querier interface {
 	ListPatchRunsOrderByStartedAtAsc(ctx context.Context, arg ListPatchRunsOrderByStartedAtAscParams) ([]ListPatchRunsOrderByStartedAtAscRow, error)
 	ListPatchRunsOrderByStatus(ctx context.Context, arg ListPatchRunsOrderByStatusParams) ([]ListPatchRunsOrderByStatusRow, error)
 	ListPatchRunsOrderByStatusDesc(ctx context.Context, arg ListPatchRunsOrderByStatusDescParams) ([]ListPatchRunsOrderByStatusDescRow, error)
+	ListRebootScheduleGroupHosts(ctx context.Context, hostGroupID string) ([]ListRebootScheduleGroupHostsRow, error)
+	ListRebootSchedules(ctx context.Context) ([]ListRebootSchedulesRow, error)
 	ListRecentPatchRuns(ctx context.Context, limit int32) ([]ListRecentPatchRunsRow, error)
 	ListRepositories(ctx context.Context, arg ListRepositoriesParams) ([]Repository, error)
 	ListRoles(ctx context.Context) ([]RolePermission, error)
@@ -402,6 +408,7 @@ type Querier interface {
 	ListUpdateHistoryByDateRange(ctx context.Context, arg ListUpdateHistoryByDateRangeParams) ([]UpdateHistory, error)
 	ListUsers(ctx context.Context, arg ListUsersParams) ([]User, error)
 	ListVolumes(ctx context.Context, arg ListVolumesParams) ([]DockerVolume, error)
+	MarkRebootScheduleMissed(ctx context.Context, arg MarkRebootScheduleMissedParams) error
 	MarkValidationApproved(ctx context.Context, arg MarkValidationApprovedParams) error
 	RevokeAllSessionsForUser(ctx context.Context, userID string) error
 	RevokeAllSessionsForUserExcept(ctx context.Context, arg RevokeAllSessionsForUserExceptParams) error
@@ -411,6 +418,7 @@ type Querier interface {
 	SetHostAwaitingPostPatchReport(ctx context.Context, arg SetHostAwaitingPostPatchReportParams) error
 	SetNewsletterSubscribed(ctx context.Context, id string) error
 	SetPatchRunPolicySnapshot(ctx context.Context, arg SetPatchRunPolicySnapshotParams) error
+	SetRebootScheduleEnabled(ctx context.Context, arg SetRebootScheduleEnabledParams) (RebootSchedule, error)
 	ToggleHostRepository(ctx context.Context, arg ToggleHostRepositoryParams) error
 	TouchTrustedDeviceLastUsed(ctx context.Context, arg TouchTrustedDeviceLastUsedParams) error
 	UpdateAlert(ctx context.Context, id string) error
@@ -466,6 +474,8 @@ type Querier interface {
 	// output on the terminal stage; REPLACE (not append) so the final record is never
 	// a duplicate of the streamed progress.
 	UpdatePatchRunValidated(ctx context.Context, arg UpdatePatchRunValidatedParams) error
+	UpdateRebootSchedule(ctx context.Context, arg UpdateRebootScheduleParams) (RebootSchedule, error)
+	UpdateRebootScheduleLastRun(ctx context.Context, arg UpdateRebootScheduleLastRunParams) error
 	UpdateRepository(ctx context.Context, arg UpdateRepositoryParams) error
 	UpdateScheduledReport(ctx context.Context, arg UpdateScheduledReportParams) (ScheduledReport, error)
 	UpdateScheduledReportRunTimes(ctx context.Context, arg UpdateScheduledReportRunTimesParams) error

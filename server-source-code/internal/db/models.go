@@ -477,6 +477,24 @@ type PatchRun struct {
 	UpdatedAt         pgtype.Timestamp `json:"updated_at"`
 }
 
+type RebootSchedule struct {
+	ID             string           `json:"id"`
+	Name           string           `json:"name"`
+	HostGroupID    string           `json:"host_group_id"`
+	ScheduleType   string           `json:"schedule_type"`
+	RunAt          pgtype.Timestamp `json:"run_at"`
+	Weekday        *int32           `json:"weekday"`
+	TimeOfDay      *string          `json:"time_of_day"`
+	Timezone       string           `json:"timezone"`
+	OnlyIfRequired bool             `json:"only_if_required"`
+	Enabled        bool             `json:"enabled"`
+	LastRunAt      pgtype.Timestamp `json:"last_run_at"`
+	MissedAt       pgtype.Timestamp `json:"missed_at"`
+	CreatedBy      *string          `json:"created_by"`
+	CreatedAt      pgtype.Timestamp `json:"created_at"`
+	UpdatedAt      pgtype.Timestamp `json:"updated_at"`
+}
+
 type ReleaseNotesAcceptance struct {
 	ID         string           `json:"id"`
 	UserID     string           `json:"user_id"`
