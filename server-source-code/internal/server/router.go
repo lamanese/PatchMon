@@ -158,6 +158,7 @@ func NewRouter(ctx context.Context, cfg *config.Config, db *database.DB, rdb *re
 	}
 	pendingConfigStore := store.NewPendingConfigStore(dbProvider)
 	hostsHandler := handler.NewHostsHandler(hostsStore, hostGroupsStore, settingsStore, queueClient, registry, integrationStatusStore, pendingConfigStore, dbProvider, notifyEmit)
+	rebootSchedulesHandler := handler.NewRebootSchedulesHandler(dbProvider)
 	packagesHandler := handler.NewPackagesHandler(store.NewPackagesStore(dbProvider))
 	repositoriesHandler := handler.NewRepositoriesHandler(store.NewRepositoriesStore(dbProvider))
 	dockerStore := store.NewDockerStore(dbProvider)
@@ -528,6 +529,10 @@ func NewRouter(ctx context.Context, cfg *config.Config, db *database.DB, rdb *re
 			r.With(middleware.RequirePermission("can_manage_hosts", permissionsStore)).Post("/hosts/bulk/fetch-report", hostsHandler.FetchReportBulk)
 			r.With(middleware.RequirePermission("can_reboot_hosts", permissionsStore)).Post("/hosts/bulk/reboot", hostsHandler.RebootBulk)
 			r.With(middleware.RequirePermission("can_reboot_hosts", permissionsStore)).Put("/hosts/bulk/allow-reboot", hostsHandler.AllowRebootBulk)
+			r.With(middleware.RequirePermission("can_reboot_hosts", permissionsStore)).Get("/reboot-schedules", rebootSchedulesHandler.List)
+			r.With(middleware.RequirePermission("can_reboot_hosts", permissionsStore)).Post("/reboot-schedules", rebootSchedulesHandler.Create)
+			r.With(middleware.RequirePermission("can_reboot_hosts", permissionsStore)).Put("/reboot-schedules/{id}", rebootSchedulesHandler.Update)
+			r.With(middleware.RequirePermission("can_reboot_hosts", permissionsStore)).Delete("/reboot-schedules/{id}", rebootSchedulesHandler.Delete)
 			r.With(middleware.RequirePermission("can_manage_hosts", permissionsStore)).Post("/hosts/{hostId}/fetch-report", hostsHandler.FetchReport)
 			r.With(middleware.RequirePermission("can_manage_hosts", permissionsStore)).Post("/hosts/{hostId}/refresh-integration-status", hostsHandler.RefreshIntegrationStatus)
 			r.With(middleware.RequirePermission("can_manage_hosts", permissionsStore)).Post("/hosts/{hostId}/refresh-docker", hostsHandler.RefreshDocker)
