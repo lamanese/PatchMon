@@ -63,10 +63,10 @@ services:
       LOG_LEVEL: info
       DATABASE_URL: postgresql://patchmon_user:1NS3CU6E_DEV_D8_PASSW0RD@database:5432/patchmon_db
       JWT_SECRET: INS3CURE_DEV_7WT_5ECR3T
-      SERVER_PROTOCOL: http
+      SERVER_PROTOCOL: ${PM_SERVER_PROTOCOL:-http}
       SERVER_HOST: ${PM_SERVER_HOST:-localhost}
       SERVER_PORT: 3000
-      CORS_ORIGIN: http://localhost:3000,http://${PM_SERVER_HOST:-localhost}:3000
+      CORS_ORIGIN: ${PM_CORS_ORIGIN:-http://localhost:3000,http://${PM_SERVER_HOST:-localhost}:3000}
       # Database Connection Pool Configuration (Prisma)
       DB_CONNECTION_LIMIT: 30
       DB_POOL_TIMEOUT: 20
