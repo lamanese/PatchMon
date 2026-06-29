@@ -111,7 +111,8 @@ frontend/.vite/
 # Agent specific
 agents/*.log
 agents/patchmon-agent-*
-agents-prebuilt/
+agents-prebuilt/*
+!agents-prebuilt/.gitkeep
 agent-source-code/patchmon-agent-*
 __pycache__/
 *.py[cod]
