@@ -1485,6 +1485,8 @@ The agent chooses the patching back-end by detecting the host's package manager.
 
 > **Note:** The 2.0 release notes describe Linux patching generally. If you need to patch Alpine hosts, track the package manager roadmap or use your existing Alpine tooling until `apk` support lands.
 
+> **apt (Debian/Ubuntu) behaviour:** a `patch_all` run uses `apt-get upgrade --with-new-pkgs`, so packages that are otherwise *kept back* because they pull in a new dependency (for example `fwupd` needing `libfwupd3`) are upgraded. Packages are still never removed - that would require `full-upgrade` / `dist-upgrade`, which PatchMon does not run. The upgradable-package count shown in the UI uses the same `--with-new-pkgs` simulation, so "available updates" matches what `patch_all` actually installs. `dnf`, `yum` and `pacman` already pull in new dependencies, so this only affects apt.
+
 #### Windows patching
 
 When the agent detects it is running on Windows, patch runs are handled by the WUA + WinGet path rather than the Linux package-manager path:
