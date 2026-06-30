@@ -1963,11 +1963,55 @@ Create a `Delayed 30min` policy with `patch_delay_type=delayed`, `delay_minutes=
 
 ---
 
+### Patch Schedules
+
+A **patch policy** only controls the timing of a run that *someone triggers*; it never fires on its own. **Patch schedules** are the recurring counterpart: a schedule fires a full patch run (`patch_all`) on every host in a group at the configured time, with no manual trigger. Use a schedule for "patch the `production` group every Sunday at 03:00"; use a policy for "when someone patches this host, delay it to the next maintenance window".
+
+**Operations → Patch Schedules** manages them. Each schedule targets exactly **one host group**; membership is resolved at execution time, so hosts added to the group later are included automatically. The form previews the group's hosts ("will patch") so arming a schedule is never blind.
+
+Access is gated by the `patching` module plus the `can_manage_patching` permission (the same write permission as manual patch runs); read access to the list needs `can_view_hosts`. When `patching` is not enabled the navigation entry is hidden.
+
+#### Schedule types
+
+| Type | Fields | Semantics |
+| --- | --- | --- |
+| Once | date + time | Fires once, then the schedule is disabled. The time must be in the future when the schedule is enabled. |
+| Daily | time + IANA timezone | Fires every day at that local wall-clock time. Evaluated in the schedule's timezone, so it stays at the same local time across DST changes. |
+| Weekly | weekday + time + IANA timezone | Fires every week at that local wall-clock time, evaluated in the schedule's timezone. |
+
+Each schedule also has an enabled/disabled toggle. Scheduled runs always patch **all** packages on the host (equivalent to a `patch_all` run); there is no per-package scheduling.
+
+#### Execution semantics
+
+These mirror the reboot-schedule dispatcher (see [Chapter 27](#remote-reboot-and-reboot-schedules)):
+
+- A dispatcher polls every minute for due schedules.
+- **Tolerance window: 5 minutes.** A slot only fires within 5 minutes of its scheduled time. If the server was down longer, the slot is dropped - there is **no catch-up**.
+- **Missed one-time schedules** are disabled and flagged with a *Missed* badge; editing clears it. Missed daily/weekly slots simply wait for the next occurrence.
+- **No instant fire on create or enable.** A slot older than the schedule's last configuration change never fires, so creating "Daily 03:00" at 03:02 does not patch the group immediately - the first run is the next day.
+- **Exactly once per slot.** Slot execution is claimed atomically, so concurrent dispatchers or multiple server replicas cannot double-run a slot.
+- **Creator revalidation.** At execution time the schedule's creator must still exist, be active, and hold `can_manage_patching`. Otherwise the run is refused, audited, and the schedule disabled.
+- For each host in the group the dispatcher creates a `patch_runs` row and enqueues a `run_patch` task, exactly like a manual run; the runs then appear in **Patching → Runs & History** and stream their output normally. *Last run* is shown in the schedule list.
+
+#### Audit events
+
+| Event | When |
+| --- | --- |
+| `patch_scheduled_run` / `patch_scheduled_enqueued` | Scheduled run: intent (before enqueue, with the resolved host list) and outcome, attributed to the schedule creator. Refused runs (creator invalid, group resolution failed) appear as intent entries with `success=false`. |
+| `patch_schedule_created` / `patch_schedule_updated` / `patch_schedule_deleted` | Schedule management, with acting user, IP, and user agent. |
+
+#### Troubleshooting
+
+**A schedule did not fire** - check in order: schedule enabled? *Missed* badge set (server was down at the slot)? Slot within 5 minutes of a config change (no instant fire - first run is the next occurrence)? Creator still active with `can_manage_patching` (otherwise the schedule was auto-disabled; see audit log)? Hosts present in the group and their agents online (offline agents are recorded as failed in job history)?
+
+---
+
 ### Related Documentation
 
 - [Patching Overview](#patching-overview): the three core concepts and how patching fits together.
 - [Running a Patch](#running-a-patch): the Patch Wizard flow, including the Timing step that reads the effective policy.
 - [Patch History and Live Logs](#patch-history-and-live-logs): reading run history, including the policy snapshot shown on each run.
+- [Remote Reboot and Reboot Schedules](#remote-reboot-and-reboot-schedules): the reboot-schedule feature whose dispatcher design patch schedules mirror.
 - Hosts and Groups: managing host groups, which are the usual unit of policy assignment.
 
 ---
@@ -5024,6 +5068,7 @@ Limits: maximum 100 hosts per request, and a 2-minute per-host cooldown prevents
 | Type | Fields | Semantics |
 | --- | --- | --- |
 | Once | date + time | Fires once, then the schedule is disabled. The time must be in the future when the schedule is enabled. |
+| Daily | time + IANA timezone | Fires every day at that local wall-clock time. Evaluated in the schedule's timezone, so it stays at the same local time across DST changes. |
 | Weekly | weekday + time + IANA timezone | Fires every week at that local wall-clock time. Evaluated in the schedule's timezone, so "Sunday 13:00 Europe/Zurich" stays 13:00 local across DST changes. |
 
 Each schedule also has *only reboot hosts that require a reboot* (default on) and an enabled/disabled toggle. The form previews the selected group's hosts with their allowlist status ("will reboot" / "skipped"), so arming a schedule is never blind.
