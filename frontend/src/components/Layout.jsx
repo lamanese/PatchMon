@@ -86,6 +86,7 @@ const Layout = ({ children }) => {
 		canViewReports,
 		canExportData,
 		canManageSettings,
+		canManagePatching,
 		hasModule,
 		hasPermission,
 	} = useAuth();
@@ -304,6 +305,16 @@ const Layout = ({ children }) => {
 					lockedTier: patchingLocked ? getRequiredTier("patching") : null,
 					children: patchingChildren,
 				});
+
+				// Scheduled patch runs for a host group; gated by the patch
+				// management permission and the patching module.
+				if (canManagePatching() && hasModule("patching")) {
+					opsItems.push({
+						name: "Patch Schedules",
+						href: "/patch-schedules",
+						icon: CalendarClock,
+					});
+				}
 			}
 
 			// Scheduled remote reboots; gated by the same permission as the
@@ -510,6 +521,7 @@ const Layout = ({ children }) => {
 		if (path === "/pro-action") return "Pro-Action";
 		if (path === "/automation") return "Automation";
 		if (path === "/reboot-schedules") return "Reboot Schedules";
+		if (path === "/patch-schedules") return "Patch Schedules";
 		if (path === "/patching" || path.startsWith("/patching/"))
 			return "Patching";
 		if (path === "/compliance" || path.startsWith("/compliance/"))

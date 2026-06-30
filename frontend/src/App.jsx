@@ -70,6 +70,7 @@ const DiscordSettings = lazy(() => import("./pages/settings/DiscordSettings"));
 const OidcSettings = lazy(() => import("./pages/settings/OidcSettings"));
 const Billing = lazy(() => import("./pages/Billing"));
 const RebootSchedules = lazy(() => import("./pages/RebootSchedules"));
+const PatchSchedules = lazy(() => import("./pages/PatchSchedules"));
 
 // Full-screen loading fallback (for initial app load / auth check)
 const LoadingFallback = () => (
@@ -211,6 +212,14 @@ function AppRoutes() {
 						element={
 							<ProtectedRoute requirePermission="can_reboot_hosts">
 								<RebootSchedules />
+							</ProtectedRoute>
+						}
+					/>
+					<Route
+						path="/patch-schedules"
+						element={
+							<ProtectedRoute requirePermission="can_manage_patching">
+								<PatchSchedules />
 							</ProtectedRoute>
 						}
 					/>

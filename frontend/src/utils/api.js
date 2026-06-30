@@ -185,6 +185,13 @@ export const rebootSchedulesAPI = {
 	delete: (id) => api.delete(`/reboot-schedules/${id}`),
 };
 
+export const patchSchedulesAPI = {
+	list: () => api.get("/patch-schedules"),
+	create: (data) => api.post("/patch-schedules", data),
+	update: (id, data) => api.put(`/patch-schedules/${id}`, data),
+	delete: (id) => api.delete(`/patch-schedules/${id}`),
+};
+
 // Host Groups API
 export const hostGroupsAPI = {
 	list: () => api.get("/host-groups"),

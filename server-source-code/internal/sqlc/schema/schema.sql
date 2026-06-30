@@ -807,3 +807,21 @@ CREATE TABLE IF NOT EXISTS reboot_schedules (
     created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- patch_schedules
+CREATE TABLE IF NOT EXISTS patch_schedules (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    host_group_id TEXT NOT NULL REFERENCES host_groups(id) ON DELETE CASCADE,
+    schedule_type TEXT NOT NULL,          -- 'once' | 'weekly'
+    run_at TIMESTAMP(3),                  -- for 'once'
+    weekday INTEGER,                      -- 0 (Sunday) - 6 for 'weekly'
+    time_of_day TEXT,                     -- 'HH:MM' for 'weekly'
+    timezone TEXT NOT NULL DEFAULT 'UTC',
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    last_run_at TIMESTAMP(3),
+    missed_at TIMESTAMP(3),
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

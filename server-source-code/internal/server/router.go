@@ -159,6 +159,7 @@ func NewRouter(ctx context.Context, cfg *config.Config, db *database.DB, rdb *re
 	pendingConfigStore := store.NewPendingConfigStore(dbProvider)
 	hostsHandler := handler.NewHostsHandler(hostsStore, hostGroupsStore, settingsStore, queueClient, registry, integrationStatusStore, pendingConfigStore, dbProvider, notifyEmit)
 	rebootSchedulesHandler := handler.NewRebootSchedulesHandler(dbProvider)
+	patchSchedulesHandler := handler.NewPatchSchedulesHandler(dbProvider)
 	packagesHandler := handler.NewPackagesHandler(store.NewPackagesStore(dbProvider))
 	repositoriesHandler := handler.NewRepositoriesHandler(store.NewRepositoriesStore(dbProvider))
 	dockerStore := store.NewDockerStore(dbProvider)
@@ -617,6 +618,11 @@ func NewRouter(ctx context.Context, cfg *config.Config, db *database.DB, rdb *re
 			r.With(middleware.RequirePermission("can_manage_patching", permissionsStore), hostctx.RequireModule("patching_policies")).Delete("/patching/policies/{id}/assignments/{assignmentId}", patchingHandler.RemovePolicyAssignment)
 			r.With(middleware.RequirePermission("can_manage_patching", permissionsStore), hostctx.RequireModule("patching_policies")).Post("/patching/policies/{id}/exclusions", patchingHandler.AddPolicyExclusion)
 			r.With(middleware.RequirePermission("can_manage_patching", permissionsStore), hostctx.RequireModule("patching_policies")).Delete("/patching/policies/{id}/exclusions/{hostId}", patchingHandler.RemovePolicyExclusion)
+			// Patch schedules: recurring/one-shot scheduled patch runs for a host group.
+			r.With(middleware.RequirePermission("can_view_hosts", permissionsStore), hostctx.RequireModule("patching")).Get("/patch-schedules", patchSchedulesHandler.List)
+			r.With(middleware.RequirePermission("can_manage_patching", permissionsStore), hostctx.RequireModule("patching")).Post("/patch-schedules", patchSchedulesHandler.Create)
+			r.With(middleware.RequirePermission("can_manage_patching", permissionsStore), hostctx.RequireModule("patching")).Put("/patch-schedules/{id}", patchSchedulesHandler.Update)
+			r.With(middleware.RequirePermission("can_manage_patching", permissionsStore), hostctx.RequireModule("patching")).Delete("/patch-schedules/{id}", patchSchedulesHandler.Delete)
 			// Windows Update metadata for a host (UI-facing). Part of the patching feature set.
 			r.With(middleware.RequirePermission("can_view_hosts", permissionsStore), hostctx.RequireModule("patching")).Get("/patching/windows-updates/{hostId}", windowsUpdatesHandler.ListForHost)
 
