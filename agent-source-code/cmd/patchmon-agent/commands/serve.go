@@ -2399,11 +2399,15 @@ func runPatch(patchRunID, patchType string, packageNames []string, dryRun bool) 
 			switch pkgManager {
 			case "apt":
 				if dryRun {
-					if err, abort := runStep(false, "apt-get -s upgrade", "apt-get -s upgrade failed: %w", "apt-get", "-s", "upgrade"); abort {
+					// --with-new-pkgs upgrades packages that are otherwise "kept
+					// back" because they pull in new dependencies (e.g. fwupd ->
+					// libfwupd3). It never removes packages (that needs
+					// full-upgrade); the simulation must match the real run below.
+					if err, abort := runStep(false, "apt-get -s upgrade --with-new-pkgs", "apt-get -s upgrade failed: %w", "apt-get", "-s", "upgrade", "--with-new-pkgs"); abort {
 						stepErr = err
 					}
 				} else {
-					if err, abort := runStep(false, "apt-get upgrade", "apt-get upgrade failed: %w", "apt-get", "upgrade", "-y"); abort {
+					if err, abort := runStep(false, "apt-get upgrade --with-new-pkgs", "apt-get upgrade failed: %w", "apt-get", "upgrade", "-y", "--with-new-pkgs"); abort {
 						stepErr = err
 					}
 				}
