@@ -96,8 +96,17 @@ func validateRebootSchedule(s *db.RebootSchedule, now time.Time) error {
 			return fmt.Errorf("invalid time_of_day %q (expected HH:MM)", *s.TimeOfDay)
 		}
 		s.RunAt = pgtype.Timestamp{}
+	case "daily":
+		if s.TimeOfDay == nil {
+			return fmt.Errorf("time_of_day required for schedule_type 'daily'")
+		}
+		if _, err := time.Parse("15:04", *s.TimeOfDay); err != nil {
+			return fmt.Errorf("invalid time_of_day %q (expected HH:MM)", *s.TimeOfDay)
+		}
+		s.Weekday = nil
+		s.RunAt = pgtype.Timestamp{}
 	default:
-		return fmt.Errorf("schedule_type must be 'once' or 'weekly'")
+		return fmt.Errorf("schedule_type must be 'once', 'daily' or 'weekly'")
 	}
 	return nil
 }

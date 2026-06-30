@@ -180,6 +180,30 @@ func patchScheduleSlot(s db.PatchSchedule, now time.Time) (slot time.Time, due b
 		// Weekly schedules are never marked missed: an overdue slot simply
 		// stays silent until the next week's occurrence.
 		return slot, now.Sub(slot) <= patchScheduleTolerance, false, nil
+	case "daily":
+		if s.TimeOfDay == nil {
+			return time.Time{}, false, false, fmt.Errorf("schedule type 'daily' without time_of_day")
+		}
+		tod, perr := time.Parse("15:04", *s.TimeOfDay)
+		if perr != nil {
+			return time.Time{}, false, false, fmt.Errorf("invalid time_of_day %q: %w", *s.TimeOfDay, perr)
+		}
+		loc, lerr := time.LoadLocation(s.Timezone)
+		if lerr != nil {
+			return time.Time{}, false, false, fmt.Errorf("invalid timezone %q: %w", s.Timezone, lerr)
+		}
+		// Most recent daily occurrence of time_of_day in the schedule's
+		// timezone that is not in the future. time.Date normalizes nonexistent
+		// wall-clock times around DST transitions.
+		nowLoc := now.In(loc)
+		cand := time.Date(nowLoc.Year(), nowLoc.Month(), nowLoc.Day(), tod.Hour(), tod.Minute(), 0, 0, loc)
+		if cand.After(now) {
+			cand = cand.AddDate(0, 0, -1)
+		}
+		slot = cand.UTC()
+		// Daily schedules are never marked missed: an overdue slot simply
+		// stays silent until the next day's occurrence.
+		return slot, now.Sub(slot) <= patchScheduleTolerance, false, nil
 	default:
 		return time.Time{}, false, false, fmt.Errorf("unknown schedule_type %q", s.ScheduleType)
 	}

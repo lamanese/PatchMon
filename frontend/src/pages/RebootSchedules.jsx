@@ -56,6 +56,9 @@ const describeSchedule = (s) => {
 	if (s.schedule_type === "once") {
 		return `Once at ${formatDate(s.run_at)}`;
 	}
+	if (s.schedule_type === "daily") {
+		return `Every day at ${s.time_of_day} (${s.timezone})`;
+	}
 	return `Every ${WEEKDAYS[s.weekday] ?? "?"} ${s.time_of_day} (${s.timezone})`;
 };
 
@@ -389,9 +392,11 @@ const RebootScheduleFormModal = ({
 			data.run_at = toRFC3339(form.run_at_local);
 			data.timezone = "UTC";
 		} else {
-			data.weekday = Number(form.weekday);
 			data.time_of_day = form.time_of_day;
 			data.timezone = form.timezone;
+			if (form.schedule_type === "weekly") {
+				data.weekday = Number(form.weekday);
+			}
 		}
 		onSubmit(data);
 	};
@@ -493,6 +498,7 @@ const RebootScheduleFormModal = ({
 							className="w-full px-3 py-2 border border-secondary-300 dark:border-secondary-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white dark:bg-secondary-700 text-secondary-900 dark:text-white"
 						>
 							<option value="weekly">Weekly (recurring)</option>
+							<option value="daily">Daily (recurring)</option>
 							<option value="once">Once (specific date and time)</option>
 						</select>
 					</div>
@@ -516,7 +522,7 @@ const RebootScheduleFormModal = ({
 						</div>
 					) : (
 						<>
-							<div className="grid grid-cols-2 gap-3">
+							{form.schedule_type === "weekly" && (
 								<div>
 									<label
 										htmlFor={weekdayId}
@@ -537,22 +543,22 @@ const RebootScheduleFormModal = ({
 										))}
 									</select>
 								</div>
-								<div>
-									<label
-										htmlFor={timeOfDayId}
-										className="block text-sm font-medium text-secondary-700 dark:text-secondary-200 mb-1"
-									>
-										Time *
-									</label>
-									<input
-										type="time"
-										id={timeOfDayId}
-										value={form.time_of_day}
-										onChange={(e) => set("time_of_day", e.target.value)}
-										required
-										className="w-full px-3 py-2 border border-secondary-300 dark:border-secondary-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white dark:bg-secondary-700 text-secondary-900 dark:text-white"
-									/>
-								</div>
+							)}
+							<div>
+								<label
+									htmlFor={timeOfDayId}
+									className="block text-sm font-medium text-secondary-700 dark:text-secondary-200 mb-1"
+								>
+									Time *
+								</label>
+								<input
+									type="time"
+									id={timeOfDayId}
+									value={form.time_of_day}
+									onChange={(e) => set("time_of_day", e.target.value)}
+									required
+									className="w-full px-3 py-2 border border-secondary-300 dark:border-secondary-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white dark:bg-secondary-700 text-secondary-900 dark:text-white"
+								/>
 							</div>
 							<div>
 								<label
@@ -574,8 +580,8 @@ const RebootScheduleFormModal = ({
 									))}
 								</select>
 								<p className="text-xs text-secondary-400 dark:text-secondary-300 mt-1">
-									The weekly time is evaluated in this timezone, so it stays at
-									the same local time across DST changes.
+									The time is evaluated in this timezone, so it stays at the
+									same local time across DST changes.
 								</p>
 							</div>
 						</>
