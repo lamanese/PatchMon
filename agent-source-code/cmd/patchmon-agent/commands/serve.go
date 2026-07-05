@@ -82,6 +82,9 @@ func runServiceLoop(stopCh <-chan struct{}) error {
 		time.Sleep(5 * time.Second)
 	}
 
+	// Remove leftovers of a previous self-update (Windows move-aside .old, orphaned temp binary)
+	cleanupUpdateArtifacts()
+
 	// Load credentials with retry on Windows service (first start may race with installer)
 	var loadErr error
 	for attempt := 0; attempt < 3; attempt++ {
