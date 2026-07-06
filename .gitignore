@@ -159,3 +159,10 @@ agent-autoresearch/
 # Lokale Arbeitsnotizen (nicht committen)
 installation.md
 Install.md
+
+# Lokale KI-Arbeitsdokumente - enthalten interne Infrastruktur-Details,
+# Repo ist public (bewusst nicht versioniert)
+CLAUDE.md
+KI*.md
+ONBOARDING-reboot-scheduler.md
+.claude/
