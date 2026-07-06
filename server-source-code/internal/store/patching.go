@@ -50,6 +50,15 @@ func parsePackagesAffectedFromDryRunOutput(osType, output string) []string {
 	for _, line := range strings.Split(output, "\n") {
 		trimmed := strings.TrimSpace(line)
 
+		// Windows agent dry run: "[<guid>] DRY RUN: Would install: <title> (needs download)"
+		if idx := strings.Index(trimmed, "DRY RUN: Would install: "); idx >= 0 {
+			title := trimmed[idx+len("DRY RUN: Would install: "):]
+			title = strings.TrimSuffix(title, " (already downloaded)")
+			title = strings.TrimSuffix(title, " (needs download)")
+			addPkg(title)
+			continue
+		}
+
 		// apt-get simulate: "Inst pkgname ..."
 		if strings.HasPrefix(trimmed, "Inst ") {
 			fields := strings.Fields(trimmed)
@@ -383,6 +392,61 @@ func (s *PatchRunsStore) UpdateOutput(ctx context.Context, id, osType, stage, ou
 func (s *PatchRunsStore) UpdateStatus(ctx context.Context, id, status string) error {
 	d := s.db.DB(ctx)
 	return d.Queries.UpdatePatchRunStatus(ctx, db.UpdatePatchRunStatusParams{ID: id, Status: status})
+}
+
+// ResolveWindowsUpdateNames maps package (update) names to their WUA GUIDs for a
+// Windows host, because the agent installs Windows updates by GUID while the UI
+// triggers per-package runs by package name (the update title). Names without a
+// GUID (e.g. WinGet apps) pass through unchanged, as does the whole list for
+// non-Windows hosts.
+func (s *PatchRunsStore) ResolveWindowsUpdateNames(ctx context.Context, hostID string, names []string) ([]string, error) {
+	if len(names) == 0 {
+		return names, nil
+	}
+	d := s.db.DB(ctx)
+	host, err := d.Queries.GetHostByID(ctx, hostID)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.Contains(strings.ToLower(host.OsType), "windows") {
+		return names, nil
+	}
+	rows, err := d.Queries.GetWUAGuidsByPackageNames(ctx, db.GetWUAGuidsByPackageNamesParams{
+		HostID: hostID,
+		Names:  names,
+	})
+	if err != nil {
+		return nil, err
+	}
+	guidByName := make(map[string]string, len(rows))
+	for _, row := range rows {
+		if row.WuaGuid != nil && *row.WuaGuid != "" {
+			guidByName[row.Name] = *row.WuaGuid
+		}
+	}
+	resolved := make([]string, len(names))
+	for i, name := range names {
+		if guid, ok := guidByName[name]; ok {
+			resolved[i] = guid
+		} else {
+			resolved[i] = name
+		}
+	}
+	return resolved, nil
+}
+
+// HostPatchTarget returns a host's os_type and agent_version for dispatch-time
+// capability checks (e.g. refusing dry runs to agents that predate the flag).
+func (s *PatchRunsStore) HostPatchTarget(ctx context.Context, hostID string) (osType, agentVersion string, err error) {
+	d := s.db.DB(ctx)
+	host, err := d.Queries.GetHostByID(ctx, hostID)
+	if err != nil {
+		return "", "", err
+	}
+	if host.AgentVersion != nil {
+		agentVersion = *host.AgentVersion
+	}
+	return host.OsType, agentVersion, nil
 }
 
 // MarkValidationApproved marks a validation run as approved (terminal state).

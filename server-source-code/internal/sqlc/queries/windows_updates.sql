@@ -43,6 +43,16 @@ WHERE host_id = $1
   AND (wua_install_result IS NULL OR wua_install_result = 'failed')
 ORDER BY is_security_update DESC, last_checked ASC;
 
+-- name: GetWUAGuidsByPackageNames :many
+-- Resolves package (update) names to their WUA GUIDs for one host. Used when
+-- dispatching per-package patch runs to Windows agents, which install by GUID.
+SELECT p.name, hp.wua_guid
+FROM host_packages hp
+JOIN packages p ON p.id = hp.package_id
+WHERE hp.host_id = sqlc.arg('host_id')
+  AND p.name = ANY(sqlc.arg('names')::text[])
+  AND hp.wua_guid IS NOT NULL;
+
 -- name: CountWindowsUpdatesByHostID :one
 -- Counts pending Windows Updates for a host (for dashboard/stats).
 SELECT

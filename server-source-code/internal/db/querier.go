@@ -339,6 +339,9 @@ type Querier interface {
 	// Volumes
 	GetVolumeByID(ctx context.Context, id string) (DockerVolume, error)
 	GetVolumesByHostID(ctx context.Context, hostID string) ([]DockerVolume, error)
+	// Resolves package (update) names to their WUA GUIDs for one host. Used when
+	// dispatching per-package patch runs to Windows agents, which install by GUID.
+	GetWUAGuidsByPackageNames(ctx context.Context, arg GetWUAGuidsByPackageNamesParams) ([]GetWUAGuidsByPackageNamesRow, error)
 	GlobalSearch(ctx context.Context, search string) ([]GlobalSearchRow, error)
 	HostInHostGroup(ctx context.Context, arg HostInHostGroupParams) (bool, error)
 	IncrementAutoEnrollmentHostsCreated(ctx context.Context, id string) error

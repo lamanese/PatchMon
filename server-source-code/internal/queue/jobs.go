@@ -3,7 +3,9 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/db"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/store"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/util"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/hibiken/asynq"
@@ -125,6 +128,11 @@ func NewSSGUpgradeTask(p SSGUpgradePayload) (*asynq.Task, error) {
 		asynq.TaskID("ssg-upgrade-"+p.HostID),
 	), nil
 }
+
+// agentSafePackageNamePattern mirrors the agent's package-name allowlist
+// (validAptPackagePattern in the agent's serve.go). Names failing it would be
+// silently dropped by the agent - dispatch must not send them.
+var agentSafePackageNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.+-_]*$`)
 
 // RunPatchPayload is the payload for run_patch job.
 type RunPatchPayload struct {
@@ -764,6 +772,64 @@ func (h *RunPatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		return nil
 	}
 
+	// Safety checks that need the target host's OS and agent version.
+	var isWindowsHost bool
+	var hostLookupErr error
+	if p.DryRun || len(p.PackageNames) > 0 {
+		osType, agentVersion, err := h.patchRuns.HostPatchTarget(ctx, p.HostID)
+		hostLookupErr = err
+		if err == nil {
+			isWindowsHost = strings.Contains(strings.ToLower(osType), "windows")
+		}
+		// Windows agents older than 2.0.5 ignore the dry_run flag in the WUA
+		// path and would REALLY install updates during a validation run.
+		// Fail closed: refuse dry runs when the target cannot be verified at
+		// all or the agent is known to be too old.
+		if p.DryRun {
+			msg := ""
+			switch {
+			case err != nil:
+				msg = "dry run refused: could not verify the target host's agent version"
+			case isWindowsHost && util.CompareVersions(agentVersion, "2.0.5") < 0:
+				msg = "dry run refused: Windows agents older than 2.0.5 would install updates during validation; wait for the agent self-update"
+			}
+			if msg != "" {
+				h.log.Warn("run_patch: "+msg, "host_id", p.HostID, "patch_run_id", p.PatchRunID, "agent_version", agentVersion, "lookup_error", err)
+				_ = h.patchRuns.UpdateOutput(ctx, p.PatchRunID, osType, "failed", "", msg)
+				return nil
+			}
+		}
+	}
+
+	// Windows agents install updates by WUA GUID, but per-package runs are
+	// triggered by package name (the update title) - resolve names to GUIDs
+	// here so every dispatch path (trigger, approve, retry) is covered.
+	packageNames := p.PackageNames
+	if len(packageNames) > 0 {
+		resolved, resolveErr := h.patchRuns.ResolveWindowsUpdateNames(ctx, p.HostID, packageNames)
+		if resolveErr != nil {
+			h.log.Warn("run_patch: failed to resolve Windows update GUIDs",
+				"host_id", p.HostID, "patch_run_id", p.PatchRunID, "error", resolveErr)
+		} else {
+			packageNames = resolved
+		}
+		// Names that still fail the agent's package-name allowlist (Windows
+		// update titles whose WUA row disappeared, or unresolved because of a
+		// lookup error) would be silently dropped by the agent, leaving the
+		// run stuck in "running". Fail the run up front instead. Checked for
+		// every host: non-Windows names already passed the same pattern at
+		// trigger time, so this cannot produce new false failures there.
+		for _, n := range packageNames {
+			if !agentSafePackageNamePattern.MatchString(n) {
+				msg := fmt.Sprintf("run refused: package %q could not be resolved to a Windows update GUID (the update may no longer be pending on this host)", n)
+				h.log.Warn("run_patch: "+msg, "host_id", p.HostID, "patch_run_id", p.PatchRunID,
+					"windows_host", isWindowsHost, "lookup_error", hostLookupErr)
+				_ = h.patchRuns.UpdateOutput(ctx, p.PatchRunID, "", "failed", "", msg)
+				return nil
+			}
+		}
+	}
+
 	// Build run_patch payload
 	payload := map[string]interface{}{
 		"type":         "run_patch",
@@ -774,8 +840,8 @@ func (h *RunPatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 	if p.PackageName != nil {
 		payload["package_name"] = *p.PackageName
 	}
-	if len(p.PackageNames) > 0 {
-		payload["package_names"] = p.PackageNames
+	if len(packageNames) > 0 {
+		payload["package_names"] = packageNames
 	}
 	msg, err := json.Marshal(payload)
 	if err != nil {

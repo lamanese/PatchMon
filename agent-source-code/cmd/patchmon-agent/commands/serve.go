@@ -2263,21 +2263,33 @@ func patchRunTrailer(wasStopped bool, stepErr error, dryRun bool) string {
 	}
 }
 
+// Windows patch run budgets: cumulative updates routinely take 30-60 minutes
+// each, so the Windows path gets a much larger overall budget plus a per-update
+// timeout so one hanging update cannot starve the rest of the run.
+const (
+	windowsPatchRunTimeout      = 4 * time.Hour
+	windowsUpdateInstallTimeout = 90 * time.Minute
+)
+
 // When dryRun is true, simulates and sends dry_run_completed instead of completed.
 func runPatch(patchRunID, patchType string, packageNames []string, dryRun bool) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-
-	// Register cancel fn so the server can request an interrupt via "patch_run_stop".
-	patchRunCancels.Store(patchRunID, cancel)
-	defer patchRunCancels.Delete(patchRunID)
-
 	httpClient := client.New(cfgManager, logger)
 	packageMgr := packages.New(logger, packages.CacheRefreshConfig{
 		Mode:   cfgManager.GetPackageCacheRefreshMode(),
 		MaxAge: cfgManager.GetPackageCacheRefreshMaxAge(),
 	})
 	pkgManager := packageMgr.DetectPackageManager()
+
+	timeout := 30 * time.Minute
+	if pkgManager == "windows" {
+		timeout = windowsPatchRunTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// Register cancel fn so the server can request an interrupt via "patch_run_stop".
+	patchRunCancels.Store(patchRunID, cancel)
+	defer patchRunCancels.Delete(patchRunID)
 
 	if pkgManager == "windows" {
 		return runPatchWindows(ctx, httpClient, patchRunID, patchType, packageNames, dryRun)
@@ -2578,6 +2590,46 @@ func runPatch(patchRunID, patchType string, packageNames []string, dryRun bool) 
 func runPatchWindows(ctx context.Context, httpClient *client.Client, patchRunID, patchType string, packageNames []string, dryRun bool) error {
 	patcher := packages.NewWindowsPatcher()
 	var fullOutput strings.Builder
+	skippedUpdates := 0
+	attemptedUpdates := 0
+	failedUpdates := 0
+	dryRunErrors := 0
+	wuaFetchFailed := false
+
+	// installOneUpdate installs (or dry-runs) a single WUA update with its own
+	// per-update timeout and appends the outcome to the output. Install results
+	// are only reported to the server for real runs - a dry run must never
+	// alter the recorded install state.
+	installOneUpdate := func(guid string) {
+		installCtx, installCancel := context.WithTimeout(ctx, windowsUpdateInstallTimeout)
+		out, err := patcher.InstallWindowsUpdate(installCtx, guid, dryRun)
+		installCancel()
+		fmt.Fprintf(&fullOutput, "  [%s] %s\n", guid, out)
+		if dryRun {
+			// No install result is reported for dry runs, but a failed WUA
+			// lookup must still fail the validation - approvers would
+			// otherwise see a "validated" run based on a broken check.
+			if err != nil {
+				dryRunErrors++
+			}
+			return
+		}
+		attemptedUpdates++
+		success := err == nil && !packages.IsSuperseded(out)
+		if !success {
+			failedUpdates++
+		}
+		result := client.WindowsUpdateResult{GUID: guid, Success: success}
+		if err != nil {
+			result.Error = err.Error()
+		}
+		// Short background context: if the overall run budget expired mid-install,
+		// the result must still reach the server (the update may well have
+		// succeeded - Windows finishes installs even after the watcher is killed).
+		sendCtx, sendCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_ = httpClient.SendWindowsUpdateResult(sendCtx, patchRunID, result)
+		sendCancel()
+	}
 
 	if err := httpClient.SendPatchOutput(ctx, patchRunID, "started", "", ""); err != nil {
 		logger.WithError(err).Warn("Failed to send patch started to server")
@@ -2588,36 +2640,48 @@ func runPatchWindows(ctx context.Context, httpClient *client.Client, patchRunID,
 		guids, err := httpClient.GetApprovedWindowsUpdateGUIDs(ctx)
 		if err != nil {
 			logger.WithError(err).Warn("Could not fetch approved Windows Update GUIDs; skipping WUA step")
+			fmt.Fprintf(&fullOutput, "[Windows Update] ERROR: could not fetch approved update list: %v\n", err)
+			wuaFetchFailed = true
 		}
 		if len(guids) > 0 {
 			fmt.Fprintf(&fullOutput, "[Windows Update] Installing %d approved update(s)...\n", len(guids))
 			_ = httpClient.SendPatchOutput(ctx, patchRunID, "progress", fullOutput.String(), "")
 			for _, guid := range guids {
-				out, err := patcher.InstallWindowsUpdate(ctx, guid)
-				fmt.Fprintf(&fullOutput, "  [%s] %s\n", guid, out)
-				success := err == nil && !packages.IsSuperseded(out)
-				result := client.WindowsUpdateResult{GUID: guid, Success: success}
-				if err != nil {
-					result.Error = err.Error()
+				// Overall run budget exhausted (or run stopped): leave the
+				// remaining updates pending instead of failing them.
+				if ctx.Err() != nil {
+					fmt.Fprintf(&fullOutput, "  [%s] SKIPPED: patch run interrupted\n", guid)
+					skippedUpdates++
+					continue
 				}
-				_ = httpClient.SendWindowsUpdateResult(ctx, patchRunID, result)
+				installOneUpdate(guid)
 				_ = httpClient.SendPatchOutput(ctx, patchRunID, "progress", fullOutput.String(), "")
 			}
 		}
 
 		// Step 2: WinGet - upgrade all applications
-		fullOutput.WriteString("\n[WinGet] Upgrading applications...\n")
-		_ = httpClient.SendPatchOutput(ctx, patchRunID, "progress", fullOutput.String(), "")
-		wingetOut, wingetErr := patcher.WinGetUpgradeAll(ctx, dryRun)
-		fullOutput.WriteString(wingetOut)
-		fullOutput.WriteString("\n")
-		if wingetErr != nil {
-			logger.WithError(wingetErr).Warn("winget upgrade --all had errors (non-fatal)")
+		if ctx.Err() != nil {
+			fullOutput.WriteString("\n[WinGet] SKIPPED: patch run interrupted\n")
+		} else {
+			fullOutput.WriteString("\n[WinGet] Upgrading applications...\n")
+			_ = httpClient.SendPatchOutput(ctx, patchRunID, "progress", fullOutput.String(), "")
+			wingetOut, wingetErr := patcher.WinGetUpgradeAll(ctx, dryRun)
+			if strings.TrimSpace(wingetOut) == "" {
+				wingetOut = "(no output - winget may be unavailable in the service context (Session 0), or there was nothing to upgrade)"
+			}
+			fullOutput.WriteString(wingetOut)
+			fullOutput.WriteString("\n")
+			if wingetErr != nil {
+				logger.WithError(wingetErr).Warn("winget upgrade --all had errors (non-fatal)")
+			}
 		}
 
-		// Step 3: report reboot status
+		// Step 3: report reboot status (short background context so an
+		// exhausted run budget cannot swallow the status send)
 		needsReboot := packages.RebootRequired()
-		_ = httpClient.SendWindowsRebootStatus(ctx, patchRunID, needsReboot)
+		rebootCtx, rebootCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_ = httpClient.SendWindowsRebootStatus(rebootCtx, patchRunID, needsReboot)
+		rebootCancel()
 		if needsReboot {
 			fullOutput.WriteString("\n[Reboot Required] A system restart is needed to complete the update installation.\n")
 		}
@@ -2632,18 +2696,16 @@ func runPatchWindows(ctx context.Context, httpClient *client.Client, patchRunID,
 			if name == "" {
 				continue
 			}
+			if ctx.Err() != nil {
+				fmt.Fprintf(&fullOutput, "[%s] SKIPPED: patch run interrupted\n", name)
+				skippedUpdates++
+				continue
+			}
 			// Treat as WUA GUID if it looks like a UUID (36 chars with dashes), or KB prefix
 			isWUA := isWindowsUpdateIdentifier(name)
 			if isWUA {
 				fmt.Fprintf(&fullOutput, "[Windows Update] Installing %s...\n", name)
-				out, err := patcher.InstallWindowsUpdate(ctx, name)
-				fullOutput.WriteString(out + "\n")
-				success := err == nil && !packages.IsSuperseded(out)
-				result := client.WindowsUpdateResult{GUID: name, Success: success}
-				if err != nil {
-					result.Error = err.Error()
-				}
-				_ = httpClient.SendWindowsUpdateResult(ctx, patchRunID, result)
+				installOneUpdate(name)
 			} else {
 				fmt.Fprintf(&fullOutput, "[WinGet] Upgrading %s...\n", name)
 				out, err := patcher.WinGetUpgradePackage(ctx, name, dryRun)
@@ -2656,36 +2718,57 @@ func runPatchWindows(ctx context.Context, httpClient *client.Client, patchRunID,
 		}
 
 		needsReboot := packages.RebootRequired()
-		_ = httpClient.SendWindowsRebootStatus(ctx, patchRunID, needsReboot)
+		rebootCtx, rebootCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_ = httpClient.SendWindowsRebootStatus(rebootCtx, patchRunID, needsReboot)
+		rebootCancel()
 		if needsReboot {
 			fullOutput.WriteString("\n[Reboot Required] A system restart is needed.\n")
 		}
 	}
 
 	_, wasStopped := patchRunStopped.LoadAndDelete(patchRunID)
+	runTimedOut := !wasStopped && errors.Is(ctx.Err(), context.DeadlineExceeded)
 
 	// Use a background context for the final status send so a cancelled
 	// ctx still allows the final record to reach the server.
 	finalCtx, finalCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer finalCancel()
 
+	// A timed-out or fully-failed run must not report "completed" - skipped
+	// updates stay pending and the run is marked failed with an explanation.
 	stage := "completed"
-	if wasStopped {
-		stage = "cancelled"
-	} else if dryRun {
-		stage = "dry_run_completed"
-	}
 	errMsg := ""
-	if wasStopped {
+	var failErr error
+	switch {
+	case wasStopped:
+		stage = "cancelled"
 		errMsg = "stopped by user"
+	case runTimedOut:
+		stage = "failed"
+		errMsg = fmt.Sprintf("patch run timed out after %s; %d item(s) skipped", windowsPatchRunTimeout, skippedUpdates)
+		failErr = ctx.Err()
+	case wuaFetchFailed:
+		stage = "failed"
+		errMsg = "could not fetch the approved Windows update list from the server; no updates were installed"
+		failErr = fmt.Errorf("%s", errMsg)
+	case dryRun && dryRunErrors > 0:
+		stage = "failed"
+		errMsg = fmt.Sprintf("%d Windows update lookup(s) failed during dry run", dryRunErrors)
+		failErr = fmt.Errorf("%s", errMsg)
+	case dryRun:
+		stage = "dry_run_completed"
+	case attemptedUpdates > 0 && failedUpdates == attemptedUpdates:
+		stage = "failed"
+		errMsg = fmt.Sprintf("all %d Windows update(s) failed to install", failedUpdates)
+		failErr = fmt.Errorf("%s", errMsg)
 	}
 
 	// Human-readable trailer so the browser's live terminal has a clear
 	// "this is the end" marker. Streamed as a progress chunk first so it
 	// reaches the WS hub, then folded into the authoritative terminal blob.
-	trailer := patchRunTrailer(wasStopped, nil, dryRun)
+	trailer := patchRunTrailer(wasStopped, failErr, dryRun)
 	fullOutput.WriteString(trailer)
-	_ = httpClient.SendPatchOutput(ctx, patchRunID, "progress", trailer, "")
+	_ = httpClient.SendPatchOutput(finalCtx, patchRunID, "progress", trailer, "")
 
 	if err := httpClient.SendPatchOutput(finalCtx, patchRunID, stage, fullOutput.String(), errMsg); err != nil {
 		logger.WithError(err).Warn("Failed to send Windows patch output to server")
