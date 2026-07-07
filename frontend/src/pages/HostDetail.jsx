@@ -5593,7 +5593,16 @@ const HostDetail = () => {
 														<RefreshCw className="h-4 w-4" />
 														Refresh status
 													</button>
-													{complianceSetupStatus?.status?.status !== "ready" &&
+													{isWindowsHost && (
+														<span
+															className="text-xs text-secondary-500 dark:text-white"
+															title="The compliance scanner is OpenSCAP-based and requires a Debian-, RHEL- or SUSE-family Linux system"
+														>
+															Not available on Windows (OpenSCAP is Linux-only)
+														</span>
+													)}
+													{!isWindowsHost &&
+														complianceSetupStatus?.status?.status !== "ready" &&
 														complianceSetupStatus?.status?.status !==
 															"partial" &&
 														wsStatus?.connected &&

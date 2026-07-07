@@ -700,6 +700,25 @@ func upgradeSSGContent(targetVersion string) error {
 	return nil
 }
 
+// complianceOSUnsupported returns a user-facing error when the host OS cannot
+// run the OpenSCAP-based compliance scanner (installer only knows the debian,
+// rhel and suse families), or nil if supported. Checked right after OS
+// detection so the detect step fails honestly instead of reporting
+// "Detected unknown OS" as done and failing one step later.
+func complianceOSUnsupported(osInfo models.ComplianceOSInfo) error {
+	if osInfo.Family != "" {
+		return nil
+	}
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf("compliance scanning is not supported on Windows (the scanner is OpenSCAP-based, Linux only)")
+	}
+	name := strings.TrimSpace(osInfo.Name + " " + osInfo.Version)
+	if name == "" {
+		name = "unknown OS"
+	}
+	return fmt.Errorf("unsupported operating system for compliance scanning: %s (OpenSCAP requires a Debian-, RHEL- or SUSE-family system)", name)
+}
+
 // runInstallScanner installs OpenSCAP and SSG content (apt/dnf install, update SSG) and reports status via HTTP
 // Sends granular install events so the frontend can display real-time progress.
 func runInstallScanner() error {
@@ -738,6 +757,21 @@ func runInstallScanner() error {
 	osDesc := fmt.Sprintf("%s %s (%s)", osInfo.Name, osInfo.Version, osInfo.Family)
 	if osInfo.Name == "" {
 		osDesc = "unknown OS"
+	}
+
+	// Fail the detect step itself on unsupported systems - installing would
+	// fail one step later anyway, with a less helpful message.
+	if unsupportedErr := complianceOSUnsupported(osInfo); unsupportedErr != nil {
+		logger.WithError(unsupportedErr).Warn("Compliance scanner install rejected: unsupported OS")
+		events[len(events)-1] = models.InstallEvent{
+			Step:      "detect_os",
+			Status:    "failed",
+			Message:   unsupportedErr.Error(),
+			Timestamp: events[len(events)-1].Timestamp,
+		}
+		addEvent("complete", "failed", "Installation failed")
+		sendStatus("error", unsupportedErr.Error(), nil)
+		return unsupportedErr
 	}
 
 	// Mark detect_os done
@@ -3013,20 +3047,28 @@ func toggleIntegration(integrationName string, enabled bool) error {
 			if osInfo.Name == "" {
 				osDesc = "unknown OS"
 			}
-			events[len(events)-1] = models.InstallEvent{Step: "detect_os", Status: "done", Message: fmt.Sprintf("Detected %s", osDesc), Timestamp: events[len(events)-1].Timestamp}
-
-			// Step: Install OpenSCAP
-			addEvent("install_openscap", "in_progress", "Installing OpenSCAP packages...")
-			sendEvt(overallStatus, "Installing OpenSCAP packages...", nil)
-
-			if err := openscapScanner.EnsureInstalled(); err != nil {
-				logger.WithError(err).Warn("Failed to install OpenSCAP (will try again on next scan)")
+			if unsupportedErr := complianceOSUnsupported(osInfo); unsupportedErr != nil {
+				// Fail the detect step honestly and skip the OpenSCAP install
+				// entirely - it cannot succeed on this OS.
+				logger.WithError(unsupportedErr).Warn("Compliance tools install skipped: unsupported OS")
 				components["openscap"] = "failed"
-				events[len(events)-1] = models.InstallEvent{Step: "install_openscap", Status: "failed", Message: fmt.Sprintf("OpenSCAP installation failed: %s", err.Error()), Timestamp: events[len(events)-1].Timestamp}
+				events[len(events)-1] = models.InstallEvent{Step: "detect_os", Status: "failed", Message: unsupportedErr.Error(), Timestamp: events[len(events)-1].Timestamp}
 			} else {
-				logger.Info("OpenSCAP installed successfully")
-				components["openscap"] = "ready"
-				events[len(events)-1] = models.InstallEvent{Step: "install_openscap", Status: "done", Message: "OpenSCAP packages installed successfully", Timestamp: events[len(events)-1].Timestamp}
+				events[len(events)-1] = models.InstallEvent{Step: "detect_os", Status: "done", Message: fmt.Sprintf("Detected %s", osDesc), Timestamp: events[len(events)-1].Timestamp}
+
+				// Step: Install OpenSCAP
+				addEvent("install_openscap", "in_progress", "Installing OpenSCAP packages...")
+				sendEvt(overallStatus, "Installing OpenSCAP packages...", nil)
+
+				if err := openscapScanner.EnsureInstalled(); err != nil {
+					logger.WithError(err).Warn("Failed to install OpenSCAP (will try again on next scan)")
+					components["openscap"] = "failed"
+					events[len(events)-1] = models.InstallEvent{Step: "install_openscap", Status: "failed", Message: fmt.Sprintf("OpenSCAP installation failed: %s", err.Error()), Timestamp: events[len(events)-1].Timestamp}
+				} else {
+					logger.Info("OpenSCAP installed successfully")
+					components["openscap"] = "ready"
+					events[len(events)-1] = models.InstallEvent{Step: "install_openscap", Status: "done", Message: "OpenSCAP packages installed successfully", Timestamp: events[len(events)-1].Timestamp}
+				}
 			}
 
 			// Step: Docker Bench
