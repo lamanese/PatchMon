@@ -38,6 +38,7 @@ func (p *WindowsPatcher) InstallWindowsUpdate(ctx context.Context, guid string, 
 		return p.dryRunWindowsUpdate(ctx, guid)
 	}
 	psScript := fmt.Sprintf(`
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $ErrorActionPreference = "Stop"
 $guid = '%s'
 try {
@@ -100,6 +101,7 @@ try {
 // run would install, without downloading or installing anything.
 func (p *WindowsPatcher) dryRunWindowsUpdate(ctx context.Context, guid string) (string, error) {
 	psScript := fmt.Sprintf(`
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $ErrorActionPreference = "Stop"
 $guid = '%s'
 try {
@@ -184,7 +186,7 @@ $env:TERM = 'dumb'
 
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
 	out, err := cmd.CombinedOutput()
-	output := strings.TrimSpace(string(out))
+	output := sanitizeWinGetOutput(string(out))
 	if err != nil {
 		return output, fmt.Errorf("winget upgrade --all failed: %w", err)
 	}
@@ -219,7 +221,7 @@ $env:TERM = 'dumb'
 
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
 	out, err := cmd.CombinedOutput()
-	output := strings.TrimSpace(string(out))
+	output := sanitizeWinGetOutput(string(out))
 	if err != nil {
 		return output, fmt.Errorf("winget upgrade --id %s failed: %w", packageID, err)
 	}

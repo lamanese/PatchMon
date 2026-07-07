@@ -2269,6 +2269,9 @@ func patchRunTrailer(wasStopped bool, stepErr error, dryRun bool) string {
 const (
 	windowsPatchRunTimeout      = 4 * time.Hour
 	windowsUpdateInstallTimeout = 90 * time.Minute
+	// Interval for keepalive lines while a blocking install call produces no
+	// output (WUA is silent for the whole 20-60 min of an LCU install).
+	windowsPatchHeartbeatInterval = time.Minute
 )
 
 // When dryRun is true, simulates and sends dry_run_completed instead of completed.
@@ -2596,13 +2599,67 @@ func runPatchWindows(ctx context.Context, httpClient *client.Client, patchRunID,
 	dryRunErrors := 0
 	wuaFetchFailed := false
 
+	// sendProgress streams only what was appended to fullOutput since the last
+	// send - the server APPENDS "progress" chunks to shell_output, so sending
+	// the cumulative buffer would duplicate earlier output in the live view.
+	// The terminal stage replaces shell_output with the full buffer anyway.
+	sentLen := 0
+	sendProgress := func() {
+		full := fullOutput.String()
+		if sentLen >= len(full) {
+			return
+		}
+		chunk := full[sentLen:]
+		sentLen = len(full)
+		_ = httpClient.SendPatchOutput(ctx, patchRunID, "progress", chunk, "")
+	}
+
+	// startHeartbeat streams a keepalive line every minute while a blocking
+	// install call runs - WUA/WinGet produce no output until an item finishes,
+	// which for LCUs means 20-60 min of silence that users read as a hang.
+	// Heartbeat chunks reach only the live stream (append semantics); the
+	// terminal stage replaces shell_output, so they never persist.
+	startHeartbeat := func(label string) (stop func()) {
+		done := make(chan struct{})
+		exited := make(chan struct{})
+		started := time.Now()
+		go func() {
+			defer close(exited)
+			ticker := time.NewTicker(windowsPatchHeartbeatInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-ticker.C:
+					line := fmt.Sprintf("  ... %s still running (%d min elapsed; no output is expected until it finishes)\n",
+						label, int(time.Since(started).Minutes()))
+					hbCtx, hbCancel := context.WithTimeout(context.Background(), 15*time.Second)
+					_ = httpClient.SendPatchOutput(hbCtx, patchRunID, "progress", line, "")
+					hbCancel()
+				}
+			}
+		}()
+		// Wait for the goroutine so no in-flight heartbeat can land AFTER a
+		// later progress/terminal send - the server appends progress chunks
+		// without a status guard, so a late chunk would pollute the persisted
+		// output behind the terminal replace.
+		return func() { close(done); <-exited }
+	}
+
 	// installOneUpdate installs (or dry-runs) a single WUA update with its own
 	// per-update timeout and appends the outcome to the output. Install results
 	// are only reported to the server for real runs - a dry run must never
 	// alter the recorded install state.
 	installOneUpdate := func(guid string) {
 		installCtx, installCancel := context.WithTimeout(ctx, windowsUpdateInstallTimeout)
+		verb := "install"
+		if dryRun {
+			verb = "validation"
+		}
+		stopHeartbeat := startHeartbeat(fmt.Sprintf("[%s] %s", guid, verb))
 		out, err := patcher.InstallWindowsUpdate(installCtx, guid, dryRun)
+		stopHeartbeat()
 		installCancel()
 		fmt.Fprintf(&fullOutput, "  [%s] %s\n", guid, out)
 		if dryRun {
@@ -2645,7 +2702,7 @@ func runPatchWindows(ctx context.Context, httpClient *client.Client, patchRunID,
 		}
 		if len(guids) > 0 {
 			fmt.Fprintf(&fullOutput, "[Windows Update] Installing %d approved update(s)...\n", len(guids))
-			_ = httpClient.SendPatchOutput(ctx, patchRunID, "progress", fullOutput.String(), "")
+			sendProgress()
 			for _, guid := range guids {
 				// Overall run budget exhausted (or run stopped): leave the
 				// remaining updates pending instead of failing them.
@@ -2655,7 +2712,7 @@ func runPatchWindows(ctx context.Context, httpClient *client.Client, patchRunID,
 					continue
 				}
 				installOneUpdate(guid)
-				_ = httpClient.SendPatchOutput(ctx, patchRunID, "progress", fullOutput.String(), "")
+				sendProgress()
 			}
 		}
 
@@ -2664,8 +2721,10 @@ func runPatchWindows(ctx context.Context, httpClient *client.Client, patchRunID,
 			fullOutput.WriteString("\n[WinGet] SKIPPED: patch run interrupted\n")
 		} else {
 			fullOutput.WriteString("\n[WinGet] Upgrading applications...\n")
-			_ = httpClient.SendPatchOutput(ctx, patchRunID, "progress", fullOutput.String(), "")
+			sendProgress()
+			stopHeartbeat := startHeartbeat("[WinGet] upgrade")
 			wingetOut, wingetErr := patcher.WinGetUpgradeAll(ctx, dryRun)
+			stopHeartbeat()
 			if strings.TrimSpace(wingetOut) == "" {
 				wingetOut = "(no output - winget may be unavailable in the service context (Session 0), or there was nothing to upgrade)"
 			}
@@ -2675,6 +2734,7 @@ func runPatchWindows(ctx context.Context, httpClient *client.Client, patchRunID,
 				logger.WithError(wingetErr).Warn("winget upgrade --all had errors (non-fatal)")
 			}
 		}
+		sendProgress()
 
 		// Step 3: report reboot status (short background context so an
 		// exhausted run budget cannot swallow the status send)
@@ -2684,6 +2744,7 @@ func runPatchWindows(ctx context.Context, httpClient *client.Client, patchRunID,
 		rebootCancel()
 		if needsReboot {
 			fullOutput.WriteString("\n[Reboot Required] A system restart is needed to complete the update installation.\n")
+			sendProgress()
 		}
 	} else {
 		// patch_package: each name is either a KB/GUID (WUA) or a WinGet package ID
@@ -2708,13 +2769,15 @@ func runPatchWindows(ctx context.Context, httpClient *client.Client, patchRunID,
 				installOneUpdate(name)
 			} else {
 				fmt.Fprintf(&fullOutput, "[WinGet] Upgrading %s...\n", name)
+				stopHeartbeat := startHeartbeat(fmt.Sprintf("[WinGet] %s upgrade", name))
 				out, err := patcher.WinGetUpgradePackage(ctx, name, dryRun)
+				stopHeartbeat()
 				fullOutput.WriteString(out + "\n")
 				if err != nil {
 					logger.WithError(err).WithField("package", name).Warn("winget upgrade failed (non-fatal)")
 				}
 			}
-			_ = httpClient.SendPatchOutput(ctx, patchRunID, "progress", fullOutput.String(), "")
+			sendProgress()
 		}
 
 		needsReboot := packages.RebootRequired()
@@ -2723,6 +2786,7 @@ func runPatchWindows(ctx context.Context, httpClient *client.Client, patchRunID,
 		rebootCancel()
 		if needsReboot {
 			fullOutput.WriteString("\n[Reboot Required] A system restart is needed.\n")
+			sendProgress()
 		}
 	}
 
