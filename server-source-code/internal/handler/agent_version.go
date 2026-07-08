@@ -35,6 +35,9 @@ const (
 type AgentVersionHandler struct {
 	agentsDir string
 	log       *slog.Logger
+	// skipUpstream disables the upstream DNS beacon (fork mode,
+	// PM_HIDE_COMMUNITY_LINKS): the bundled binary is reported as latest.
+	skipUpstream bool
 	// Cached values (in-memory, same as Node agentVersionService)
 	currentVersion  string
 	upstreamVersion string
@@ -42,7 +45,7 @@ type AgentVersionHandler struct {
 }
 
 // NewAgentVersionHandler creates a new agent version handler.
-func NewAgentVersionHandler(log *slog.Logger) *AgentVersionHandler {
+func NewAgentVersionHandler(log *slog.Logger, skipUpstream bool) *AgentVersionHandler {
 	agentsDir := os.Getenv("AGENT_BINARIES_DIR")
 	if agentsDir == "" {
 		agentsDir = os.Getenv("AGENTS_DIR")
@@ -50,7 +53,7 @@ func NewAgentVersionHandler(log *slog.Logger) *AgentVersionHandler {
 	if agentsDir == "" {
 		agentsDir = "agents"
 	}
-	return &AgentVersionHandler{agentsDir: agentsDir, log: log}
+	return &AgentVersionHandler{agentsDir: agentsDir, log: log, skipUpstream: skipUpstream}
 }
 
 // getServerGoArch maps runtime.GOARCH to Go binary naming (matches Node os.arch() mapping).
@@ -148,7 +151,12 @@ func (h *AgentVersionHandler) GetVersionInfo(w http.ResponseWriter, r *http.Requ
 	// Upstream from DNS - refresh if stale or never checked. A WARN is
 	// intentional: silently falling back used to produce "0.0.0" downstream.
 	now := time.Now()
-	if h.upstreamVersion == "" || h.lastChecked == nil || now.Sub(*h.lastChecked) > 5*time.Minute {
+	if h.skipUpstream {
+		// Fork mode: the bundled binary IS the latest an agent can receive
+		// from this server — no upstream DNS beacon.
+		h.upstreamVersion = h.currentVersion
+		h.lastChecked = &now
+	} else if h.upstreamVersion == "" || h.lastChecked == nil || now.Sub(*h.lastChecked) > 5*time.Minute {
 		if v, err := h.getLatestVersionFromDNS(ctx); err == nil {
 			h.upstreamVersion = v
 			h.lastChecked = &now

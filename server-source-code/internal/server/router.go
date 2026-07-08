@@ -236,7 +236,7 @@ func NewRouter(ctx context.Context, cfg *config.Config, db *database.DB, rdb *re
 
 	// Alerts/reporting
 	alertsHandler := handler.NewAlertsHandler(alertsStore, alertConfigStore, dbProvider)
-	agentVersionHandler := handler.NewAgentVersionHandler(log)
+	agentVersionHandler := handler.NewAgentVersionHandler(log, cfg != nil && cfg.HideCommunityLinks)
 	alertConfigHandler := handler.NewAlertConfigHandler(alertConfigStore)
 	notificationsHandler := handler.NewNotificationsHandler(dbProvider, enc, notifyEmit, resolved, cfg, settingsStore, queueClient)
 	automationHandler := handler.NewAutomationHandler(queueInspector, queueClient, registry, settingsStore, alertConfigStore)

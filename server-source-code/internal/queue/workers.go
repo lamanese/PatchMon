@@ -446,13 +446,14 @@ type VersionUpdateCheckHandler struct {
 	defaultDB     *database.DB
 	poolCache     *hostctx.PoolCache
 	serverVersion string
+	skipUpstream  bool
 	emit          *notifications.Emitter
 	log           *slog.Logger
 }
 
 // NewVersionUpdateCheckHandler creates a version update check handler.
-func NewVersionUpdateCheckHandler(defaultDB *database.DB, poolCache *hostctx.PoolCache, serverVersion string, emit *notifications.Emitter, log *slog.Logger) *VersionUpdateCheckHandler {
-	return &VersionUpdateCheckHandler{defaultDB: defaultDB, poolCache: poolCache, serverVersion: serverVersion, emit: emit, log: log}
+func NewVersionUpdateCheckHandler(defaultDB *database.DB, poolCache *hostctx.PoolCache, serverVersion string, skipUpstream bool, emit *notifications.Emitter, log *slog.Logger) *VersionUpdateCheckHandler {
+	return &VersionUpdateCheckHandler{defaultDB: defaultDB, poolCache: poolCache, serverVersion: serverVersion, skipUpstream: skipUpstream, emit: emit, log: log}
 }
 
 // ProcessTask implements asynq.Handler.
@@ -472,6 +473,12 @@ func (h *VersionUpdateCheckHandler) ProcessTask(ctx context.Context, t *asynq.Ta
 }
 
 func (h *VersionUpdateCheckHandler) checkVersions(ctx context.Context, d *database.DB, tenantHost string) error {
+	if h.skipUpstream {
+		// Fork mode (PM_HIDE_COMMUNITY_LINKS): updates ship via the fork's own
+		// image pipeline — no upstream DNS beacon, no upstream update alerts.
+		h.log.Debug("version update check skipped (upstream check disabled)")
+		return nil
+	}
 	if err := alerts.ProcessServerUpdate(ctx, d, h.serverVersion, tenantHost, h.emit, h.log); err != nil {
 		return err
 	}

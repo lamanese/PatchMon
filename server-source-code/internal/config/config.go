@@ -148,8 +148,11 @@ type Config struct {
 	AdminMode bool
 
 	// HideCommunityLinks hides the upstream community/social/donate links
-	// (nav bar, login footer, first-run wizard) for self-hosted forks.
-	// Set PM_HIDE_COMMUNITY_LINKS=true in .env.
+	// (nav bar, login footer, first-run wizard), the upstream newsletter
+	// opt-in (profile page, wizard, release-notes modal) and disables the
+	// upstream version checks (DNS beacons *.vcheck.patchmon.net, update
+	// alerts, release links) for self-hosted forks — updates ship via the
+	// fork's own image pipeline. Set PM_HIDE_COMMUNITY_LINKS=true in .env.
 	HideCommunityLinks bool
 
 	// DisableSignup hard-disables user self-registration regardless of the

@@ -49,7 +49,7 @@ func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, "Failed to load settings")
 		return
 	}
-	JSON(w, http.StatusOK, settingsToResponse(s, h.enc, h.cfg != nil && h.cfg.DisableSignup))
+	JSON(w, http.StatusOK, settingsToResponse(s, h.enc, h.cfg != nil && h.cfg.DisableSignup, h.cfg != nil && h.cfg.HideCommunityLinks))
 }
 
 // GetServerURL handles GET /settings/server-url (public, used by install commands and Add Host wizard).
@@ -101,10 +101,18 @@ func (h *SettingsHandler) VersionCurrent(version string) http.HandlerFunc {
 		if s.LastUpdateCheck != nil {
 			lastCheck = s.LastUpdateCheck.Format(time.RFC3339)
 		}
+		var latestVersion interface{} = s.LatestVersion
+		updateAvailable := s.UpdateAvailable
+		if h.cfg != nil && h.cfg.HideCommunityLinks {
+			// Fork mode: updates ship via the fork's own image pipeline, so the
+			// upstream latest/update-available info (possibly stale in the DB) is masked.
+			latestVersion = nil
+			updateAvailable = false
+		}
 		JSON(w, http.StatusOK, map[string]interface{}{
 			"version":             version,
-			"latest_version":      s.LatestVersion,
-			"is_update_available": s.UpdateAvailable,
+			"latest_version":      latestVersion,
+			"is_update_available": updateAvailable,
 			"last_update_check":   lastCheck,
 			"buildDate":           time.Now().UTC().Format(time.RFC3339),
 			"environment":         "production",
@@ -124,6 +132,22 @@ func (h *SettingsHandler) VersionCheckUpdates(currentVersion string) http.Handle
 		s, err := h.settings.GetFirst(ctx)
 		if err != nil {
 			Error(w, http.StatusBadRequest, "Settings not found")
+			return
+		}
+
+		// Fork mode: no upstream DNS beacon, no upstream release links.
+		if h.cfg != nil && h.cfg.HideCommunityLinks {
+			var lastCheck interface{}
+			if s.LastUpdateCheck != nil {
+				lastCheck = s.LastUpdateCheck.Format(time.RFC3339)
+			}
+			JSON(w, http.StatusOK, map[string]interface{}{
+				"currentVersion":    currentVersion,
+				"latestVersion":     currentVersion,
+				"isUpdateAvailable": false,
+				"lastUpdateCheck":   lastCheck,
+				"latestRelease":     nil,
+			})
 			return
 		}
 
@@ -254,7 +278,7 @@ func (h *SettingsHandler) GetLoginSettings(w http.ResponseWriter, r *http.Reques
 		if h.cfg != nil && (h.cfg.AdminMode || h.cfg.RegistryDatabaseURL != "") {
 			showGithubVersionFallback = false
 		}
-		showNewsletter := h.cfg == nil || !h.cfg.AdminMode
+		showNewsletter := h.cfg == nil || (!h.cfg.AdminMode && !h.cfg.HideCommunityLinks)
 		adminMode := h.cfg != nil && h.cfg.AdminMode
 		JSON(w, http.StatusOK, map[string]interface{}{
 			"signup_enabled":               false,
@@ -302,7 +326,7 @@ func (h *SettingsHandler) GetLoginSettings(w http.ResponseWriter, r *http.Reques
 		showGithubVersion = false
 	}
 
-	showNewsletter := h.cfg == nil || !h.cfg.AdminMode
+	showNewsletter := h.cfg == nil || (!h.cfg.AdminMode && !h.cfg.HideCommunityLinks)
 	adminMode := h.cfg != nil && h.cfg.AdminMode
 	signupEnabled := s.SignupEnabled
 	if h.cfg != nil && (h.cfg.AdminMode || h.cfg.DisableSignup) {
@@ -613,10 +637,11 @@ func (h *SettingsHandler) GetPublic(w http.ResponseWriter, r *http.Request) {
 		// No settings row — resolve timezone from env/config defaults (no DB value).
 		adminMode := h.cfg != nil && h.cfg.AdminMode
 		JSON(w, http.StatusOK, map[string]interface{}{
-			"auto_update":    false,
-			"alerts_enabled": true,
-			"timezone":       config.ResolveTimezone(nil, h.cfg),
-			"admin_mode":     adminMode,
+			"auto_update":     false,
+			"alerts_enabled":  true,
+			"timezone":        config.ResolveTimezone(nil, h.cfg),
+			"admin_mode":      adminMode,
+			"show_newsletter": h.cfg == nil || (!h.cfg.AdminMode && !h.cfg.HideCommunityLinks),
 		})
 		return
 	}
@@ -627,14 +652,15 @@ func (h *SettingsHandler) GetPublic(w http.ResponseWriter, r *http.Request) {
 
 	adminMode := h.cfg != nil && h.cfg.AdminMode
 	JSON(w, http.StatusOK, map[string]interface{}{
-		"auto_update":    s.AutoUpdate,
-		"alerts_enabled": s.AlertsEnabled,
-		"logo_dark":      s.LogoDark,
-		"logo_light":     s.LogoLight,
-		"favicon":        s.Favicon,
-		"updated_at":     s.UpdatedAt,
-		"timezone":       timezone,
-		"admin_mode":     adminMode,
+		"auto_update":     s.AutoUpdate,
+		"alerts_enabled":  s.AlertsEnabled,
+		"logo_dark":       s.LogoDark,
+		"logo_light":      s.LogoLight,
+		"favicon":         s.Favicon,
+		"updated_at":      s.UpdatedAt,
+		"timezone":        timezone,
+		"admin_mode":      adminMode,
+		"show_newsletter": h.cfg == nil || (!h.cfg.AdminMode && !h.cfg.HideCommunityLinks),
 	})
 }
 
@@ -695,14 +721,22 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	JSON(w, http.StatusOK, settingsToResponse(s, h.enc, h.cfg != nil && h.cfg.DisableSignup))
+	JSON(w, http.StatusOK, settingsToResponse(s, h.enc, h.cfg != nil && h.cfg.DisableSignup, h.cfg != nil && h.cfg.HideCommunityLinks))
 }
 
-func settingsToResponse(s *models.Settings, enc *util.Encryption, signupLocked bool) map[string]interface{} {
+func settingsToResponse(s *models.Settings, enc *util.Encryption, signupLocked bool, hideUpstreamVersion bool) map[string]interface{} {
 	discordSecretSet := false
 	if s.DiscordClientSecret != nil && *s.DiscordClientSecret != "" && enc != nil {
 		_, err := enc.Decrypt(*s.DiscordClientSecret)
 		discordSecretSet = err == nil
+	}
+	// Fork mode: mask possibly stale upstream version info so no
+	// "update available" banner is fed from the old DNS-beacon checks.
+	latestVersion := s.LatestVersion
+	updateAvailable := s.UpdateAvailable
+	if hideUpstreamVersion {
+		latestVersion = nil
+		updateAvailable = false
 	}
 	res := map[string]interface{}{
 		"id": s.ID, "server_url": s.ServerURL, "server_protocol": s.ServerProtocol,
@@ -713,8 +747,8 @@ func settingsToResponse(s *models.Settings, enc *util.Encryption, signupLocked b
 		"package_cache_refresh_mode": s.PackageCacheRefreshMode, "package_cache_refresh_max_age": s.PackageCacheRefreshMaxAge,
 		"github_repo_url": s.GithubRepoURL,
 		"ssh_key_path":    s.SSHKeyPath, "repository_type": s.RepositoryType,
-		"last_update_check": s.LastUpdateCheck, "latest_version": s.LatestVersion,
-		"update_available": s.UpdateAvailable,
+		"last_update_check": s.LastUpdateCheck, "latest_version": latestVersion,
+		"update_available": updateAvailable,
 		"signup_enabled":   s.SignupEnabled, "default_user_role": s.DefaultUserRole,
 		"signup_locked":          signupLocked,
 		"ignore_ssl_self_signed": s.IgnoreSSLSelfSigned,

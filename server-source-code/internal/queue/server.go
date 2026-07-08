@@ -91,6 +91,9 @@ type MuxOpts struct {
 	Log           *slog.Logger
 	Emit          *notifications.Emitter
 	Enc           *util.Encryption
+	// SkipUpstreamVersionCheck disables the daily upstream DNS version check
+	// and its update alerts (fork mode, PM_HIDE_COMMUNITY_LINKS).
+	SkipUpstreamVersionCheck bool
 }
 
 // Mux returns a ServeMux with all handlers registered.
@@ -118,7 +121,7 @@ func Mux(opts MuxOpts) *asynq.ServeMux {
 	mux.Handle(TypeOrphanedPkgCleanup, wrap(TypeOrphanedPkgCleanup, NewOrphanedPkgCleanupHandler(db, opts.PoolCache, log)))
 	mux.Handle(TypeDockerInvCleanup, wrap(TypeDockerInvCleanup, NewDockerInvCleanupHandler(db, opts.PoolCache, log)))
 	mux.Handle(TypeSystemStatistics, wrap(TypeSystemStatistics, NewSystemStatisticsHandler(db, opts.PoolCache, log)))
-	mux.Handle(TypeVersionUpdateCheck, wrap(TypeVersionUpdateCheck, NewVersionUpdateCheckHandler(db, opts.PoolCache, opts.ServerVersion, opts.Emit, log)))
+	mux.Handle(TypeVersionUpdateCheck, wrap(TypeVersionUpdateCheck, NewVersionUpdateCheckHandler(db, opts.PoolCache, opts.ServerVersion, opts.SkipUpstreamVersionCheck, opts.Emit, log)))
 	mux.Handle(TypeComplianceScanCleanup, wrap(TypeComplianceScanCleanup, NewComplianceScanCleanupHandler(db, opts.PoolCache, log)))
 	mux.Handle(TypePatchRunCleanup, wrap(TypePatchRunCleanup, NewPatchRunCleanupHandler(db, opts.PoolCache, log)))
 	mux.Handle(TypeSSGUpdateCheck, wrap(TypeSSGUpdateCheck, NewSSGUpdateCheckHandler(registry, db, opts.PoolCache, opts.QueueClient, opts.SSGContentDir, log)))

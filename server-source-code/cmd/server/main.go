@@ -134,17 +134,18 @@ func main() {
 	queueSrv := queue.NewServer(queueOpts, registry, db, slog)
 	notifyEmit := notifications.NewEmitter(queueClient, rdb, slog)
 	queueMux := queue.Mux(queue.MuxOpts{
-		Registry:      registry,
-		DB:            db,
-		RDB:           rdb,
-		RedisCache:    redisCache,
-		PoolCache:     poolCache,
-		QueueClient:   queueClient,
-		ServerVersion: cfg.Version,
-		SSGContentDir: cfg.SSGContentDir,
-		Log:           slog,
-		Emit:          notifyEmit,
-		Enc:           enc,
+		Registry:                 registry,
+		DB:                       db,
+		RDB:                      rdb,
+		RedisCache:               redisCache,
+		PoolCache:                poolCache,
+		QueueClient:              queueClient,
+		ServerVersion:            cfg.Version,
+		SSGContentDir:            cfg.SSGContentDir,
+		Log:                      slog,
+		Emit:                     notifyEmit,
+		Enc:                      enc,
+		SkipUpstreamVersionCheck: cfg.HideCommunityLinks,
 	})
 	go func() {
 		if err := queueSrv.Run(queueMux); err != nil {
