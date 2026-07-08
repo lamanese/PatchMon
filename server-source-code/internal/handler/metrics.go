@@ -35,9 +35,36 @@ func (h *MetricsHandler) adminModeGuard(w http.ResponseWriter) bool {
 	return false
 }
 
+// metricsLocked reports whether telemetry is hard-disabled (fork mode,
+// PM_HIDE_COMMUNITY_LINKS): nothing is ever sent to the upstream metrics API,
+// regardless of the metrics_enabled DB setting.
+func (h *MetricsHandler) metricsLocked() bool {
+	return h.cfg != nil && h.cfg.HideCommunityLinks
+}
+
+// lockedGuard returns true (and writes a 403) when telemetry is hard-disabled.
+func (h *MetricsHandler) lockedGuard(w http.ResponseWriter) bool {
+	if h.metricsLocked() {
+		Error(w, http.StatusForbidden, "Telemetry is disabled on this server (PM_HIDE_COMMUNITY_LINKS)")
+		return true
+	}
+	return false
+}
+
 // Get handles GET /api/v1/metrics - returns metrics settings.
 func (h *MetricsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if h.adminModeGuard(w) {
+		return
+	}
+	if h.metricsLocked() {
+		// Fork mode: report the effective state without generating an
+		// anonymous ID or touching the settings row.
+		JSON(w, http.StatusOK, map[string]interface{}{
+			"metrics_enabled":      false,
+			"metrics_locked":       true,
+			"metrics_anonymous_id": nil,
+			"metrics_last_sent":    nil,
+		})
 		return
 	}
 	s, err := h.settings.GetFirst(r.Context())
@@ -63,6 +90,7 @@ func (h *MetricsHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	JSON(w, http.StatusOK, map[string]interface{}{
 		"metrics_enabled":      s.MetricsEnabled,
+		"metrics_locked":       false,
 		"metrics_anonymous_id": s.MetricsAnonymousID,
 		"metrics_last_sent":    lastSent,
 	})
@@ -70,7 +98,7 @@ func (h *MetricsHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // Update handles PUT /api/v1/metrics - updates metrics_enabled.
 func (h *MetricsHandler) Update(w http.ResponseWriter, r *http.Request) {
-	if h.adminModeGuard(w) {
+	if h.adminModeGuard(w) || h.lockedGuard(w) {
 		return
 	}
 	var req struct {
@@ -105,7 +133,7 @@ func (h *MetricsHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 // RegenerateID handles POST /api/v1/metrics/regenerate-id.
 func (h *MetricsHandler) RegenerateID(w http.ResponseWriter, r *http.Request) {
-	if h.adminModeGuard(w) {
+	if h.adminModeGuard(w) || h.lockedGuard(w) {
 		return
 	}
 	s, err := h.settings.GetFirst(r.Context())
@@ -129,7 +157,7 @@ func (h *MetricsHandler) RegenerateID(w http.ResponseWriter, r *http.Request) {
 
 // SendNow handles POST /api/v1/metrics/send-now - sends metrics to patchmon.cloud.
 func (h *MetricsHandler) SendNow(w http.ResponseWriter, r *http.Request) {
-	if h.adminModeGuard(w) {
+	if h.adminModeGuard(w) || h.lockedGuard(w) {
 		return
 	}
 	s, err := h.settings.GetFirst(r.Context())

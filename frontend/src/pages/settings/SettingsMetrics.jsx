@@ -113,6 +113,31 @@ const SettingsMetrics = () => {
 		return `${id.substring(0, 8)}...${id.substring(id.length - 8)}`;
 	};
 
+	// Telemetry hard-disabled server-side (PM_HIDE_COMMUNITY_LINKS)
+	if (metricsSettings?.metrics_locked) {
+		return (
+			<div className="space-y-6">
+				<div className="flex items-center mb-6">
+					<BarChart3 className="h-6 w-6 text-primary-600 mr-3" />
+					<div>
+						<h2 className="text-xl font-semibold text-secondary-900 dark:text-white">
+							Anonymous Metrics & Telemetry
+						</h2>
+					</div>
+				</div>
+				<div className="bg-white dark:bg-secondary-800 rounded-lg border border-secondary-200 dark:border-secondary-700 p-6">
+					<div className="flex items-center text-sm">
+						<EyeOff className="h-4 w-4 text-secondary-500 mr-2 flex-shrink-0" />
+						<span className="text-secondary-600 dark:text-white">
+							Telemetry is disabled on this server (PM_HIDE_COMMUNITY_LINKS). No
+							data is ever sent to the upstream metrics API.
+						</span>
+					</div>
+				</div>
+			</div>
+		);
+	}
+
 	return (
 		<div className="space-y-6">
 			{/* Header */}

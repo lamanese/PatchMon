@@ -146,6 +146,7 @@ func main() {
 		Emit:                     notifyEmit,
 		Enc:                      enc,
 		SkipUpstreamVersionCheck: cfg.HideCommunityLinks,
+		SkipTelemetry:            cfg.HideCommunityLinks,
 	})
 	go func() {
 		if err := queueSrv.Run(queueMux); err != nil {

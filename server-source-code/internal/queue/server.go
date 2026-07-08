@@ -94,6 +94,9 @@ type MuxOpts struct {
 	// SkipUpstreamVersionCheck disables the daily upstream DNS version check
 	// and its update alerts (fork mode, PM_HIDE_COMMUNITY_LINKS).
 	SkipUpstreamVersionCheck bool
+	// SkipTelemetry disables the daily anonymous metrics send to the upstream
+	// metrics API (fork mode, PM_HIDE_COMMUNITY_LINKS).
+	SkipTelemetry bool
 }
 
 // Mux returns a ServeMux with all handlers registered.
@@ -135,7 +138,7 @@ func Mux(opts MuxOpts) *asynq.ServeMux {
 	mux.Handle(TypeInstallComplianceTools, wrap(TypeInstallComplianceTools, NewInstallComplianceToolsHandler(registry, db, opts.RDB, opts.RedisCache, log)))
 	patchRunsStore := store.NewPatchRunsStore(&hostctx.DBResolver{Default: db})
 	mux.Handle(TypeRunPatch, wrap(TypeRunPatch, NewRunPatchHandler(registry, patchRunsStore, opts.PoolCache, opts.QueueClient, log)))
-	mux.Handle(TypeMetricsSend, wrap(TypeMetricsSend, NewMetricsSendHandler(db, opts.PoolCache, opts.ServerVersion, log)))
+	mux.Handle(TypeMetricsSend, wrap(TypeMetricsSend, NewMetricsSendHandler(db, opts.PoolCache, opts.ServerVersion, opts.SkipTelemetry, log)))
 	return mux
 }
 

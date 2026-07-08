@@ -724,19 +724,22 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, settingsToResponse(s, h.enc, h.cfg != nil && h.cfg.DisableSignup, h.cfg != nil && h.cfg.HideCommunityLinks))
 }
 
-func settingsToResponse(s *models.Settings, enc *util.Encryption, signupLocked bool, hideUpstreamVersion bool) map[string]interface{} {
+func settingsToResponse(s *models.Settings, enc *util.Encryption, signupLocked bool, forkMode bool) map[string]interface{} {
 	discordSecretSet := false
 	if s.DiscordClientSecret != nil && *s.DiscordClientSecret != "" && enc != nil {
 		_, err := enc.Decrypt(*s.DiscordClientSecret)
 		discordSecretSet = err == nil
 	}
-	// Fork mode: mask possibly stale upstream version info so no
-	// "update available" banner is fed from the old DNS-beacon checks.
+	// Fork mode (PM_HIDE_COMMUNITY_LINKS): mask possibly stale upstream version
+	// info so no "update available" banner is fed from the old DNS-beacon
+	// checks, and report telemetry as off (the send job is hard-disabled).
 	latestVersion := s.LatestVersion
 	updateAvailable := s.UpdateAvailable
-	if hideUpstreamVersion {
+	metricsEnabled := s.MetricsEnabled
+	if forkMode {
 		latestVersion = nil
 		updateAvailable = false
+		metricsEnabled = false
 	}
 	res := map[string]interface{}{
 		"id": s.ID, "server_url": s.ServerURL, "server_protocol": s.ServerProtocol,
@@ -753,7 +756,7 @@ func settingsToResponse(s *models.Settings, enc *util.Encryption, signupLocked b
 		"signup_locked":          signupLocked,
 		"ignore_ssl_self_signed": s.IgnoreSSLSelfSigned,
 		"logo_dark":              s.LogoDark, "logo_light": s.LogoLight, "favicon": s.Favicon,
-		"metrics_enabled": s.MetricsEnabled, "metrics_anonymous_id": s.MetricsAnonymousID,
+		"metrics_enabled": metricsEnabled, "metrics_anonymous_id": s.MetricsAnonymousID,
 		"metrics_last_sent":            s.MetricsLastSent,
 		"show_github_version_on_login": s.ShowGithubVersionOnLogin,
 		"ai_enabled":                   s.AiEnabled, "ai_provider": s.AiProvider, "ai_model": s.AiModel,
