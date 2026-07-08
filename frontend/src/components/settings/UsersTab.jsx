@@ -17,6 +17,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { useSettings } from "../../contexts/SettingsContext";
 import {
 	adminUsersAPI,
+	formatDate,
 	formatDateOnly,
 	permissionsAPI,
 	settingsAPI,
@@ -306,7 +307,7 @@ const UsersTab = () => {
 											</span>
 											<span className="text-secondary-900 dark:text-white">
 												{user.last_login
-													? formatDateOnly(user.last_login)
+													? formatDate(user.last_login)
 													: "Never"}
 											</span>
 										</div>
@@ -475,7 +476,7 @@ const UsersTab = () => {
 											</td>
 											<td className="px-6 py-4 whitespace-nowrap text-sm text-secondary-500 dark:text-white">
 												{user.last_login ? (
-													formatDateOnly(user.last_login)
+													formatDate(user.last_login)
 												) : (
 													<span className="text-secondary-400">Never</span>
 												)}
