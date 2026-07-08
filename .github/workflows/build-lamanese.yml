@@ -2,7 +2,7 @@ name: Build fork image (lamanese)
 
 on:
   push:
-    branches: [feat/remote-reboot, feat/windows-patching]
+    branches: ["feat/**"]
   workflow_dispatch:
 
 env:
