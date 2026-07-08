@@ -111,7 +111,8 @@ frontend/.vite/
 # Agent specific
 agents/*.log
 agents/patchmon-agent-*
-agents-prebuilt/
+agents-prebuilt/*
+!agents-prebuilt/.gitkeep
 agent-source-code/patchmon-agent-*
 __pycache__/
 *.py[cod]
@@ -154,3 +155,20 @@ test-*.sh
 
 # autoresearch working directory (experimental agent optimization workspace)
 agent-autoresearch/
+
+# Lokale Arbeitsnotizen (nicht committen)
+installation.md
+Install.md
+
+# Lokale KI-Arbeitsdokumente - enthalten interne Infrastruktur-Details,
+# Repo ist public (bewusst nicht versioniert)
+CLAUDE.md
+KI*.md
+Session*.md
+ONBOARDING-reboot-scheduler.md
+.claude/
+
+# Kundendokumente + Logo-Quelle (lokal, Repo ist public)
+release-notes/
+kunden-dokumente/
+favicon.svg

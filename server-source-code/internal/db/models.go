@@ -287,6 +287,7 @@ type Host struct {
 	Notes                        *string          `json:"notes"`
 	NeedsReboot                  *bool            `json:"needs_reboot"`
 	RebootReason                 *string          `json:"reboot_reason"`
+	AllowReboot                  bool             `json:"allow_reboot"`
 	DockerEnabled                bool             `json:"docker_enabled"`
 	ComplianceEnabled            bool             `json:"compliance_enabled"`
 	ComplianceOnDemandOnly       bool             `json:"compliance_on_demand_only"`
@@ -476,6 +477,41 @@ type PatchRun struct {
 	UpdatedAt         pgtype.Timestamp `json:"updated_at"`
 }
 
+type PatchSchedule struct {
+	ID           string           `json:"id"`
+	Name         string           `json:"name"`
+	HostGroupID  string           `json:"host_group_id"`
+	ScheduleType string           `json:"schedule_type"`
+	RunAt        pgtype.Timestamp `json:"run_at"`
+	Weekday      *int32           `json:"weekday"`
+	TimeOfDay    *string          `json:"time_of_day"`
+	Timezone     string           `json:"timezone"`
+	Enabled      bool             `json:"enabled"`
+	LastRunAt    pgtype.Timestamp `json:"last_run_at"`
+	MissedAt     pgtype.Timestamp `json:"missed_at"`
+	CreatedBy    *string          `json:"created_by"`
+	CreatedAt    pgtype.Timestamp `json:"created_at"`
+	UpdatedAt    pgtype.Timestamp `json:"updated_at"`
+}
+
+type RebootSchedule struct {
+	ID             string           `json:"id"`
+	Name           string           `json:"name"`
+	HostGroupID    string           `json:"host_group_id"`
+	ScheduleType   string           `json:"schedule_type"`
+	RunAt          pgtype.Timestamp `json:"run_at"`
+	Weekday        *int32           `json:"weekday"`
+	TimeOfDay      *string          `json:"time_of_day"`
+	Timezone       string           `json:"timezone"`
+	OnlyIfRequired bool             `json:"only_if_required"`
+	Enabled        bool             `json:"enabled"`
+	LastRunAt      pgtype.Timestamp `json:"last_run_at"`
+	MissedAt       pgtype.Timestamp `json:"missed_at"`
+	CreatedBy      *string          `json:"created_by"`
+	CreatedAt      pgtype.Timestamp `json:"created_at"`
+	UpdatedAt      pgtype.Timestamp `json:"updated_at"`
+}
+
 type ReleaseNotesAcceptance struct {
 	ID         string           `json:"id"`
 	UserID     string           `json:"user_id"`
@@ -521,6 +557,7 @@ type RolePermission struct {
 	CanManageAutomation     bool             `json:"can_manage_automation"`
 	CanUseRemoteAccess      bool             `json:"can_use_remote_access"`
 	CanManageBilling        bool             `json:"can_manage_billing"`
+	CanRebootHosts          bool             `json:"can_reboot_hosts"`
 	CreatedAt               pgtype.Timestamp `json:"created_at"`
 	UpdatedAt               pgtype.Timestamp `json:"updated_at"`
 }

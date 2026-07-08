@@ -62,8 +62,10 @@ const Profile = () => {
 	const [message, setMessage] = useState({ type: "", text: "" });
 	const [newsletterLoading, setNewsletterLoading] = useState(false);
 
-	// Self-hosted only — hidden under SaaS/managed (admin_mode === true)
-	const showNewsletterSection = !publicSettings?.admin_mode;
+	// Self-hosted only — hidden under SaaS/managed (admin_mode) and when the
+	// server hides upstream community features (show_newsletter === false)
+	const showNewsletterSection =
+		!publicSettings?.admin_mode && publicSettings?.show_newsletter !== false;
 	const isNewsletterSubscribed = !!user?.newsletter_subscribed;
 	const newsletterSubscribedAt = user?.newsletter_subscribed_at;
 

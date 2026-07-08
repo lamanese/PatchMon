@@ -6,8 +6,14 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 )
+
+// wuaGUIDPattern is the strict WUA UpdateID format. GUIDs are interpolated
+// into single-quoted PowerShell strings, so nothing outside this alphabet may
+// ever reach the script (injection barrier for code running as SYSTEM).
+var wuaGUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // WindowsPatcher executes Windows patching operations via PowerShell.
 // WUA (Windows Update Agent) is used for OS/KB updates; WinGet for application packages.
@@ -21,11 +27,18 @@ func NewWindowsPatcher() *WindowsPatcher {
 // InstallWindowsUpdate installs a single pending Windows Update by GUID using the WUA COM API.
 // Returns a human-readable output string and any error.
 // Note: WUA COM is not re-entrant; callers should not invoke this concurrently.
-func (p *WindowsPatcher) InstallWindowsUpdate(ctx context.Context, guid string) (string, error) {
-	if guid == "" {
-		return "", fmt.Errorf("update GUID is required")
+func (p *WindowsPatcher) InstallWindowsUpdate(ctx context.Context, guid string, dryRun bool) (string, error) {
+	if !wuaGUIDPattern.MatchString(guid) {
+		return "", fmt.Errorf("invalid Windows Update GUID: %q", guid)
+	}
+	// Dry run: resolve the update and report what would happen - it must never
+	// download or install anything (the patch wizard's validate step relies on
+	// this).
+	if dryRun {
+		return p.dryRunWindowsUpdate(ctx, guid)
 	}
 	psScript := fmt.Sprintf(`
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $ErrorActionPreference = "Stop"
 $guid = '%s'
 try {
@@ -84,6 +97,43 @@ try {
 	return output, nil
 }
 
+// dryRunWindowsUpdate searches for the update by GUID and reports what a real
+// run would install, without downloading or installing anything.
+func (p *WindowsPatcher) dryRunWindowsUpdate(ctx context.Context, guid string) (string, error) {
+	psScript := fmt.Sprintf(`
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+$ErrorActionPreference = "Stop"
+$guid = '%s'
+try {
+    $session  = New-Object -ComObject Microsoft.Update.Session
+    $searcher = $session.CreateUpdateSearcher()
+    $results  = $searcher.Search("UpdateID='$guid'")
+    if ($results.Updates.Count -eq 0) {
+        Write-Output "SUPERSEDED:$guid"
+        exit 0
+    }
+    $u = $results.Updates.Item(0)
+    $downloaded = if ($u.IsDownloaded) { "already downloaded" } else { "needs download" }
+    Write-Output "DRY RUN: Would install: $($u.Title) ($downloaded)"
+} catch {
+    $hresult = if ($_.Exception.HResult) { [Convert]::ToString([uint32]$_.Exception.HResult, 16) } else { "" }
+    Write-Output "ERROR:$($_.Exception.Message) (0x$hresult)"
+    exit 1
+}
+`, guid)
+
+	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
+	out, err := cmd.CombinedOutput()
+	output := strings.TrimSpace(string(out))
+	if err != nil {
+		return output, fmt.Errorf("WUA dry run failed for %s: %w", guid, err)
+	}
+	if strings.Contains(output, "ERROR:") {
+		return output, fmt.Errorf("WUA dry run failed for %s: %s", guid, output)
+	}
+	return output, nil
+}
+
 // IsSuperseded returns true if the output from InstallWindowsUpdate indicates the update no longer exists.
 func IsSuperseded(output string) bool {
 	return strings.HasPrefix(output, "SUPERSEDED:")
@@ -136,7 +186,7 @@ $env:TERM = 'dumb'
 
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
 	out, err := cmd.CombinedOutput()
-	output := strings.TrimSpace(string(out))
+	output := sanitizeWinGetOutput(string(out))
 	if err != nil {
 		return output, fmt.Errorf("winget upgrade --all failed: %w", err)
 	}
@@ -148,15 +198,18 @@ func (p *WindowsPatcher) WinGetUpgradePackage(ctx context.Context, packageID str
 	if packageID == "" {
 		return "", fmt.Errorf("package ID is required")
 	}
+	// packageID is interpolated into single-quoted PowerShell strings - double
+	// embedded single quotes so it cannot break out of the literal.
+	safeID := strings.ReplaceAll(packageID, "'", "''")
 	var action string
 	if dryRun {
 		action = fmt.Sprintf(`
 $out = & $wingetPath upgrade --accept-source-agreements --disable-interactivity 2>&1 | Out-String
-Write-Output "[dry-run] Would upgrade: %s"
+Write-Output '[dry-run] Would upgrade: %s'
 Write-Output $out
-`, packageID)
+`, safeID)
 	} else {
-		action = fmt.Sprintf(`& $wingetPath upgrade --id '%s' --silent --accept-source-agreements --accept-package-agreements --disable-interactivity 2>&1 | Out-String`, packageID)
+		action = fmt.Sprintf(`& $wingetPath upgrade --id '%s' --silent --accept-source-agreements --accept-package-agreements --disable-interactivity 2>&1 | Out-String`, safeID)
 	}
 	psScript := fmt.Sprintf(`
 $ErrorActionPreference = "SilentlyContinue"
@@ -168,7 +221,7 @@ $env:TERM = 'dumb'
 
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
 	out, err := cmd.CombinedOutput()
-	output := strings.TrimSpace(string(out))
+	output := sanitizeWinGetOutput(string(out))
 	if err != nil {
 		return output, fmt.Errorf("winget upgrade --id %s failed: %w", packageID, err)
 	}

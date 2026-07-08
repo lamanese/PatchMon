@@ -71,12 +71,30 @@ func (h *WindowsUpdatesHandler) RecordInstallResult(w http.ResponseWriter, r *ht
 		return
 	}
 
+	d := h.db.DB(r.Context())
+
+	// Defense in depth: a dry run must never alter recorded install state, and
+	// results may only be recorded against the host's own run. The agent
+	// already skips result reporting for dry runs - this enforces it server-side.
+	if body.PatchRunID != "" {
+		run, err := d.Queries.GetPatchRunByID(r.Context(), body.PatchRunID)
+		if err == nil {
+			if run.HostID != host.ID {
+				JSON(w, http.StatusForbidden, map[string]string{"error": "patch_run_id does not belong to this host"})
+				return
+			}
+			if run.DryRun {
+				JSON(w, http.StatusBadRequest, map[string]string{"error": "dry runs must not report install results"})
+				return
+			}
+		}
+	}
+
 	result := "failed"
 	if body.Success {
 		result = "success"
 	}
 
-	d := h.db.DB(r.Context())
 	guid := body.GUID
 	_ = d.Queries.UpdateHostPackageWUAInstallResult(r.Context(), db.UpdateHostPackageWUAInstallResultParams{
 		HostID:           host.ID,

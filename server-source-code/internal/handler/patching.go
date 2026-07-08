@@ -897,15 +897,31 @@ func (h *PatchingHandler) Trigger(w http.ResponseWriter, r *http.Request) {
 	var pkgNames []string
 	if body.PatchType == "patch_package" {
 		if len(body.PackageNames) > 0 {
-			for _, n := range body.PackageNames {
-				if !isValidPackageName(n) {
-					JSON(w, http.StatusBadRequest, map[string]string{"error": "Every package_names entry must be a valid package name"})
-					return
-				}
-			}
 			if len(body.PackageNames) > 100 {
 				JSON(w, http.StatusBadRequest, map[string]string{"error": "package_names limited to 100 packages per run"})
 				return
+			}
+			// Windows update titles ("2026-05 ... Update (KB...)") contain
+			// spaces and parentheses and fail the generic package-name pattern.
+			// Accept a name that resolves to a WUA GUID on this host instead -
+			// the actual name->GUID substitution happens at dispatch time
+			// (queue/jobs.go), so the run keeps the human-readable titles.
+			var resolved []string
+			for i, n := range body.PackageNames {
+				if isValidPackageName(n) {
+					continue
+				}
+				if resolved == nil {
+					var rerr error
+					resolved, rerr = h.patchRuns.ResolveWindowsUpdateNames(r.Context(), body.HostID, body.PackageNames)
+					if rerr != nil || len(resolved) != len(body.PackageNames) {
+						resolved = body.PackageNames // resolution unavailable -> reject below
+					}
+				}
+				if resolved[i] == n || !isValidPatchUUID(resolved[i]) {
+					JSON(w, http.StatusBadRequest, map[string]string{"error": "Every package_names entry must be a valid package name"})
+					return
+				}
 			}
 			pkgNames = body.PackageNames
 		} else if body.PackageName != "" && isValidPackageName(body.PackageName) {

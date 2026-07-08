@@ -158,6 +158,8 @@ func NewRouter(ctx context.Context, cfg *config.Config, db *database.DB, rdb *re
 	}
 	pendingConfigStore := store.NewPendingConfigStore(dbProvider)
 	hostsHandler := handler.NewHostsHandler(hostsStore, hostGroupsStore, settingsStore, queueClient, registry, integrationStatusStore, pendingConfigStore, dbProvider, notifyEmit)
+	rebootSchedulesHandler := handler.NewRebootSchedulesHandler(dbProvider)
+	patchSchedulesHandler := handler.NewPatchSchedulesHandler(dbProvider)
 	packagesHandler := handler.NewPackagesHandler(store.NewPackagesStore(dbProvider))
 	repositoriesHandler := handler.NewRepositoriesHandler(store.NewRepositoriesStore(dbProvider))
 	dockerStore := store.NewDockerStore(dbProvider)
@@ -206,6 +208,7 @@ func NewRouter(ctx context.Context, cfg *config.Config, db *database.DB, rdb *re
 	agentOpts := []handler.AgentWSHandlerOption{
 		handler.WithOnAgentDisconnect(handler.NewAgentDisconnectHandler(dbProvider, notifyEmit, log)),
 		handler.WithOnAgentConnect(handler.NewAgentConnectHandler(dbProvider, queueClient, queueInspector, notifyEmit, log)),
+		handler.WithOnComplianceProgress(handler.NewComplianceProgressHandler(hostsStore, complianceStore, log)),
 	}
 	if rdpHandler != nil {
 		agentOpts = append(agentOpts, handler.WithOnRDPProxyMessage(rdpHandler.HandleRDPProxyMessage))
@@ -233,7 +236,7 @@ func NewRouter(ctx context.Context, cfg *config.Config, db *database.DB, rdb *re
 
 	// Alerts/reporting
 	alertsHandler := handler.NewAlertsHandler(alertsStore, alertConfigStore, dbProvider)
-	agentVersionHandler := handler.NewAgentVersionHandler(log)
+	agentVersionHandler := handler.NewAgentVersionHandler(log, cfg != nil && cfg.HideCommunityLinks)
 	alertConfigHandler := handler.NewAlertConfigHandler(alertConfigStore)
 	notificationsHandler := handler.NewNotificationsHandler(dbProvider, enc, notifyEmit, resolved, cfg, settingsStore, queueClient)
 	automationHandler := handler.NewAutomationHandler(queueInspector, queueClient, registry, settingsStore, alertConfigStore)
@@ -526,6 +529,12 @@ func NewRouter(ctx context.Context, cfg *config.Config, db *database.DB, rdb *re
 			r.With(middleware.RequirePermission("can_manage_hosts", permissionsStore)).Patch("/hosts/{hostId}/host-down-alerts", hostsHandler.UpdateHostDownAlerts)
 			r.With(middleware.RequirePermission("can_manage_hosts", permissionsStore)).Post("/hosts/{hostId}/regenerate-credentials", hostsHandler.RegenerateCredentials)
 			r.With(middleware.RequirePermission("can_manage_hosts", permissionsStore)).Post("/hosts/bulk/fetch-report", hostsHandler.FetchReportBulk)
+			r.With(middleware.RequirePermission("can_reboot_hosts", permissionsStore)).Post("/hosts/bulk/reboot", hostsHandler.RebootBulk)
+			r.With(middleware.RequirePermission("can_reboot_hosts", permissionsStore)).Put("/hosts/bulk/allow-reboot", hostsHandler.AllowRebootBulk)
+			r.With(middleware.RequirePermission("can_reboot_hosts", permissionsStore)).Get("/reboot-schedules", rebootSchedulesHandler.List)
+			r.With(middleware.RequirePermission("can_reboot_hosts", permissionsStore)).Post("/reboot-schedules", rebootSchedulesHandler.Create)
+			r.With(middleware.RequirePermission("can_reboot_hosts", permissionsStore)).Put("/reboot-schedules/{id}", rebootSchedulesHandler.Update)
+			r.With(middleware.RequirePermission("can_reboot_hosts", permissionsStore)).Delete("/reboot-schedules/{id}", rebootSchedulesHandler.Delete)
 			r.With(middleware.RequirePermission("can_manage_hosts", permissionsStore)).Post("/hosts/{hostId}/fetch-report", hostsHandler.FetchReport)
 			r.With(middleware.RequirePermission("can_manage_hosts", permissionsStore)).Post("/hosts/{hostId}/refresh-integration-status", hostsHandler.RefreshIntegrationStatus)
 			r.With(middleware.RequirePermission("can_manage_hosts", permissionsStore)).Post("/hosts/{hostId}/refresh-docker", hostsHandler.RefreshDocker)
@@ -610,6 +619,11 @@ func NewRouter(ctx context.Context, cfg *config.Config, db *database.DB, rdb *re
 			r.With(middleware.RequirePermission("can_manage_patching", permissionsStore), hostctx.RequireModule("patching_policies")).Delete("/patching/policies/{id}/assignments/{assignmentId}", patchingHandler.RemovePolicyAssignment)
 			r.With(middleware.RequirePermission("can_manage_patching", permissionsStore), hostctx.RequireModule("patching_policies")).Post("/patching/policies/{id}/exclusions", patchingHandler.AddPolicyExclusion)
 			r.With(middleware.RequirePermission("can_manage_patching", permissionsStore), hostctx.RequireModule("patching_policies")).Delete("/patching/policies/{id}/exclusions/{hostId}", patchingHandler.RemovePolicyExclusion)
+			// Patch schedules: recurring/one-shot scheduled patch runs for a host group.
+			r.With(middleware.RequirePermission("can_view_hosts", permissionsStore), hostctx.RequireModule("patching")).Get("/patch-schedules", patchSchedulesHandler.List)
+			r.With(middleware.RequirePermission("can_manage_patching", permissionsStore), hostctx.RequireModule("patching")).Post("/patch-schedules", patchSchedulesHandler.Create)
+			r.With(middleware.RequirePermission("can_manage_patching", permissionsStore), hostctx.RequireModule("patching")).Put("/patch-schedules/{id}", patchSchedulesHandler.Update)
+			r.With(middleware.RequirePermission("can_manage_patching", permissionsStore), hostctx.RequireModule("patching")).Delete("/patch-schedules/{id}", patchSchedulesHandler.Delete)
 			// Windows Update metadata for a host (UI-facing). Part of the patching feature set.
 			r.With(middleware.RequirePermission("can_view_hosts", permissionsStore), hostctx.RequireModule("patching")).Get("/patching/windows-updates/{hostId}", windowsUpdatesHandler.ListForHost)
 

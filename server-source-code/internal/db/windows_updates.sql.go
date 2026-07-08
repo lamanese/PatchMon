@@ -175,6 +175,47 @@ func (q *Queries) GetPendingWindowsUpdateGUIDs(ctx context.Context, hostID strin
 	return items, nil
 }
 
+const getWUAGuidsByPackageNames = `-- name: GetWUAGuidsByPackageNames :many
+SELECT p.name, hp.wua_guid
+FROM host_packages hp
+JOIN packages p ON p.id = hp.package_id
+WHERE hp.host_id = $1
+  AND p.name = ANY($2::text[])
+  AND hp.wua_guid IS NOT NULL
+`
+
+type GetWUAGuidsByPackageNamesParams struct {
+	HostID string   `json:"host_id"`
+	Names  []string `json:"names"`
+}
+
+type GetWUAGuidsByPackageNamesRow struct {
+	Name    string  `json:"name"`
+	WuaGuid *string `json:"wua_guid"`
+}
+
+// Resolves package (update) names to their WUA GUIDs for one host. Used when
+// dispatching per-package patch runs to Windows agents, which install by GUID.
+func (q *Queries) GetWUAGuidsByPackageNames(ctx context.Context, arg GetWUAGuidsByPackageNamesParams) ([]GetWUAGuidsByPackageNamesRow, error) {
+	rows, err := q.db.Query(ctx, getWUAGuidsByPackageNames, arg.HostID, arg.Names)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetWUAGuidsByPackageNamesRow
+	for rows.Next() {
+		var i GetWUAGuidsByPackageNamesRow
+		if err := rows.Scan(&i.Name, &i.WuaGuid); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateHostPackageWUAInstallResult = `-- name: UpdateHostPackageWUAInstallResult :exec
 UPDATE host_packages SET
     wua_install_result = $3,

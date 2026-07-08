@@ -129,6 +129,11 @@ RETURNING id, host_id, profile_id, started_at, completed_at, status,
 DELETE FROM compliance_scans
 WHERE host_id = $1 AND status = 'running';
 
+-- name: FailRunningComplianceScansByHost :exec
+UPDATE compliance_scans
+SET status = 'failed', completed_at = NOW(), error_message = sqlc.arg('error_message')
+WHERE host_id = sqlc.arg('host_id') AND status = 'running';
+
 -- name: DeletePreviousCompletedScansByHostAndProfile :exec
 DELETE FROM compliance_scans
 WHERE host_id = $1 AND profile_id = $2 AND status = 'completed';

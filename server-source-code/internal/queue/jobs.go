@@ -3,7 +3,9 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/db"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/store"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/util"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/hibiken/asynq"
@@ -19,6 +22,7 @@ import (
 
 const (
 	TypeReportNow                = "report_now"
+	TypeReboot                   = "reboot"
 	TypeRefreshIntegrationStatus = "refresh_integration_status"
 	TypeDockerInventoryRefresh   = "docker_inventory_refresh"
 	TypeUpdateAgent              = "update_agent"
@@ -36,6 +40,8 @@ const (
 	TypeRunPatch                 = "run_patch"
 	TypeScheduledReportsDispatch = "scheduled_reports_dispatch"
 	TypeScheduledReportRun       = "scheduled_report_run"
+	TypeRebootSchedulesDispatch  = "reboot_schedules_dispatch"
+	TypePatchSchedulesDispatch   = "patch_schedules_dispatch"
 	QueueAgentCommands           = "agent-commands"
 	QueuePatching                = "patching"
 	QueueCompliance              = "compliance"
@@ -50,6 +56,8 @@ const (
 	QueueComplianceScanCleanup   = "compliance-scan-cleanup"
 	QueueSSGUpdateCheck          = "ssg-update-check"
 	QueueScheduledReports        = "scheduled-reports"
+	QueueRebootSchedules         = "reboot-schedules"
+	QueuePatchSchedules          = "patch-schedules"
 	TypeUpdateThresholdMonitor   = "update-threshold-monitor"
 	QueueUpdateThresholdMonitor  = "update-threshold-monitor"
 	TypePatchRunCleanup          = "patch-run-cleanup"
@@ -121,6 +129,11 @@ func NewSSGUpgradeTask(p SSGUpgradePayload) (*asynq.Task, error) {
 	), nil
 }
 
+// agentSafePackageNamePattern mirrors the agent's package-name allowlist
+// (validAptPackagePattern in the agent's serve.go). Names failing it would be
+// silently dropped by the agent - dispatch must not send them.
+var agentSafePackageNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.+-_]*$`)
+
 // RunPatchPayload is the payload for run_patch job.
 type RunPatchPayload struct {
 	HostID       string   `json:"hostId"`
@@ -184,6 +197,43 @@ func NewReportNowTask(apiID, host string) (*asynq.Task, error) {
 		return nil, err
 	}
 	return asynq.NewTask(TypeReportNow, payload, asynq.Queue(QueueAgentCommands), asynq.MaxRetry(3)), nil
+}
+
+// RebootPayload is the payload for reboot job.
+type RebootPayload struct {
+	ApiID          string `json:"api_id"`
+	Host           string `json:"host,omitempty"`
+	OnlyIfRequired bool   `json:"only_if_required"`
+}
+
+// MaxRebootBatchSize caps the number of hosts a single reboot action may
+// target, shared by the bulk endpoint (per request) and the schedule
+// dispatcher (per run). Prevents an accidental select-all or an
+// over-broad host group from rebooting an entire fleet in one shot.
+const MaxRebootBatchSize = 100
+
+// rebootCooldown is how long a completed reboot task is retained in the queue
+// backend. While retained, its TaskID blocks re-enqueueing, giving each host a
+// per-host cooldown. Chosen to outlast the agent's 1-minute reboot delay so a
+// double submit cannot send a second shutdown command to a host that is about
+// to go down.
+const rebootCooldown = 2 * time.Minute
+
+// NewRebootTask creates a reboot task. MaxRetry is intentionally 0: a reboot
+// command must never be retried automatically. TaskID deduplicates reboot
+// requests for the same agent; Retention keeps the completed task around so
+// the dedupe acts as a cooldown rather than only covering the in-queue window.
+func NewRebootTask(p RebootPayload) (*asynq.Task, error) {
+	payload, err := json.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TypeReboot, payload,
+		asynq.Queue(QueueAgentCommands),
+		asynq.MaxRetry(0),
+		asynq.TaskID("reboot-"+p.ApiID),
+		asynq.Retention(rebootCooldown),
+	), nil
 }
 
 // NewRefreshIntegrationStatusTask creates a refresh_integration_status task.
@@ -398,6 +448,81 @@ func (h *ReportNowHandler) ProcessTask(ctx context.Context, t *asynq.Task) error
 		_ = h.db.Queries.UpdateJobHistoryCompleted(ctx, taskID)
 	}
 	h.log.Info("report_now sent", "api_id", p.ApiID)
+	return nil
+}
+
+// RebootHandler handles reboot jobs.
+type RebootHandler struct {
+	registry *agentregistry.Registry
+	db       *database.DB
+	log      *slog.Logger
+}
+
+// NewRebootHandler creates a reboot handler.
+func NewRebootHandler(registry *agentregistry.Registry, db *database.DB, log *slog.Logger) *RebootHandler {
+	return &RebootHandler{registry: registry, db: db, log: log}
+}
+
+// ProcessTask implements asynq.Handler. Unlike report_now, the reboot command
+// carries a payload (only_if_required) and is never retried: the task has
+// MaxRetry(0), and write failures mark job_history as failed immediately.
+func (h *RebootHandler) ProcessTask(ctx context.Context, t *asynq.Task) error {
+	var p RebootPayload
+	if err := json.Unmarshal(t.Payload(), &p); err != nil {
+		return err
+	}
+
+	taskID, _ := asynq.GetTaskID(ctx)
+
+	// Log to job_history so the reboot shows up in the Agent Queue tab
+	if h.db != nil && taskID != "" {
+		host, err := h.db.Queries.GetHostByApiID(ctx, p.ApiID)
+		var hostID *string
+		if err == nil {
+			hostID = &host.ID
+		}
+		apiIDPtr := &p.ApiID
+		_ = h.db.Queries.InsertJobHistory(ctx, db.InsertJobHistoryParams{
+			ID:            uuid.New().String(),
+			JobID:         taskID,
+			QueueName:     QueueAgentCommands,
+			JobName:       TypeReboot,
+			HostID:        hostID,
+			ApiID:         apiIDPtr,
+			Status:        "active",
+			AttemptNumber: 1,
+		})
+	}
+
+	if !h.registry.IsConnected(p.ApiID) {
+		h.log.Warn("reboot: agent not connected", "api_id", p.ApiID)
+		if taskID != "" && h.db != nil {
+			msg := "Agent not connected"
+			_ = h.db.Queries.UpdateJobHistoryFailed(ctx, db.UpdateJobHistoryFailedParams{JobID: taskID, ErrorMessage: &msg})
+		}
+		return nil // Don't retry - a reboot must be re-triggered explicitly by the user
+	}
+
+	msg, err := json.Marshal(map[string]interface{}{
+		"type":             TypeReboot,
+		"only_if_required": p.OnlyIfRequired,
+	})
+	if err != nil {
+		return err
+	}
+	if err := h.registry.SendMessage(p.ApiID, websocket.TextMessage, msg); err != nil {
+		h.log.Warn("reboot: write failed", "api_id", p.ApiID, "error", err)
+		if taskID != "" && h.db != nil {
+			errMsg := "WebSocket write failed: " + err.Error()
+			_ = h.db.Queries.UpdateJobHistoryFailed(ctx, db.UpdateJobHistoryFailedParams{JobID: taskID, ErrorMessage: &errMsg})
+		}
+		return err // No retry (MaxRetry 0); task is archived
+	}
+
+	if taskID != "" && h.db != nil {
+		_ = h.db.Queries.UpdateJobHistoryCompleted(ctx, taskID)
+	}
+	h.log.Info("reboot sent", "api_id", p.ApiID, "only_if_required", p.OnlyIfRequired)
 	return nil
 }
 
@@ -647,6 +772,64 @@ func (h *RunPatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		return nil
 	}
 
+	// Safety checks that need the target host's OS and agent version.
+	var isWindowsHost bool
+	var hostLookupErr error
+	if p.DryRun || len(p.PackageNames) > 0 {
+		osType, agentVersion, err := h.patchRuns.HostPatchTarget(ctx, p.HostID)
+		hostLookupErr = err
+		if err == nil {
+			isWindowsHost = strings.Contains(strings.ToLower(osType), "windows")
+		}
+		// Windows agents older than 2.0.5 ignore the dry_run flag in the WUA
+		// path and would REALLY install updates during a validation run.
+		// Fail closed: refuse dry runs when the target cannot be verified at
+		// all or the agent is known to be too old.
+		if p.DryRun {
+			msg := ""
+			switch {
+			case err != nil:
+				msg = "dry run refused: could not verify the target host's agent version"
+			case isWindowsHost && util.CompareVersions(agentVersion, "2.0.5") < 0:
+				msg = "dry run refused: Windows agents older than 2.0.5 would install updates during validation; wait for the agent self-update"
+			}
+			if msg != "" {
+				h.log.Warn("run_patch: "+msg, "host_id", p.HostID, "patch_run_id", p.PatchRunID, "agent_version", agentVersion, "lookup_error", err)
+				_ = h.patchRuns.UpdateOutput(ctx, p.PatchRunID, osType, "failed", "", msg)
+				return nil
+			}
+		}
+	}
+
+	// Windows agents install updates by WUA GUID, but per-package runs are
+	// triggered by package name (the update title) - resolve names to GUIDs
+	// here so every dispatch path (trigger, approve, retry) is covered.
+	packageNames := p.PackageNames
+	if len(packageNames) > 0 {
+		resolved, resolveErr := h.patchRuns.ResolveWindowsUpdateNames(ctx, p.HostID, packageNames)
+		if resolveErr != nil {
+			h.log.Warn("run_patch: failed to resolve Windows update GUIDs",
+				"host_id", p.HostID, "patch_run_id", p.PatchRunID, "error", resolveErr)
+		} else {
+			packageNames = resolved
+		}
+		// Names that still fail the agent's package-name allowlist (Windows
+		// update titles whose WUA row disappeared, or unresolved because of a
+		// lookup error) would be silently dropped by the agent, leaving the
+		// run stuck in "running". Fail the run up front instead. Checked for
+		// every host: non-Windows names already passed the same pattern at
+		// trigger time, so this cannot produce new false failures there.
+		for _, n := range packageNames {
+			if !agentSafePackageNamePattern.MatchString(n) {
+				msg := fmt.Sprintf("run refused: package %q could not be resolved to a Windows update GUID (the update may no longer be pending on this host)", n)
+				h.log.Warn("run_patch: "+msg, "host_id", p.HostID, "patch_run_id", p.PatchRunID,
+					"windows_host", isWindowsHost, "lookup_error", hostLookupErr)
+				_ = h.patchRuns.UpdateOutput(ctx, p.PatchRunID, "", "failed", "", msg)
+				return nil
+			}
+		}
+	}
+
 	// Build run_patch payload
 	payload := map[string]interface{}{
 		"type":         "run_patch",
@@ -657,8 +840,8 @@ func (h *RunPatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 	if p.PackageName != nil {
 		payload["package_name"] = *p.PackageName
 	}
-	if len(p.PackageNames) > 0 {
-		payload["package_names"] = p.PackageNames
+	if len(packageNames) > 0 {
+		payload["package_names"] = packageNames
 	}
 	msg, err := json.Marshal(payload)
 	if err != nil {

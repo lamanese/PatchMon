@@ -52,12 +52,14 @@ func (h *CommunityHandler) GetLinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	links := make([]CommunityLink, 0, len(defaultCommunityLinks))
-	for _, l := range defaultCommunityLinks {
-		// Hide donate link in managed/multi-context deployments.
-		if h.cfg != nil && h.cfg.AdminMode && l.ID == "buymeacoffee" {
-			continue
+	if h.cfg == nil || !h.cfg.HideCommunityLinks {
+		for _, l := range defaultCommunityLinks {
+			// Hide donate link in managed/multi-context deployments.
+			if h.cfg != nil && h.cfg.AdminMode && l.ID == "buymeacoffee" {
+				continue
+			}
+			links = append(links, l)
 		}
-		links = append(links, l)
 	}
 	if h.cfg != nil && h.cfg.AdminMode && h.cfg.BillingPortalURL != "" {
 		links = append(links, CommunityLink{

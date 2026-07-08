@@ -1547,6 +1547,7 @@ General HTTP server and network settings.
 | `CORS_ORIGIN` | `http://localhost:3000` | No | Allowed CORS origin(s). Must match the exact URL you use to access PatchMon in your browser (protocol, hostname, and port; no path, no trailing slash). To allow multiple origins, separate them with a comma and no spaces (e.g. `https://patchmon.example.com,https://patchmon.internal.lan`). |
 | `ENABLE_HSTS` | `false` | No | When `true`, the server adds an `HTTP Strict Transport Security` header to responses. Enable this only when PatchMon is served over HTTPS. |
 | `TRUST_PROXY` | `true` | No | When `true`, the server trusts `X-Forwarded-For` / `X-Forwarded-Proto` and related headers from a reverse proxy (Traefik, Caddy, nginx, NPM, etc.). Required for accurate client IP detection, correct rate limiting, and OIDC's HTTPS check when TLS is terminated at the proxy. Default is `true` because the officially supported deployment is Docker behind a reverse proxy; set to `false` explicitly only if PatchMon is exposed directly to the internet without a proxy. |
+| `PM_SERVER_MACHINE_ID` | _(none)_ | No | Manual override for the remote-reboot self-exclusion check: the machine identity of the host running the PatchMon server itself, which must never be rebootable through PatchMon. Normally **not** needed - the server auto-detects its identity from `/sys/class/dmi/id/product_uuid` (readable host-wide even inside containers) and from the host's machine-id bind-mounted to `/run/host-machine-id` (add `- /etc/machine-id:/run/host-machine-id:ro` to the server's `volumes:` for hosts without readable DMI, e.g. LXC). Set this only when neither source is available - use the host's DMI product UUID: `PM_SERVER_MACHINE_ID=$(sudo cat /sys/class/dmi/id/product_uuid)`. If the server cannot determine any identity, it refuses **all** reboot requests with HTTP 503 (fail closed). |
 
 **Production example:**
 
@@ -4642,6 +4643,20 @@ log_level: "info"
 # Default: false
 skip_ssl_verify: false
 
+# ─── Remote Reboot ───────────────────────────────────────────────────
+# Allow remote reboot commands over an insecure command channel.
+#
+# The agent refuses remote reboots (fail closed) when the channel to
+# the server is not MITM-protected, i.e. when skip_ssl_verify is true
+# OR patchmon_server uses plain http:// (which results in an
+# unencrypted ws:// WebSocket). Over such a channel an attacker in the
+# network path could inject reboot commands.
+#
+#     SECURITY: Only set this to true in trusted lab networks. The
+#     correct fix for production is HTTPS with valid certificates.
+# Default: false
+allow_reboot_insecure_transport: false
+
 # ─── Reporting Schedule ──────────────────────────────────────────────
 # How often (in minutes) the agent sends a full report to the server.
 # This value is synced from the server on startup. If the server has
@@ -5741,7 +5756,38 @@ Log in with local credentials, fix the OIDC config, and flip it back.
 
 > **Always take a database backup before running `UPDATE` statements.** `docker compose exec database pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > patchmon-backup-$(date +%F).sql`.
 
-### 10. Quick-Reference: When to Restart What
+### 10. Remote Reboot Returns 503 "self-exclusion is not configured"
+
+#### Symptoms
+
+- Every reboot request fails with HTTP 503 and the message `Reboot refused: self-exclusion is not configured`.
+- Scheduled reboots are refused; the audit log shows `host_reboot_scheduled_run` entries with `success=false` and the error `self-exclusion is not configured`.
+- Server logs show `refusing reboot request: self-exclusion not configured (no DMI product UUID, no /run/host-machine-id mount, no PM_SERVER_MACHINE_ID)`.
+
+#### Cause
+
+The server cannot determine the machine identity of its own host, so it cannot guarantee the PatchMon server is never rebooted through PatchMon. Reboots fail closed in that state. This typically happens in containers on hosts without readable DMI (LXC, some VMs) when the machine-id bind mount is missing.
+
+#### Fix
+
+Add the host's machine-id as a read-only bind mount to the `server` service and restart it:
+
+```yaml
+services:
+  server:
+    volumes:
+      - /etc/machine-id:/run/host-machine-id:ro
+```
+
+Or set the override explicitly in `.env` using the host's DMI product UUID:
+
+```bash
+PM_SERVER_MACHINE_ID=$(sudo cat /sys/class/dmi/id/product_uuid)
+```
+
+Then `docker compose up -d server`. See the environment variable reference for details.
+
+### 11. Quick-Reference: When to Restart What
 
 | Change | What to restart |
 |--------|-----------------|
@@ -6100,6 +6146,27 @@ ls -la /etc/patchmon/config.yml /etc/patchmon/credentials.yml /usr/local/bin/pat
 ```
 
 **Full details:** [Managing the PatchMon Agent: "Permission Denied" Errors](#permission-denied-errors).
+
+### Remote Reboot Refused: Insecure Transport
+
+A remote reboot triggered from the server (manually or via a reboot schedule) never happens, and the agent log shows:
+
+```
+Refusing remote reboot: the command channel is not MITM-protected.
+Set allow_reboot_insecure_transport: true in the agent config to allow this in trusted networks.
+```
+
+**Cause:** the agent fails closed on reboot commands when the channel to the server is not protected against man-in-the-middle attacks - either `skip_ssl_verify: true` is set, or `patchmon_server` uses plain `http://` (which means an unencrypted `ws://` WebSocket). Over such a channel an attacker in the network path could inject reboot commands.
+
+**Fix (production):** serve PatchMon over HTTPS with valid certificates and remove `skip_ssl_verify`.
+
+**Fix (trusted lab networks only):** opt in explicitly in `/etc/patchmon/config.yml`:
+
+```yaml
+allow_reboot_insecure_transport: true
+```
+
+Then restart the agent service. See the [Agent config.yml Reference](#agent-config-yml-reference) for details.
 
 ### Escalation
 

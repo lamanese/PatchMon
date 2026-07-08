@@ -2,9 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import {
 	AlertTriangle,
 	BookOpen,
+	CalendarClock,
 	ChevronDown,
-	ChevronLeft,
-	ChevronRight,
 	Clock,
 	Container,
 	CreditCard,
@@ -52,19 +51,11 @@ const Layout = ({ children }) => {
 	// When used as a layout route, render Outlet; otherwise render children (backwards compat)
 	const content = children ?? <Outlet />;
 	const [sidebarOpen, setSidebarOpen] = useState(false);
-	// Pinned collapsed state — the user's explicit choice via the toggle button.
-	// Persisted to localStorage. Hover behavior only applies when pinned-collapsed.
-	const [pinnedCollapsed, setPinnedCollapsed] = useState(() => {
-		const saved = localStorage.getItem("sidebarCollapsed");
-		return saved ? JSON.parse(saved) : false;
-	});
-	// Ephemeral hover state that temporarily expands the sidebar when pinned-collapsed.
-	const [isSidebarHovered, setIsSidebarHovered] = useState(false);
-	// Effective collapsed state: only collapsed when pinned AND not currently hovered.
-	const sidebarCollapsed = pinnedCollapsed && !isSidebarHovered;
-	// Keep the external API stable for context consumers (SshTerminal, etc.): the
-	// setter always mutates the pinned state, not the ephemeral hover state.
-	const setSidebarCollapsed = setPinnedCollapsed;
+	// The sidebar is always expanded on this fork — the collapse/hover-peek
+	// behavior was removed. The context API stays stable for consumers
+	// (SshTerminal, etc.), but setting it is a no-op.
+	const sidebarCollapsed = false;
+	const setSidebarCollapsed = () => {};
 	const { links: communityLinks } = useCommunityLinks();
 	const [_userMenuOpen, setUserMenuOpen] = useState(false);
 	const [mobileLinksOpen, setMobileLinksOpen] = useState(false);
@@ -85,6 +76,7 @@ const Layout = ({ children }) => {
 		canViewReports,
 		canExportData,
 		canManageSettings,
+		canManagePatching,
 		hasModule,
 		hasPermission,
 	} = useAuth();
@@ -303,6 +295,26 @@ const Layout = ({ children }) => {
 					lockedTier: patchingLocked ? getRequiredTier("patching") : null,
 					children: patchingChildren,
 				});
+
+				// Scheduled patch runs for a host group; gated by the patch
+				// management permission and the patching module.
+				if (canManagePatching() && hasModule("patching")) {
+					opsItems.push({
+						name: "Patch Schedules",
+						href: "/patch-schedules",
+						icon: CalendarClock,
+					});
+				}
+			}
+
+			// Scheduled remote reboots; gated by the same permission as the
+			// manual reboot actions on the hosts page.
+			if (hasPermission("can_reboot_hosts")) {
+				opsItems.push({
+					name: "Reboot Schedules",
+					href: "/reboot-schedules",
+					icon: CalendarClock,
+				});
 			}
 
 			// Compliance is a Max-tier feature (module key: "compliance").
@@ -426,12 +438,16 @@ const Layout = ({ children }) => {
 					href: l.url,
 					external: true,
 				}));
-			systemItems.push({
-				name: "Links",
-				href: "#links",
-				icon: BookOpen,
-				children: linkChildren,
-			});
+			// No empty "Links" shell when community links are hidden
+			// (PM_HIDE_COMMUNITY_LINKS on the server).
+			if (linkChildren.length > 0) {
+				systemItems.push({
+					name: "Links",
+					href: "#links",
+					icon: BookOpen,
+					children: linkChildren,
+				});
+			}
 
 			if (systemItems.length > 0) {
 				nav.push({
@@ -498,6 +514,8 @@ const Layout = ({ children }) => {
 		if (path === "/docker") return "Docker";
 		if (path === "/pro-action") return "Pro-Action";
 		if (path === "/automation") return "Automation";
+		if (path === "/reboot-schedules") return "Reboot Schedules";
+		if (path === "/patch-schedules") return "Patch Schedules";
 		if (path === "/patching" || path.startsWith("/patching/"))
 			return "Patching";
 		if (path === "/compliance" || path.startsWith("/compliance/"))
@@ -545,38 +563,6 @@ const Layout = ({ children }) => {
 		if (minutes > 0) return `${minutes}m ago`;
 		return `${seconds}s ago`;
 	};
-
-	// Auto-collapse main sidebar on settings pages, restore when leaving
-	const sidebarStateBeforeSettings = useRef(null);
-	const isSettingsPage = location.pathname.startsWith("/settings");
-	const prevIsSettingsPage = useRef(isSettingsPage);
-
-	useEffect(() => {
-		const wasSettings = prevIsSettingsPage.current;
-		prevIsSettingsPage.current = isSettingsPage;
-
-		if (isSettingsPage && !wasSettings) {
-			// Entering settings — remember current state and collapse
-			sidebarStateBeforeSettings.current = pinnedCollapsed;
-			setPinnedCollapsed(true);
-		} else if (
-			!isSettingsPage &&
-			wasSettings &&
-			sidebarStateBeforeSettings.current !== null
-		) {
-			// Leaving settings — restore previous state
-			setPinnedCollapsed(sidebarStateBeforeSettings.current);
-			sidebarStateBeforeSettings.current = null;
-		}
-	}, [isSettingsPage, pinnedCollapsed]);
-
-	// Persist only the pinned state (not the ephemeral hover state) to localStorage,
-	// and skip while auto-collapsed for settings.
-	useEffect(() => {
-		if (!isSettingsPage) {
-			localStorage.setItem("sidebarCollapsed", JSON.stringify(pinnedCollapsed));
-		}
-	}, [pinnedCollapsed, isSettingsPage]);
 
 	// Close user menu when clicking outside
 	useEffect(() => {
@@ -1014,33 +1000,7 @@ const Layout = ({ children }) => {
 					className={`hidden lg:fixed lg:inset-y-0 z-[100] lg:flex lg:flex-col transition-all duration-300 relative ${
 						sidebarCollapsed ? "lg:w-16" : "lg:w-64"
 					} bg-white dark:bg-transparent`}
-					onMouseEnter={() => setIsSidebarHovered(true)}
-					onMouseLeave={() => setIsSidebarHovered(false)}
 				>
-					{/* Pin/unpin button: toggles the persisted pinned state. When pinned-expanded
-					    the sidebar stays static; when pinned-collapsed, hover temporarily expands it. */}
-					<button
-						type="button"
-						onClick={() => setPinnedCollapsed(!pinnedCollapsed)}
-						className="absolute top-5 -right-3 z-[200] flex items-center justify-center w-6 h-6 rounded-full bg-white border border-secondary-300 dark:border-white/20 shadow-md hover:bg-secondary-50 transition-colors"
-						style={{
-							backgroundColor: "var(--button-bg, white)",
-							backdropFilter: "var(--button-blur, none)",
-							WebkitBackdropFilter: "var(--button-blur, none)",
-						}}
-						title={
-							pinnedCollapsed
-								? "Pin sidebar expanded"
-								: "Collapse sidebar (hover to peek)"
-						}
-					>
-						{pinnedCollapsed ? (
-							<ChevronRight className="h-4 w-4 text-secondary-700 dark:text-white" />
-						) : (
-							<ChevronLeft className="h-4 w-4 text-secondary-700 dark:text-white" />
-						)}
-					</button>
-
 					<div
 						className={`flex grow flex-col gap-y-5 border-r border-secondary-200 dark:border-white/10 bg-white ${
 							sidebarCollapsed ? "px-2 shadow-lg" : "px-2"

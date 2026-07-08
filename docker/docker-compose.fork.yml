@@ -1,0 +1,119 @@
+# =============================================================================
+# PatchMon (lamanese fork) - Production-style deployment
+# =============================================================================
+# Like the upstream docker-compose.yml, but pulls the prebuilt fork image
+# (with remote reboot + scheduler) from GHCR instead of building from source.
+#
+# Setup:
+#   1. Put this file and env.example in an empty directory on the server.
+#   2. Generate .env (secrets + CORS):
+#        bash setup-env.sh          # or copy env.example to .env and fill in
+#   3. If the GHCR package is private:  docker login ghcr.io
+#   4. Start:
+#        docker compose -f docker-compose.fork.yml up -d
+#
+# See the PatchMon documentation for full configuration details.
+# =============================================================================
+
+name: patchmon
+
+services:
+
+  server:
+    image: ghcr.io/lamanese/patchmon-server:latest
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "3000:3000"
+    volumes:
+      # Host machine-id for the reboot self-exclusion check (so the server can
+      # never reboot its own host). Auto-detection via DMI product UUID usually
+      # works without this; the mount covers hosts with unreadable DMI (e.g. LXC).
+      - /etc/machine-id:/run/host-machine-id:ro
+    networks:
+      - patchmon-internal
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      guacd:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  database:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - patchmon-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 5s
+      retries: 7
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    env_file: .env
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks:
+      - patchmon-internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 7
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  guacd:
+    image: guacamole/guacd:latest
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    cpus: '1.0'
+    networks:
+      - patchmon-internal
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 4822 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  patchmon-internal:
+    driver: bridge

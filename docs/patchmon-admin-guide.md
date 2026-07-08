@@ -35,6 +35,7 @@ This is the day-to-day usage guide for PatchMon administrators and operators wor
 - [Chapter 24: Users, Roles, and RBAC](#users-and-roles-rbac)
 - [Chapter 25: Two-Factor Authentication](#two-factor-authentication)
 - [Chapter 26: Metrics and Telemetry](#metrics-and-telemetry)
+- [Chapter 27: Remote Reboot and Reboot Schedules](#remote-reboot-and-reboot-schedules)
 
 ---
 
@@ -1484,6 +1485,8 @@ The agent chooses the patching back-end by detecting the host's package manager.
 
 > **Note:** The 2.0 release notes describe Linux patching generally. If you need to patch Alpine hosts, track the package manager roadmap or use your existing Alpine tooling until `apk` support lands.
 
+> **apt (Debian/Ubuntu) behaviour:** a `patch_all` run uses `apt-get upgrade --with-new-pkgs`, so packages that are otherwise *kept back* because they pull in a new dependency (for example `fwupd` needing `libfwupd3`) are upgraded. Packages are still never removed - that would require `full-upgrade` / `dist-upgrade`, which PatchMon does not run. The upgradable-package count shown in the UI uses the same `--with-new-pkgs` simulation, so "available updates" matches what `patch_all` actually installs. `dnf`, `yum` and `pacman` already pull in new dependencies, so this only affects apt.
+
 #### Windows patching
 
 When the agent detects it is running on Windows, patch runs are handled by the WUA + WinGet path rather than the Linux package-manager path:
@@ -1962,11 +1965,55 @@ Create a `Delayed 30min` policy with `patch_delay_type=delayed`, `delay_minutes=
 
 ---
 
+### Patch Schedules
+
+A **patch policy** only controls the timing of a run that *someone triggers*; it never fires on its own. **Patch schedules** are the recurring counterpart: a schedule fires a full patch run (`patch_all`) on every host in a group at the configured time, with no manual trigger. Use a schedule for "patch the `production` group every Sunday at 03:00"; use a policy for "when someone patches this host, delay it to the next maintenance window".
+
+**Operations → Patch Schedules** manages them. Each schedule targets exactly **one host group**; membership is resolved at execution time, so hosts added to the group later are included automatically. The form previews the group's hosts ("will patch") so arming a schedule is never blind.
+
+Access is gated by the `patching` module plus the `can_manage_patching` permission (the same write permission as manual patch runs); read access to the list needs `can_view_hosts`. When `patching` is not enabled the navigation entry is hidden.
+
+#### Schedule types
+
+| Type | Fields | Semantics |
+| --- | --- | --- |
+| Once | date + time | Fires once, then the schedule is disabled. The time must be in the future when the schedule is enabled. |
+| Daily | time + IANA timezone | Fires every day at that local wall-clock time. Evaluated in the schedule's timezone, so it stays at the same local time across DST changes. |
+| Weekly | weekday + time + IANA timezone | Fires every week at that local wall-clock time, evaluated in the schedule's timezone. |
+
+Each schedule also has an enabled/disabled toggle. Scheduled runs always patch **all** packages on the host (equivalent to a `patch_all` run); there is no per-package scheduling.
+
+#### Execution semantics
+
+These mirror the reboot-schedule dispatcher (see [Chapter 27](#remote-reboot-and-reboot-schedules)):
+
+- A dispatcher polls every minute for due schedules.
+- **Tolerance window: 5 minutes.** A slot only fires within 5 minutes of its scheduled time. If the server was down longer, the slot is dropped - there is **no catch-up**.
+- **Missed one-time schedules** are disabled and flagged with a *Missed* badge; editing clears it. Missed daily/weekly slots simply wait for the next occurrence.
+- **No instant fire on create or enable.** A slot older than the schedule's last configuration change never fires, so creating "Daily 03:00" at 03:02 does not patch the group immediately - the first run is the next day.
+- **Exactly once per slot.** Slot execution is claimed atomically, so concurrent dispatchers or multiple server replicas cannot double-run a slot.
+- **Creator revalidation.** At execution time the schedule's creator must still exist, be active, and hold `can_manage_patching`. Otherwise the run is refused, audited, and the schedule disabled.
+- For each host in the group the dispatcher creates a `patch_runs` row and enqueues a `run_patch` task, exactly like a manual run; the runs then appear in **Patching → Runs & History** and stream their output normally. *Last run* is shown in the schedule list.
+
+#### Audit events
+
+| Event | When |
+| --- | --- |
+| `patch_scheduled_run` / `patch_scheduled_enqueued` | Scheduled run: intent (before enqueue, with the resolved host list) and outcome, attributed to the schedule creator. Refused runs (creator invalid, group resolution failed) appear as intent entries with `success=false`. |
+| `patch_schedule_created` / `patch_schedule_updated` / `patch_schedule_deleted` | Schedule management, with acting user, IP, and user agent. |
+
+#### Troubleshooting
+
+**A schedule did not fire** - check in order: schedule enabled? *Missed* badge set (server was down at the slot)? Slot within 5 minutes of a config change (no instant fire - first run is the next occurrence)? Creator still active with `can_manage_patching` (otherwise the schedule was auto-disabled; see audit log)? Hosts present in the group and their agents online (offline agents are recorded as failed in job history)?
+
+---
+
 ### Related Documentation
 
 - [Patching Overview](#patching-overview): the three core concepts and how patching fits together.
 - [Running a Patch](#running-a-patch): the Patch Wizard flow, including the Timing step that reads the effective policy.
 - [Patch History and Live Logs](#patch-history-and-live-logs): reading run history, including the policy snapshot shown on each run.
+- [Remote Reboot and Reboot Schedules](#remote-reboot-and-reboot-schedules): the reboot-schedule feature whose dispatcher design patch schedules mirror.
 - Hosts and Groups: managing host groups, which are the usual unit of policy assignment.
 
 ---
@@ -4972,3 +5019,88 @@ A new instance ID appears in our reports and is counted as a new instance. We ha
 #### Can I see the code for this?
 
 Yes, PatchMon is open source. You can inspect the metrics collector in the [PatchMon repository](https://github.com/PatchMon/PatchMon).
+
+---
+
+## Chapter 27: Remote Reboot and Reboot Schedules {#remote-reboot-and-reboot-schedules}
+
+### Overview
+
+PatchMon can remotely reboot managed hosts - on demand from the host list, or automatically via reboot schedules scoped to a host group. Rebooting is a destructive action, so the feature is built defense-in-depth and fails closed at every layer. A reboot only happens when **all** of these allow it:
+
+| Layer | Behaviour when it fails |
+| --- | --- |
+| `can_reboot_hosts` permission (RBAC) | Request rejected (403) |
+| Per-host `allow_reboot` allowlist flag | Host is skipped, not failed |
+| Server self-exclusion | The PatchMon server's own host is skipped; if the server cannot determine its own identity, **all** reboots are refused |
+| Audit intent entry | If the audit log cannot be written, the reboot does not happen |
+| Batch cap (100 hosts per request / per scheduled run) | Request rejected / run refused and audited |
+| Per-host cooldown (2 minutes) | Duplicate reboot commands for the same host are dropped |
+| Agent transport check | Over an unencrypted or unverified channel the agent refuses the command unless explicitly opted in (see the Operator Guide, agent `config.yml` reference) |
+
+On the host itself the reboot is scheduled with a **1-minute delay** (`shutdown -r +1`), so a logged-in operator can still cancel it with `shutdown -c`.
+
+### Permissions
+
+Everything reboot-related sits behind a dedicated, deliberately restrictive permission: **`can_reboot_hosts`**. By default only the `superadmin` and `admin` roles have it. To grant it to another role, go to **Settings → Users → Roles** and enable **Reboot Hosts** in the *Operations* group. Permissions are per role, not per user. Without the permission, the reboot buttons on the Hosts page and the *Reboot Schedules* navigation entry are hidden, and the API returns 403.
+
+One nuance to be aware of: users with only `can_manage_hosts` can change host-group membership and thereby change which hosts an existing schedule targets. The blast radius is limited to hosts already on the reboot allowlist (changing that requires `can_reboot_hosts`), and every run audits the resolved host list.
+
+### The reboot allowlist
+
+Every host has an `allow_reboot` flag, default **off**. Hosts that were never opted in are not rebootable - neither by the bulk action nor by schedules. The PatchMon server's own host can never be allowlisted.
+
+To change the flag: on the **Hosts** page, select hosts via the checkbox column and use **Allow Reboot** / **Disallow Reboot**. The change is audited before it is applied. The sortable *Reboot Allowed* column shows the current state.
+
+### Manual reboot from the host list
+
+1. Select hosts on the **Hosts** page.
+2. Click **Reboot selected**.
+3. The confirmation dialog lists which hosts will reboot and which will be skipped (not allowlisted, server host). From 11 hosts up you must type `REBOOT` to confirm.
+4. Optionally tick *only if reboot is required* - hosts that do not report a pending reboot will then skip the command agent-side.
+
+Limits: maximum 100 hosts per request, and a 2-minute per-host cooldown prevents a double submit from sending a second shutdown command to a host that is about to go down. Per-host delivery status is visible in the Agent Queue (job history). A reboot command is never retried automatically - if an agent is offline, the attempt is recorded as failed and you trigger it again manually when the host is back.
+
+### Reboot Schedules
+
+**Operations → Reboot Schedules** manages scheduled reboots. Each schedule targets exactly **one host group**; membership is resolved at execution time, so hosts added to the group later are included automatically (subject to the allowlist).
+
+#### Schedule types
+
+| Type | Fields | Semantics |
+| --- | --- | --- |
+| Once | date + time | Fires once, then the schedule is disabled. The time must be in the future when the schedule is enabled. |
+| Daily | time + IANA timezone | Fires every day at that local wall-clock time. Evaluated in the schedule's timezone, so it stays at the same local time across DST changes. |
+| Weekly | weekday + time + IANA timezone | Fires every week at that local wall-clock time. Evaluated in the schedule's timezone, so "Sunday 13:00 Europe/Zurich" stays 13:00 local across DST changes. |
+
+Each schedule also has *only reboot hosts that require a reboot* (default on) and an enabled/disabled toggle. The form previews the selected group's hosts with their allowlist status ("will reboot" / "skipped"), so arming a schedule is never blind.
+
+#### Execution semantics
+
+- A dispatcher polls every minute for due schedules.
+- **Tolerance window: 5 minutes.** A slot only fires within 5 minutes of its scheduled time. If the server was down longer than that, the slot is deliberately dropped - there is **no catch-up**. A server restarted hours later must not reboot fleets retroactively.
+- **Missed one-time schedules** are disabled and flagged with a *Missed* badge in the list. Editing the schedule clears the badge. Missed weekly slots simply wait for next week's occurrence.
+- **No instant fire on create or enable.** A slot older than the schedule's last configuration change never fires: creating or enabling "Thursday 03:00" at 03:02 on a Thursday will not reboot the group immediately - the first run is next week.
+- **Exactly once per slot.** Slot execution is claimed atomically, so concurrent dispatchers or multiple server replicas cannot double-run a slot.
+- **Creator revalidation.** At execution time the schedule's creator must still exist, be active, and hold `can_reboot_hosts`. Otherwise the run is refused, audited, and the schedule disabled.
+- **Same per-run protections as the manual path:** server self-exclusion, allowlist filtering (skip, not fail), fail-closed audit intent before anything is enqueued, the 100-host cap per run, and the per-host cooldown.
+- Runs are attributed to the schedule's creator in the audit log; per-host delivery lands in the job history like manual reboots. *Last run* is shown in the schedule list.
+
+### Audit events
+
+| Event | When |
+| --- | --- |
+| `host_allow_reboot_updated` | Allowlist changed (written before the change) |
+| `host_reboot_requested` / `host_reboot_enqueued` | Manual bulk reboot: intent (before enqueue, with requested/skipped host lists) and outcome |
+| `host_reboot_scheduled_run` / `host_reboot_scheduled_enqueued` | Scheduled run: intent and outcome, attributed to the schedule creator. Refused runs (self-exclusion unconfigured, creator invalid, group too large) appear as intent entries with `success=false`. |
+| `reboot_schedule_created` / `reboot_schedule_updated` / `reboot_schedule_deleted` | Schedule management, with acting user, IP, and user agent |
+
+### Troubleshooting
+
+**Every reboot returns 503 "self-exclusion is not configured"** - the server cannot determine its own machine identity. See the Operator Guide (environment variable `PM_SERVER_MACHINE_ID` and the `/run/host-machine-id` bind mount).
+
+**Host is always skipped with "Reboot not allowed for this host"** - the host is not on the allowlist. Select it on the Hosts page and click **Allow Reboot**.
+
+**The agent refuses the reboot ("command channel is not MITM-protected")** - the agent connects over plain `http://` or with TLS verification disabled. Fix the transport, or for trusted lab networks see `allow_reboot_insecure_transport` in the Operator Guide's agent `config.yml` reference.
+
+**A schedule did not fire** - check in order: schedule enabled? *Missed* badge set (server was down at the slot)? Slot within 5 minutes of a config change (no instant fire - first run is the next occurrence)? Creator still active with `can_reboot_hosts` (otherwise the schedule was auto-disabled; see audit log)? More than 100 rebootable hosts in the group (run refused; see audit log)? Agent offline (recorded as failed in job history, never retried)?

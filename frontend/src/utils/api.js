@@ -135,6 +135,10 @@ export const adminHostsAPI = {
 	fetchReport: (hostId) => api.post(`/hosts/${hostId}/fetch-report`),
 	fetchReportBulk: (hostIds) =>
 		api.post("/hosts/bulk/fetch-report", { hostIds }),
+	rebootBulk: (hostIds, onlyIfRequired) =>
+		api.post("/hosts/bulk/reboot", { hostIds, onlyIfRequired }),
+	allowRebootBulk: (hostIds, allowReboot) =>
+		api.put("/hosts/bulk/allow-reboot", { hostIds, allowReboot }),
 	updateFriendlyName: (hostId, friendlyName) =>
 		api.patch(`/hosts/${hostId}/friendly-name`, {
 			friendly_name: friendlyName,
@@ -171,6 +175,21 @@ export const adminHostsAPI = {
 		api.post(`/hosts/${hostId}/compliance/on-demand-only`, {
 			on_demand_only: onDemandOnly,
 		}),
+};
+
+// Reboot Schedules API (scheduled remote reboots per host group)
+export const rebootSchedulesAPI = {
+	list: () => api.get("/reboot-schedules"),
+	create: (data) => api.post("/reboot-schedules", data),
+	update: (id, data) => api.put(`/reboot-schedules/${id}`, data),
+	delete: (id) => api.delete(`/reboot-schedules/${id}`),
+};
+
+export const patchSchedulesAPI = {
+	list: () => api.get("/patch-schedules"),
+	create: (data) => api.post("/patch-schedules", data),
+	update: (id, data) => api.put(`/patch-schedules/${id}`, data),
+	delete: (id) => api.delete(`/patch-schedules/${id}`),
 };
 
 // Host Groups API

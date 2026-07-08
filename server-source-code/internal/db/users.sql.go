@@ -62,7 +62,7 @@ INSERT INTO users (
     discord_id, discord_username, discord_avatar, discord_linked_at
 ) VALUES (
     $1, $2, $3, NULL, $4, true, $5, $6,
-    false, $7, $8, 'dark', 'cyber_blue',
+    false, $7, $8, 'light', 'cyber_blue',
     $9, $10, $11, $12
 )
 `
@@ -107,7 +107,7 @@ INSERT INTO users (
     oidc_sub, oidc_provider, avatar_url
 ) VALUES (
     $1, $2, $3, NULL, $4, true, $5, $6,
-    false, $7, $8, 'dark', 'cyber_blue',
+    false, $7, $8, 'light', 'cyber_blue',
     $9, $10, $11
 )
 `
@@ -816,6 +816,16 @@ WHERE id = $1
 
 func (q *Queries) UpdateUserDiscordUnlink(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, updateUserDiscordUnlink, id)
+	return err
+}
+
+const updateUserLastLogin = `-- name: UpdateUserLastLogin :exec
+UPDATE users SET last_login = NOW(), updated_at = NOW()
+WHERE id = $1
+`
+
+func (q *Queries) UpdateUserLastLogin(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, updateUserLastLogin, id)
 	return err
 }
 

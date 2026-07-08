@@ -160,7 +160,33 @@ func (h *RunScanHandler) ProcessTask(ctx context.Context, t *asynq.Task) error {
 	if profileID != "" {
 		msg["profile_id"] = profileID
 	}
+	// Create the "running" placeholders BEFORE sending the command: an agent
+	// that cannot scan at all (e.g. Windows, no OpenSCAP) reports failure
+	// near-instantly over the WebSocket, and that failure handler can only
+	// resolve placeholder rows that already exist.
+	profilesToUse := []string{}
+	if effectiveProfileType == "all" || effectiveProfileType == "openscap" {
+		prof, err := h.compliance.GetOrCreateProfile(ctx, "OpenSCAP Scan", "openscap")
+		if err == nil {
+			profilesToUse = append(profilesToUse, prof.ID)
+		}
+	}
+	if effectiveProfileType == "all" || effectiveProfileType == "docker-bench" {
+		prof, err := h.compliance.GetOrCreateProfile(ctx, "Docker Bench Security", "docker-bench")
+		if err == nil {
+			profilesToUse = append(profilesToUse, prof.ID)
+		}
+	}
+	for _, profileID := range profilesToUse {
+		_ = h.compliance.CreateRunningScan(ctx, p.HostID, profileID)
+	}
+
 	if err := h.registry.SendJSON(p.ApiID, msg); err != nil {
+		// The command never reached the agent - remove the placeholders again
+		// (a requeue re-creates them on the next attempt).
+		if delErr := h.compliance.DeleteRunningScans(ctx, p.HostID); delErr != nil {
+			h.log.Warn("run_scan: failed to remove placeholder scans after write failure", "host_id", p.HostID, "error", delErr)
+		}
 		if h.integrationStatus != nil && h.integrationStatus.IsComplianceScanCancelled(ctx, p.HostID) {
 			h.log.Info("run_scan: cancelled after write failed", "api_id", p.ApiID, "host_id", p.HostID)
 			if taskID != "" && d != nil {
@@ -187,23 +213,6 @@ func (h *RunScanHandler) ProcessTask(ctx context.Context, t *asynq.Task) error {
 		nextTask, _ := NewRunScanTask(p)
 		_, _ = h.queueClient.Enqueue(nextTask, asynq.ProcessIn(complianceScanRetryDelay))
 		return nil
-	}
-
-	profilesToUse := []string{}
-	if effectiveProfileType == "all" || effectiveProfileType == "openscap" {
-		prof, err := h.compliance.GetOrCreateProfile(ctx, "OpenSCAP Scan", "openscap")
-		if err == nil {
-			profilesToUse = append(profilesToUse, prof.ID)
-		}
-	}
-	if effectiveProfileType == "all" || effectiveProfileType == "docker-bench" {
-		prof, err := h.compliance.GetOrCreateProfile(ctx, "Docker Bench Security", "docker-bench")
-		if err == nil {
-			profilesToUse = append(profilesToUse, prof.ID)
-		}
-	}
-	for _, profileID := range profilesToUse {
-		_ = h.compliance.CreateRunningScan(ctx, p.HostID, profileID)
 	}
 
 	if taskID != "" && d != nil {

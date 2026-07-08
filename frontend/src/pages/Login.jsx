@@ -10,10 +10,9 @@ import {
 import { useEffect, useId, useState } from "react";
 
 import { useNavigate } from "react-router-dom";
-import { LoginCommunityLinks } from "../components/CommunityLinks";
 import DiscordIcon from "../components/DiscordIcon";
 import { useAuth } from "../contexts/AuthContext";
-import { authAPI, getGlobalTimezone, isCorsError } from "../utils/api";
+import { authAPI, isCorsError } from "../utils/api";
 import { resolveLogoPath } from "../utils/logoPaths";
 
 const Login = () => {
@@ -43,11 +42,9 @@ const Login = () => {
 	const [requiresTfa, setRequiresTfa] = useState(false);
 	const [tfaUsername, setTfaUsername] = useState("");
 	const [signupEnabled, setSignupEnabled] = useState(false);
-	// null = not yet loaded; don't fetch GitHub until we know the setting
+	// null = not yet loaded; gates the left-side branding panel
 	const [showGithubVersionOnLogin, setShowGithubVersionOnLogin] =
 		useState(null);
-	const [latestRelease, setLatestRelease] = useState(null);
-	const [currentVersion, setCurrentVersion] = useState(null);
 	const [oidcConfig, setOidcConfig] = useState({
 		enabled: false,
 		buttonText: "Login with SSO",
@@ -75,9 +72,6 @@ const Login = () => {
 					setShowGithubVersionOnLogin(
 						data.show_github_version_on_login !== false,
 					);
-					if (data.current_version) {
-						setCurrentVersion(data.current_version);
-					}
 					if (data.discord) {
 						setDiscordConfig(data.discord);
 					}
@@ -176,105 +170,6 @@ const Login = () => {
 			navigate("/", { replace: true });
 		}
 	}, [oidcProcessed, navigate]);
-
-	// Fetch latest release and social media stats
-	useEffect(() => {
-		// Only fetch if the setting allows it
-		if (!showGithubVersionOnLogin) {
-			return;
-		}
-
-		const abortController = new AbortController();
-		let isMounted = true;
-
-		const fetchData = async () => {
-			try {
-				// Try to get cached release data first
-				const cachedRelease = localStorage.getItem("githubLatestRelease");
-				const cacheTime = localStorage.getItem("githubReleaseCacheTime");
-				const now = Date.now();
-
-				// Load cached data immediately
-				if (cachedRelease && isMounted) {
-					try {
-						setLatestRelease(JSON.parse(cachedRelease));
-					} catch (_e) {
-						localStorage.removeItem("githubLatestRelease");
-					}
-				}
-				// Use cache if less than 1 hour old
-				const shouldFetchFresh =
-					!cacheTime || now - parseInt(cacheTime, 10) >= 3600000;
-
-				// Fetch latest release from GitHub API (for release notes, published date, etc.)
-				if (shouldFetchFresh) {
-					try {
-						const releaseResponse = await fetch(
-							"https://api.github.com/repos/PatchMon/PatchMon/releases/latest",
-							{
-								headers: {
-									Accept: "application/vnd.github.v3+json",
-								},
-								signal: abortController.signal,
-							},
-						);
-
-						if (releaseResponse.ok && isMounted) {
-							const data = await releaseResponse.json();
-							const releaseInfo = {
-								version: data.tag_name,
-								name: data.name,
-								publishedAt: new Date(data.published_at).toLocaleDateString(
-									"en-US",
-									{
-										year: "numeric",
-										month: "long",
-										day: "numeric",
-										timeZone: getGlobalTimezone() || undefined,
-									},
-								),
-								body: data.body?.split("\n").slice(0, 3).join("\n") || "", // First 3 lines
-							};
-
-							setLatestRelease(releaseInfo);
-							localStorage.setItem(
-								"githubLatestRelease",
-								JSON.stringify(releaseInfo),
-							);
-							localStorage.setItem("githubReleaseCacheTime", now.toString());
-						}
-					} catch (releaseError) {
-						// Ignore abort errors
-						if (releaseError.name === "AbortError") return;
-						console.error("Failed to fetch release from GitHub:", releaseError);
-						// Will use cached data if available
-					}
-				}
-			} catch (error) {
-				// Ignore abort errors
-				if (error.name === "AbortError") return;
-
-				console.error("Failed to fetch GitHub data:", error);
-				// Set fallback data if nothing cached
-				const cachedRelease = localStorage.getItem("githubLatestRelease");
-				if (!cachedRelease && isMounted) {
-					setLatestRelease({
-						version: "v1.3.0",
-						name: "Latest Release",
-						publishedAt: "Recently",
-						body: "Monitor and manage your Linux package updates",
-					});
-				}
-			}
-		};
-
-		fetchData();
-
-		return () => {
-			isMounted = false;
-			abortController.abort();
-		};
-	}, [showGithubVersionOnLogin]); // Run once on mount
 
 	const handleSubmit = async (e) => {
 		e.preventDefault();
@@ -476,149 +371,35 @@ const Login = () => {
 							<div className="space-y-6">
 								<div>
 									<img
-										src="/assets/logo_dark_default.png"
-										alt="PatchMon"
+										src={`${resolveLogoPath(settings?.favicon, "favicon")}?v=${
+											settings?.updated_at
+												? new Date(settings.updated_at).getTime()
+												: Date.now()
+										}`}
+										alt="Logo"
 										className="h-16 mb-4"
+										onError={(e) => {
+											e.target.src = `/assets/logo_square_default.svg?v=${Date.now()}`;
+										}}
 									/>
 									<p className="text-sm text-blue-200 font-medium tracking-wide uppercase">
-										Linux Patch Management
+										Patch Management
 									</p>
 								</div>
-
-								{showGithubVersionOnLogin && latestRelease ? (
-									<div className="space-y-4 bg-black/20 backdrop-blur-sm rounded-lg p-6 border border-white/10">
-										<div className="flex items-center gap-3">
-											<div className="flex items-center gap-2">
-												{(() => {
-													// Normalise versions for comparison (strip leading "v")
-													const strip = (v) =>
-														v ? v.replace(/^v/i, "").trim() : "";
-													// Compare two semver strings. Returns positive if a > b, negative if a < b, 0 if equal.
-													const semverCmp = (a, b) => {
-														const pa = a.split(".").map(Number);
-														const pb = b.split(".").map(Number);
-														const len = Math.max(pa.length, pb.length);
-														for (let i = 0; i < len; i++) {
-															const diff = (pa[i] || 0) - (pb[i] || 0);
-															if (diff !== 0) return diff;
-														}
-														return 0;
-													};
-													const installed = strip(currentVersion);
-													const latest = strip(latestRelease.version);
-													// Only show "Update Available" when latest is strictly newer than installed
-													const isUpdateAvailable =
-														installed &&
-														latest &&
-														semverCmp(latest, installed) > 0;
-													if (isUpdateAvailable) {
-														return (
-															<>
-																<div className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" />
-																<span className="text-amber-300 text-sm font-semibold">
-																	Update Available
-																</span>
-															</>
-														);
-													}
-													if (installed && latest && installed === latest) {
-														return (
-															<>
-																<div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-																<span className="text-green-300 text-sm font-semibold">
-																	You&apos;re on Latest
-																</span>
-															</>
-														);
-													}
-													// installed version unknown - fall back to neutral label
-													return (
-														<>
-															<div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-															<span className="text-green-300 text-sm font-semibold">
-																Latest Release
-															</span>
-														</>
-													);
-												})()}
-											</div>
-											<span className="text-2xl font-bold text-white">
-												{latestRelease.version}
-											</span>
-										</div>
-
-										{latestRelease.name && (
-											<h3 className="text-lg font-semibold text-white">
-												{latestRelease.name}
-											</h3>
-										)}
-
-										<div className="flex items-center gap-2 text-sm text-gray-300">
-											<svg
-												className="w-4 h-4"
-												fill="none"
-												stroke="currentColor"
-												viewBox="0 0 24 24"
-												aria-label="Release date"
-											>
-												<title>Release date</title>
-												<path
-													strokeLinecap="round"
-													strokeLinejoin="round"
-													strokeWidth={2}
-													d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-												/>
-											</svg>
-											<span>Released {latestRelease.publishedAt}</span>
-										</div>
-
-										{latestRelease.body && (
-											<p className="text-sm text-gray-300 leading-relaxed line-clamp-3">
-												{latestRelease.body}
-											</p>
-										)}
-
-										<a
-											href="https://github.com/PatchMon/PatchMon/releases/latest"
-											target="_blank"
-											rel="noopener noreferrer"
-											className="inline-flex items-center gap-2 text-sm text-blue-300 hover:text-blue-200 transition-colors font-medium"
-										>
-											View Release Notes
-											<svg
-												className="w-4 h-4"
-												fill="none"
-												stroke="currentColor"
-												viewBox="0 0 24 24"
-												aria-label="External link"
-											>
-												<title>External link</title>
-												<path
-													strokeLinecap="round"
-													strokeLinejoin="round"
-													strokeWidth={2}
-													d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-												/>
-											</svg>
-										</a>
-									</div>
-								) : showGithubVersionOnLogin ? (
-									<div className="space-y-4 bg-black/20 backdrop-blur-sm rounded-lg p-6 border border-white/10">
-										<div className="animate-pulse space-y-3">
-											<div className="h-6 bg-white/20 rounded w-3/4" />
-											<div className="h-4 bg-white/20 rounded w-1/2" />
-											<div className="h-4 bg-white/20 rounded w-full" />
-										</div>
-									</div>
-								) : null}
 							</div>
 						</div>
 
-						{/* Social Links Footer */}
+						{/* Footer */}
 						<div className="max-w-xl mx-auto w-full">
 							<div className="border-t border-white/10 pt-6">
-								<p className="text-sm text-gray-400 mb-4">Connect with us</p>
-								<LoginCommunityLinks />
+								<a
+									href="https://amanit.ch"
+									target="_blank"
+									rel="noopener noreferrer"
+									className="text-sm text-gray-400 hover:text-gray-200 transition-colors"
+								>
+									amanit.ch
+								</a>
 							</div>
 						</div>
 					</div>
@@ -638,7 +419,7 @@ const Login = () => {
 										? new Date(settings.updated_at).getTime()
 										: Date.now()
 								}`}
-								alt="PatchMon Logo"
+								alt="Logo"
 								className="h-16 w-16"
 								onError={(e) => {
 									e.target.src = `/assets/logo_square_default.svg?v=${Date.now()}`;
@@ -646,10 +427,10 @@ const Login = () => {
 							/>
 						</div>
 						<h2 className="mt-6 text-center text-3xl font-extrabold text-secondary-900 dark:text-secondary-100">
-							{isSignupMode ? "Create PatchMon Account" : "Sign in to PatchMon"}
+							{isSignupMode ? "Create Account" : "Sign in"}
 						</h2>
 						<p className="mt-2 text-center text-sm text-secondary-600 dark:text-white">
-							Monitor and manage your Linux package updates
+							Monitor and manage your Linux and Windows updates
 						</p>
 					</div>
 
@@ -910,7 +691,7 @@ const Login = () => {
 												? new Date(settings.updated_at).getTime()
 												: Date.now()
 										}`}
-										alt="PatchMon Logo"
+										alt="Logo"
 										className="h-16 w-16"
 										onError={(e) => {
 											e.target.src = `/assets/logo_square_default.svg?v=${Date.now()}`;

@@ -12,7 +12,9 @@ import (
 )
 
 // DefaultVersion is the default server version. Bump this when releasing; config_test.go uses it.
-const DefaultVersion = "2.0.2"
+// Fork scheme: <upstream-base>-am.<fork-revision> — bump the am-suffix per fork
+// release, reset to .1 after rebasing onto a new upstream version.
+const DefaultVersion = "2.0.2-am.1"
 
 // Config holds application configuration loaded from environment.
 // Uses same variable names as PatchMon/server for compatibility.
@@ -147,6 +149,20 @@ type Config struct {
 	// Set ADMIN_MODE=on in .env for managed/multi-context deployments.
 	AdminMode bool
 
+	// HideCommunityLinks hides the upstream community/social/donate links
+	// (nav bar, login footer, first-run wizard), the upstream newsletter
+	// opt-in (profile page, wizard, release-notes modal) and disables the
+	// upstream version checks (DNS beacons *.vcheck.patchmon.net, update
+	// alerts, release links) for self-hosted forks — updates ship via the
+	// fork's own image pipeline. Set PM_HIDE_COMMUNITY_LINKS=true in .env.
+	HideCommunityLinks bool
+
+	// DisableSignup hard-disables user self-registration regardless of the
+	// signup_enabled DB setting: the signup endpoints refuse, the toggle is
+	// hidden in the settings UI and Discord auto-create is off. Fail-closed
+	// guard for internet-facing instances. Set PM_DISABLE_SIGNUP=true in .env.
+	DisableSignup bool
+
 	// BillingPortalURL is the Stripe customer portal URL shown to tenants when AdminMode is on.
 	BillingPortalURL string
 
@@ -241,6 +257,8 @@ func Load() (*Config, error) {
 
 		SSGContentDir:         getEnv("SSG_CONTENT_DIR", "./ssg-content"),
 		AdminMode:             getEnv("ADMIN_MODE", "") == "on",
+		HideCommunityLinks:    getEnv("PM_HIDE_COMMUNITY_LINKS", "") == "true",
+		DisableSignup:         getEnv("PM_DISABLE_SIGNUP", "") == "true",
 		BillingPortalURL:      getEnv("BILLING_PORTAL_URL", ""),
 		BillingServiceURL:     getEnv("BILLING_SERVICE_URL", ""),
 		BillingInternalSecret: getEnv("BILLING_INTERNAL_SECRET", ""),

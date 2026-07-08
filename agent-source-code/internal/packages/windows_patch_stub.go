@@ -14,7 +14,7 @@ type WindowsPatcher struct{}
 func NewWindowsPatcher() *WindowsPatcher { return &WindowsPatcher{} }
 
 // InstallWindowsUpdate is a no-op stub on non-Windows platforms.
-func (p *WindowsPatcher) InstallWindowsUpdate(_ context.Context, guid string) (string, error) {
+func (p *WindowsPatcher) InstallWindowsUpdate(_ context.Context, guid string, _ bool) (string, error) {
 	return "", fmt.Errorf("windows update installation not supported on this platform (guid: %s)", guid)
 }
 

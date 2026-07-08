@@ -670,6 +670,27 @@ func (s *ComplianceStore) GetTrends(ctx context.Context, hostID string, days int
 	})
 }
 
+// DeleteRunningScans removes all "running" placeholder scans for a host.
+// Used when the scan command could not be delivered to the agent - the
+// placeholders must not linger for a scan that never started.
+func (s *ComplianceStore) DeleteRunningScans(ctx context.Context, hostID string) error {
+	d := s.db.DB(ctx)
+	return d.Queries.DeleteRunningComplianceScansByHost(ctx, hostID)
+}
+
+// FailRunningScans marks all running scans for a host as failed. Used when
+// the agent reports a terminal scan failure/cancel over its WebSocket before
+// any results were produced (e.g. OpenSCAP unavailable on the host) - without
+// this the "running" placeholder rows linger until the nightly stalled-scan
+// cleanup.
+func (s *ComplianceStore) FailRunningScans(ctx context.Context, hostID, errorMessage string) error {
+	d := s.db.DB(ctx)
+	return d.Queries.FailRunningComplianceScansByHost(ctx, db.FailRunningComplianceScansByHostParams{
+		HostID:       hostID,
+		ErrorMessage: &errorMessage,
+	})
+}
+
 // CreateRunningScan creates a placeholder "running" scan record.
 func (s *ComplianceStore) CreateRunningScan(ctx context.Context, hostID, profileID string) error {
 	d := s.db.DB(ctx)

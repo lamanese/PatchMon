@@ -442,6 +442,13 @@ func setAuthCookiesWithRemember(w http.ResponseWriter, r *http.Request, accessTo
 
 // completeLogin creates tokens, optionally creates session for remember-me, sets cookies, returns JSON.
 func (h *AuthHandler) completeLogin(w http.ResponseWriter, r *http.Request, user *models.User, rememberMe bool) {
+	// Stamp last_login: the password flow never wrote it (only OIDC/Discord
+	// stamp it via their profile updates), leaving "Never" in the users list.
+	// Best-effort - a failed stamp must not block the login.
+	if err := h.users.UpdateLastLogin(r.Context(), user.ID); err != nil && h.log != nil {
+		h.log.Warn("failed to update last_login", "user_id", user.ID, "error", err)
+	}
+
 	expiresIn := h.getJwtExpiresInSeconds()
 
 	refreshExpSec := int64(7 * 24 * 3600)
@@ -1280,10 +1287,20 @@ func (h *AuthHandler) RevokeAllSessions(w http.ResponseWriter, r *http.Request) 
 	JSON(w, http.StatusOK, map[string]string{"message": "All other sessions revoked successfully"})
 }
 
+// signupLocked reports whether self-registration is hard-disabled via
+// PM_DISABLE_SIGNUP - overrides the signup_enabled DB setting, fail-closed.
+func (h *AuthHandler) signupLocked() bool {
+	return h.cfg != nil && h.cfg.DisableSignup
+}
+
 // SignupEnabled handles GET /auth/signup-enabled.
 func (h *AuthHandler) SignupEnabled(w http.ResponseWriter, r *http.Request) {
 	if h.log != nil {
 		h.log.Debug("auth request", "method", r.Method, "path", r.URL.Path)
+	}
+	if h.signupLocked() {
+		JSON(w, http.StatusOK, map[string]bool{"signupEnabled": false})
+		return
 	}
 	s, err := h.settings.GetFirst(r.Context())
 	if err != nil {
@@ -1374,7 +1391,7 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		h.log.Debug("auth request", "method", r.Method, "path", r.URL.Path)
 	}
 	s, err := h.settings.GetFirst(r.Context())
-	if err != nil || s == nil || !s.SignupEnabled {
+	if h.signupLocked() || err != nil || s == nil || !s.SignupEnabled {
 		Error(w, http.StatusForbidden, "User signup is currently disabled")
 		return
 	}
@@ -1451,7 +1468,7 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 func userToResponse(u *models.User, acceptedVersions []string) map[string]interface{} {
 	res := map[string]interface{}{
 		"id": u.ID, "username": u.Username, "email": u.Email, "role": u.Role,
-		"is_active": u.IsActive, "theme_preference": strVal(u.ThemePreference, "dark"),
+		"is_active": u.IsActive, "theme_preference": strVal(u.ThemePreference, "light"),
 		"color_theme":  strVal(u.ColorTheme, "cyber_blue"),
 		"updated_at":   u.UpdatedAt,
 		"has_password": u.PasswordHash != nil && *u.PasswordHash != "",

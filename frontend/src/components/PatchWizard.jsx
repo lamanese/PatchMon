@@ -249,22 +249,21 @@ export default function PatchWizard({
 	}, [restrictHostIds]);
 
 	// Hosts available for selection: either the preset list (lockHosts) or the
-	// discovered union. Windows hosts are excluded because the agent does not
-	// patch them.
+	// discovered union. os_type is carried along so the wizard can show the
+	// Windows-specific hint (WUA + WinGet semantics).
 	const hosts = useMemo(() => {
 		if (lockHosts) {
 			return (presetHosts || []).map((h) => ({
 				id: h.id,
 				friendly_name: h.friendly_name,
 				hostname: h.hostname,
+				os_type: h.os_type,
 			}));
 		}
 		const byId = new Map();
 		for (const q of hostQueries) {
 			const list = q.data || [];
 			for (const h of list) {
-				const osType = (h.os_type || h.osType || "").toLowerCase();
-				if (osType.includes("windows")) continue;
 				const id = h.hostId || h.host_id || h.id;
 				if (!id) continue;
 				if (restrictSet && !restrictSet.has(id)) continue;
@@ -273,6 +272,7 @@ export default function PatchWizard({
 						id,
 						friendly_name: h.friendly_name || h.friendlyName,
 						hostname: h.hostname,
+						os_type: h.os_type || h.osType,
 					});
 				}
 			}
@@ -368,6 +368,16 @@ export default function PatchWizard({
 	const selectedHostArr = useMemo(
 		() => hosts.filter((h) => selectedHostIds.has(h.id)),
 		[hosts, selectedHostIds],
+	);
+
+	// Windows hosts patch differently (WUA + WinGet, long-running cumulative
+	// updates) - surface that as a hint as soon as one is selected.
+	const hasWindowsSelected = useMemo(
+		() =>
+			selectedHostArr.some((h) =>
+				(h.os_type || "").toLowerCase().includes("windows"),
+			),
+		[selectedHostArr],
 	);
 
 	// How many selected hosts already have a pending validation run we could
@@ -960,6 +970,18 @@ export default function PatchWizard({
 						</div>
 					)}
 
+					{hasWindowsSelected && (
+						<div className="mb-3 flex items-start gap-2 rounded-lg bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800 px-3 py-2">
+							<AlertTriangle className="h-4 w-4 text-primary-600 dark:text-primary-300 mt-0.5 shrink-0" />
+							<p className="text-xs text-primary-700 dark:text-primary-200">
+								Windows hosts: "Patch all" installs all pending Windows updates
+								(via Windows Update) plus WinGet app upgrades. Large cumulative
+								updates can take 30-60 minutes each, and a reboot may be
+								required afterwards.
+							</p>
+						</div>
+					)}
+
 					{/* Step 1: Select hosts */}
 					{currentStepId === "hosts" &&
 						(isLoading ? (
@@ -971,9 +993,7 @@ export default function PatchWizard({
 							<p className="text-sm text-secondary-600 dark:text-secondary-400 py-4">
 								{restrictSet
 									? "None of the selected hosts have a pending update for these packages."
-									: hostQueries.some((q) => (q.data || []).length > 0)
-										? "These packages are only pending on Windows hosts. Patching is not supported for Windows."
-										: "No hosts have a pending update for these packages."}
+									: "No hosts have a pending update for these packages."}
 							</p>
 						) : (
 							<>
