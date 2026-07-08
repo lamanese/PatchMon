@@ -167,3 +167,7 @@ KI*.md
 Session*.md
 ONBOARDING-reboot-scheduler.md
 .claude/
+
+# Kundendokumente + Logo-Quelle (lokal, Repo ist public)
+release-notes/
+favicon.svg
