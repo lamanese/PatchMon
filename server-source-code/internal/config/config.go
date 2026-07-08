@@ -12,7 +12,9 @@ import (
 )
 
 // DefaultVersion is the default server version. Bump this when releasing; config_test.go uses it.
-const DefaultVersion = "2.0.2"
+// Fork scheme: <upstream-base>-am.<fork-revision> — bump the am-suffix per fork
+// release, reset to .1 after rebasing onto a new upstream version.
+const DefaultVersion = "2.0.2-am.1"
 
 // Config holds application configuration loaded from environment.
 // Uses same variable names as PatchMon/server for compatibility.
