@@ -147,6 +147,11 @@ type Config struct {
 	// Set ADMIN_MODE=on in .env for managed/multi-context deployments.
 	AdminMode bool
 
+	// HideCommunityLinks hides the upstream community/social/donate links
+	// (nav bar, login footer, first-run wizard) for self-hosted forks.
+	// Set PM_HIDE_COMMUNITY_LINKS=true in .env.
+	HideCommunityLinks bool
+
 	// BillingPortalURL is the Stripe customer portal URL shown to tenants when AdminMode is on.
 	BillingPortalURL string
 
@@ -241,6 +246,7 @@ func Load() (*Config, error) {
 
 		SSGContentDir:         getEnv("SSG_CONTENT_DIR", "./ssg-content"),
 		AdminMode:             getEnv("ADMIN_MODE", "") == "on",
+		HideCommunityLinks:    getEnv("PM_HIDE_COMMUNITY_LINKS", "") == "true",
 		BillingPortalURL:      getEnv("BILLING_PORTAL_URL", ""),
 		BillingServiceURL:     getEnv("BILLING_SERVICE_URL", ""),
 		BillingInternalSecret: getEnv("BILLING_INTERNAL_SECRET", ""),

@@ -448,12 +448,16 @@ const Layout = ({ children }) => {
 					href: l.url,
 					external: true,
 				}));
-			systemItems.push({
-				name: "Links",
-				href: "#links",
-				icon: BookOpen,
-				children: linkChildren,
-			});
+			// No empty "Links" shell when community links are hidden
+			// (PM_HIDE_COMMUNITY_LINKS on the server).
+			if (linkChildren.length > 0) {
+				systemItems.push({
+					name: "Links",
+					href: "#links",
+					icon: BookOpen,
+					children: linkChildren,
+				});
+			}
 
 			if (systemItems.length > 0) {
 				nav.push({
