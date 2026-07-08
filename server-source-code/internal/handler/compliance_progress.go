@@ -15,13 +15,25 @@ import (
 // "in progress" until the nightly stalled-scan cleanup fails them.
 func NewComplianceProgressHandler(hosts *store.HostsStore, compliance *store.ComplianceStore, log *slog.Logger) OnComplianceProgress {
 	return func(ctx context.Context, apiID, phase, errorMessage string) {
-		if phase != "failed" && phase != "cancelled" {
+		if phase != "failed" && phase != "cancelled" && phase != "completed" {
 			return
 		}
 		host, err := hosts.GetByApiID(ctx, apiID)
 		if err != nil || host == nil {
 			log.Debug("compliance progress: could not resolve host, dropping terminal phase",
 				"api_id", apiID, "phase", phase, "error", err)
+			return
+		}
+		if phase == "completed" {
+			// The agent sends "completed" only after the results upload has
+			// been processed (or when a scan legitimately produced no results,
+			// e.g. the requested scanner was skipped). Normally the placeholders
+			// are already replaced by real rows - this only sweeps up the
+			// no-results case, where they would otherwise linger as "running".
+			if err := compliance.DeleteRunningScans(ctx, host.ID); err != nil {
+				log.Warn("failed to remove running compliance scan placeholders after completed scan",
+					"host_id", host.ID, "error", err)
+			}
 			return
 		}
 		msg := errorMessage
