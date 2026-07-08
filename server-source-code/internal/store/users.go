@@ -158,6 +158,13 @@ func (s *UsersStore) UpdateOidcLink(ctx context.Context, userID, oidcSub, oidcPr
 	})
 }
 
+// UpdateLastLogin stamps users.last_login = NOW(). Called on every successful
+// password login - OIDC/Discord logins stamp it via their profile updates.
+func (s *UsersStore) UpdateLastLogin(ctx context.Context, userID string) error {
+	d := s.db.DB(ctx)
+	return d.Queries.UpdateUserLastLogin(ctx, userID)
+}
+
 // UpdateOidcProfile updates user profile from OIDC (last_login, avatar, name, role).
 func (s *UsersStore) UpdateOidcProfile(ctx context.Context, userID string, lastLogin time.Time, avatarURL, firstName, lastName *string, role string) error {
 	d := s.db.DB(ctx)

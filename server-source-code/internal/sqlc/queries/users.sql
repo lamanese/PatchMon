@@ -87,6 +87,10 @@ UPDATE users SET
     theme_preference = $8, color_theme = $9
 WHERE id = $10;
 
+-- name: UpdateUserLastLogin :exec
+UPDATE users SET last_login = NOW(), updated_at = NOW()
+WHERE id = $1;
+
 -- name: UpdateUserOidcLink :exec
 UPDATE users SET
     oidc_sub = $1, oidc_provider = $2, avatar_url = $3, updated_at = NOW()

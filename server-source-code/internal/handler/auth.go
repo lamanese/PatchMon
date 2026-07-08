@@ -442,6 +442,13 @@ func setAuthCookiesWithRemember(w http.ResponseWriter, r *http.Request, accessTo
 
 // completeLogin creates tokens, optionally creates session for remember-me, sets cookies, returns JSON.
 func (h *AuthHandler) completeLogin(w http.ResponseWriter, r *http.Request, user *models.User, rememberMe bool) {
+	// Stamp last_login: the password flow never wrote it (only OIDC/Discord
+	// stamp it via their profile updates), leaving "Never" in the users list.
+	// Best-effort - a failed stamp must not block the login.
+	if err := h.users.UpdateLastLogin(r.Context(), user.ID); err != nil && h.log != nil {
+		h.log.Warn("failed to update last_login", "user_id", user.ID, "error", err)
+	}
+
 	expiresIn := h.getJwtExpiresInSeconds()
 
 	refreshExpSec := int64(7 * 24 * 3600)

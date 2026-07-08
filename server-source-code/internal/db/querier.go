@@ -517,6 +517,7 @@ type Querier interface {
 	UpdateUserDiscordLink(ctx context.Context, arg UpdateUserDiscordLinkParams) error
 	UpdateUserDiscordProfile(ctx context.Context, arg UpdateUserDiscordProfileParams) error
 	UpdateUserDiscordUnlink(ctx context.Context, id string) error
+	UpdateUserLastLogin(ctx context.Context, id string) error
 	UpdateUserOidcLink(ctx context.Context, arg UpdateUserOidcLinkParams) error
 	UpdateUserOidcProfile(ctx context.Context, arg UpdateUserOidcProfileParams) error
 	UpdateUserPreferences(ctx context.Context, arg UpdateUserPreferencesParams) error

@@ -819,6 +819,16 @@ func (q *Queries) UpdateUserDiscordUnlink(ctx context.Context, id string) error 
 	return err
 }
 
+const updateUserLastLogin = `-- name: UpdateUserLastLogin :exec
+UPDATE users SET last_login = NOW(), updated_at = NOW()
+WHERE id = $1
+`
+
+func (q *Queries) UpdateUserLastLogin(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, updateUserLastLogin, id)
+	return err
+}
+
 const updateUserOidcLink = `-- name: UpdateUserOidcLink :exec
 UPDATE users SET
     oidc_sub = $1, oidc_provider = $2, avatar_url = $3, updated_at = NOW()
