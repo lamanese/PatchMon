@@ -1287,10 +1287,20 @@ func (h *AuthHandler) RevokeAllSessions(w http.ResponseWriter, r *http.Request) 
 	JSON(w, http.StatusOK, map[string]string{"message": "All other sessions revoked successfully"})
 }
 
+// signupLocked reports whether self-registration is hard-disabled via
+// PM_DISABLE_SIGNUP - overrides the signup_enabled DB setting, fail-closed.
+func (h *AuthHandler) signupLocked() bool {
+	return h.cfg != nil && h.cfg.DisableSignup
+}
+
 // SignupEnabled handles GET /auth/signup-enabled.
 func (h *AuthHandler) SignupEnabled(w http.ResponseWriter, r *http.Request) {
 	if h.log != nil {
 		h.log.Debug("auth request", "method", r.Method, "path", r.URL.Path)
+	}
+	if h.signupLocked() {
+		JSON(w, http.StatusOK, map[string]bool{"signupEnabled": false})
+		return
 	}
 	s, err := h.settings.GetFirst(r.Context())
 	if err != nil {
@@ -1381,7 +1391,7 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		h.log.Debug("auth request", "method", r.Method, "path", r.URL.Path)
 	}
 	s, err := h.settings.GetFirst(r.Context())
-	if err != nil || s == nil || !s.SignupEnabled {
+	if h.signupLocked() || err != nil || s == nil || !s.SignupEnabled {
 		Error(w, http.StatusForbidden, "User signup is currently disabled")
 		return
 	}

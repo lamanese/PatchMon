@@ -152,6 +152,12 @@ type Config struct {
 	// Set PM_HIDE_COMMUNITY_LINKS=true in .env.
 	HideCommunityLinks bool
 
+	// DisableSignup hard-disables user self-registration regardless of the
+	// signup_enabled DB setting: the signup endpoints refuse, the toggle is
+	// hidden in the settings UI and Discord auto-create is off. Fail-closed
+	// guard for internet-facing instances. Set PM_DISABLE_SIGNUP=true in .env.
+	DisableSignup bool
+
 	// BillingPortalURL is the Stripe customer portal URL shown to tenants when AdminMode is on.
 	BillingPortalURL string
 
@@ -247,6 +253,7 @@ func Load() (*Config, error) {
 		SSGContentDir:         getEnv("SSG_CONTENT_DIR", "./ssg-content"),
 		AdminMode:             getEnv("ADMIN_MODE", "") == "on",
 		HideCommunityLinks:    getEnv("PM_HIDE_COMMUNITY_LINKS", "") == "true",
+		DisableSignup:         getEnv("PM_DISABLE_SIGNUP", "") == "true",
 		BillingPortalURL:      getEnv("BILLING_PORTAL_URL", ""),
 		BillingServiceURL:     getEnv("BILLING_SERVICE_URL", ""),
 		BillingInternalSecret: getEnv("BILLING_INTERNAL_SECRET", ""),

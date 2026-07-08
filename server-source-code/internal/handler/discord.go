@@ -255,8 +255,9 @@ func (h *DiscordHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	user, _ := h.users.GetByDiscordIDOrEmail(r.Context(), discordUser.ID, discordUser.Email)
 	s, _ := h.settings.GetFirst(r.Context())
 
-	// Auto-create user if signup enabled
-	if user == nil && s != nil && s.SignupEnabled {
+	// Auto-create user if signup enabled (and not hard-disabled via PM_DISABLE_SIGNUP)
+	signupLocked := h.cfg != nil && h.cfg.DisableSignup
+	if user == nil && s != nil && s.SignupEnabled && !signupLocked {
 		baseUsername := usernameSanitize.ReplaceAllString(discordUser.Username, "")
 		if len(baseUsername) > 32 {
 			baseUsername = baseUsername[:32]

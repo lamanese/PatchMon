@@ -49,7 +49,7 @@ func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, "Failed to load settings")
 		return
 	}
-	JSON(w, http.StatusOK, settingsToResponse(s, h.enc))
+	JSON(w, http.StatusOK, settingsToResponse(s, h.enc, h.cfg != nil && h.cfg.DisableSignup))
 }
 
 // GetServerURL handles GET /settings/server-url (public, used by install commands and Add Host wizard).
@@ -305,7 +305,7 @@ func (h *SettingsHandler) GetLoginSettings(w http.ResponseWriter, r *http.Reques
 	showNewsletter := h.cfg == nil || !h.cfg.AdminMode
 	adminMode := h.cfg != nil && h.cfg.AdminMode
 	signupEnabled := s.SignupEnabled
-	if h.cfg != nil && h.cfg.AdminMode {
+	if h.cfg != nil && (h.cfg.AdminMode || h.cfg.DisableSignup) {
 		signupEnabled = false
 	}
 	JSON(w, http.StatusOK, map[string]interface{}{
@@ -652,8 +652,10 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// In managed/multi-context mode, prevent self-registration from being enabled.
-	if h.cfg != nil && h.cfg.AdminMode {
+	// In managed/multi-context mode or with PM_DISABLE_SIGNUP, prevent
+	// self-registration from being enabled - the field is stripped so API
+	// calls cannot flip it either (fail-closed).
+	if h.cfg != nil && (h.cfg.AdminMode || h.cfg.DisableSignup) {
 		delete(req, "signupEnabled")
 		delete(req, "signup_enabled")
 	}
@@ -693,10 +695,10 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	JSON(w, http.StatusOK, settingsToResponse(s, h.enc))
+	JSON(w, http.StatusOK, settingsToResponse(s, h.enc, h.cfg != nil && h.cfg.DisableSignup))
 }
 
-func settingsToResponse(s *models.Settings, enc *util.Encryption) map[string]interface{} {
+func settingsToResponse(s *models.Settings, enc *util.Encryption, signupLocked bool) map[string]interface{} {
 	discordSecretSet := false
 	if s.DiscordClientSecret != nil && *s.DiscordClientSecret != "" && enc != nil {
 		_, err := enc.Decrypt(*s.DiscordClientSecret)
@@ -714,6 +716,7 @@ func settingsToResponse(s *models.Settings, enc *util.Encryption) map[string]int
 		"last_update_check": s.LastUpdateCheck, "latest_version": s.LatestVersion,
 		"update_available": s.UpdateAvailable,
 		"signup_enabled":   s.SignupEnabled, "default_user_role": s.DefaultUserRole,
+		"signup_locked":          signupLocked,
 		"ignore_ssl_self_signed": s.IgnoreSSLSelfSigned,
 		"logo_dark":              s.LogoDark, "logo_light": s.LogoLight, "favicon": s.Favicon,
 		"metrics_enabled": s.MetricsEnabled, "metrics_anonymous_id": s.MetricsAnonymousID,

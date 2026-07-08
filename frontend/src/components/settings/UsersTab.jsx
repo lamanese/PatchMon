@@ -88,6 +88,9 @@ const UsersTab = () => {
 		queryKey: ["settings"],
 		queryFn: () => settingsAPI.get().then((res) => res.data),
 	});
+	// PM_DISABLE_SIGNUP on the server hard-disables self-registration; the
+	// toggle is hidden because the server strips the field anyway.
+	const isSignupLocked = settings?.signup_locked === true;
 
 	// Update signup form data when settings are loaded
 	useEffect(() => {
@@ -600,8 +603,9 @@ const UsersTab = () => {
 				</div>
 			)}
 
-			{/* User Registration Settings - hidden in managed/multi-context mode or when OIDC sync roles is active */}
-			{!isAdminMode && !isOIDCSyncRoles && (
+			{/* User Registration Settings - hidden in managed/multi-context mode,
+			    when OIDC sync roles is active, or when PM_DISABLE_SIGNUP locks it */}
+			{!isAdminMode && !isOIDCSyncRoles && !isSignupLocked && (
 				<div className="bg-white dark:bg-secondary-800 shadow overflow-hidden sm:rounded-lg">
 					<div className="px-6 py-4 border-b border-secondary-200 dark:border-secondary-600">
 						<h3 className="text-lg font-medium text-secondary-900 dark:text-white">
