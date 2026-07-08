@@ -26,15 +26,20 @@ type OnAgentDisconnect func(ctx context.Context, apiID string)
 // OnAgentConnect is called when an agent's WebSocket connects. Used to resolve host_down alerts.
 type OnAgentConnect func(ctx context.Context, apiID string)
 
+// OnComplianceProgress is called when an agent sends a compliance_scan_progress
+// message. Used to resolve "running" scan placeholders on terminal phases.
+type OnComplianceProgress func(ctx context.Context, apiID, phase, errorMessage string)
+
 // AgentWSHandler handles WebSocket connections from agents.
 type AgentWSHandler struct {
-	hosts             *store.HostsStore
-	registry          *agentregistry.Registry
-	onSshProxyMessage OnSshProxyMessage
-	onRDPProxyMessage OnRDPProxyMessage
-	onDisconnect      OnAgentDisconnect
-	onConnect         OnAgentConnect
-	upgrader          websocket.Upgrader
+	hosts                *store.HostsStore
+	registry             *agentregistry.Registry
+	onSshProxyMessage    OnSshProxyMessage
+	onRDPProxyMessage    OnRDPProxyMessage
+	onDisconnect         OnAgentDisconnect
+	onConnect            OnAgentConnect
+	onComplianceProgress OnComplianceProgress
+	upgrader             websocket.Upgrader
 }
 
 // AgentWSHandlerOption configures AgentWSHandler.
@@ -58,6 +63,14 @@ func WithOnAgentConnect(f OnAgentConnect) AgentWSHandlerOption {
 func WithOnRDPProxyMessage(f OnRDPProxyMessage) AgentWSHandlerOption {
 	return func(h *AgentWSHandler) {
 		h.onRDPProxyMessage = f
+	}
+}
+
+// WithOnComplianceProgress sets the callback invoked when an agent sends a
+// compliance_scan_progress message.
+func WithOnComplianceProgress(f OnComplianceProgress) AgentWSHandlerOption {
+	return func(h *AgentWSHandler) {
+		h.onComplianceProgress = f
 	}
 }
 
@@ -169,6 +182,19 @@ func (h *AgentWSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 					h.onRDPProxyMessage(apiID, message)
 					continue
 				}
+			}
+		}
+		// Resolve compliance scan progress (terminal phases close the
+		// "running" placeholder rows created when the scan was triggered)
+		if h.onComplianceProgress != nil {
+			var msg struct {
+				Type  string `json:"type"`
+				Phase string `json:"phase"`
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(message, &msg); err == nil && msg.Type == "compliance_scan_progress" {
+				h.onComplianceProgress(connCtx, apiID, msg.Phase, msg.Error)
+				continue
 			}
 		}
 	}

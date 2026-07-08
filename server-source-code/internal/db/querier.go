@@ -204,6 +204,7 @@ type Querier interface {
 	DisableTfa(ctx context.Context, id string) error
 	ExistsByUsernameOrEmail(ctx context.Context, arg ExistsByUsernameOrEmailParams) (bool, error)
 	ExistsPatchPolicyExclusion(ctx context.Context, arg ExistsPatchPolicyExclusionParams) (bool, error)
+	FailRunningComplianceScansByHost(ctx context.Context, arg FailRunningComplianceScansByHostParams) error
 	FindSessionByUserAndDevice(ctx context.Context, arg FindSessionByUserAndDeviceParams) (UserSession, error)
 	FindSessionByUserAndDeviceID(ctx context.Context, arg FindSessionByUserAndDeviceIDParams) (UserSession, error)
 	FindSessionWithTfaBypass(ctx context.Context, arg FindSessionWithTfaBypassParams) (FindSessionWithTfaBypassRow, error)

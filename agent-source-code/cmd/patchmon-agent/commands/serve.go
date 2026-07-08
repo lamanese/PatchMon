@@ -3047,7 +3047,8 @@ func toggleIntegration(integrationName string, enabled bool) error {
 			if osInfo.Name == "" {
 				osDesc = "unknown OS"
 			}
-			if unsupportedErr := complianceOSUnsupported(osInfo); unsupportedErr != nil {
+			unsupportedErr := complianceOSUnsupported(osInfo)
+			if unsupportedErr != nil {
 				// Fail the detect step honestly and skip the OpenSCAP install
 				// entirely - it cannot succeed on this OS.
 				logger.WithError(unsupportedErr).Warn("Compliance tools install skipped: unsupported OS")
@@ -3130,6 +3131,15 @@ func toggleIntegration(integrationName string, enabled bool) error {
 			} else {
 				overallStatus = "partial"
 				statusMessage = "Some compliance tools failed to install"
+			}
+			if unsupportedErr != nil && components["docker-bench"] != "ready" {
+				// Unsupported OS without a working Docker Bench fallback is a
+				// hard error, not "partial" - the UI treats partial as
+				// scannable (Ready badge + Run-scan button), and any scan on
+				// this host could only fail. Hosts with an unknown family but
+				// working Docker Bench (Alpine, Arch, ...) stay "partial".
+				overallStatus = "error"
+				statusMessage = unsupportedErr.Error()
 			}
 			addEvent("complete", func() string {
 				if allReady {
@@ -3635,8 +3645,17 @@ func runComplianceScanWithOptions(ctx context.Context, options *models.Complianc
 	complianceInteg.SetDockerIntegrationEnabled(cfgManager.IsIntegrationEnabled("docker"))
 
 	if !complianceInteg.IsAvailable() {
-		sendComplianceProgress("failed", profileName, "Compliance scanning not available", 0, "compliance scanning not available on this system")
-		return fmt.Errorf("compliance scanning not available on this system")
+		// Neither OpenSCAP nor Docker Bench can run here. Name the real
+		// reason when the OS family is unsupported (e.g. Windows) - but only
+		// in this branch: hosts without a known family can still be
+		// Docker-Bench-only scannable (Alpine, Arch, ...), so an
+		// unconditional fail-fast on the family would break them.
+		errMsg := "compliance scanning not available on this system"
+		if unsupportedErr := complianceOSUnsupported(compliance.NewOpenSCAPScanner(logger).GetOSInfo()); unsupportedErr != nil {
+			errMsg = unsupportedErr.Error()
+		}
+		sendComplianceProgress("failed", profileName, "Compliance scanning not available", 0, errMsg)
+		return errors.New(errMsg)
 	}
 
 	// Send progress: evaluating

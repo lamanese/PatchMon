@@ -139,6 +139,22 @@ func (q *Queries) DeleteRunningComplianceScansByHost(ctx context.Context, hostID
 	return err
 }
 
+const failRunningComplianceScansByHost = `-- name: FailRunningComplianceScansByHost :exec
+UPDATE compliance_scans
+SET status = 'failed', completed_at = NOW(), error_message = $1
+WHERE host_id = $2 AND status = 'running'
+`
+
+type FailRunningComplianceScansByHostParams struct {
+	ErrorMessage *string `json:"error_message"`
+	HostID       string  `json:"host_id"`
+}
+
+func (q *Queries) FailRunningComplianceScansByHost(ctx context.Context, arg FailRunningComplianceScansByHostParams) error {
+	_, err := q.db.Exec(ctx, failRunningComplianceScansByHost, arg.ErrorMessage, arg.HostID)
+	return err
+}
+
 const getComplianceScanByID = `-- name: GetComplianceScanByID :one
 SELECT cs.id, cs.host_id, cs.profile_id, cs.started_at, cs.completed_at, cs.status,
        cs.total_rules, cs.passed, cs.failed, cs.warnings, cs.skipped, cs.not_applicable,
