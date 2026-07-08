@@ -1468,7 +1468,7 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 func userToResponse(u *models.User, acceptedVersions []string) map[string]interface{} {
 	res := map[string]interface{}{
 		"id": u.ID, "username": u.Username, "email": u.Email, "role": u.Role,
-		"is_active": u.IsActive, "theme_preference": strVal(u.ThemePreference, "dark"),
+		"is_active": u.IsActive, "theme_preference": strVal(u.ThemePreference, "light"),
 		"color_theme":  strVal(u.ColorTheme, "cyber_blue"),
 		"updated_at":   u.UpdatedAt,
 		"has_password": u.PasswordHash != nil && *u.PasswordHash != "",

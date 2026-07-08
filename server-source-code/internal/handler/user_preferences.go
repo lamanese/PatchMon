@@ -39,7 +39,7 @@ func (h *UserPreferencesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if hc, ok := uiPrefs["hosts_column_config"]; ok {
 		hostsColumnConfig = hc
 	}
-	themePref := "dark"
+	themePref := "light"
 	if user.ThemePreference != nil && *user.ThemePreference != "" {
 		themePref = *user.ThemePreference
 	}
@@ -125,7 +125,7 @@ func (h *UserPreferencesHandler) Update(w http.ResponseWriter, r *http.Request) 
 }
 
 func preferencesResponse(u *models.User) map[string]interface{} {
-	themePref := "dark"
+	themePref := "light"
 	if u.ThemePreference != nil && *u.ThemePreference != "" {
 		themePref = *u.ThemePreference
 	}
