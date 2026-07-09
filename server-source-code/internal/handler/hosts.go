@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/PatchMon/PatchMon/server-source-code/internal/agentregistry"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/config"
 	hostctx "github.com/PatchMon/PatchMon/server-source-code/internal/context"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/db"
@@ -36,10 +37,11 @@ type HostsHandler struct {
 	pendingConfig     *store.PendingConfigStore
 	db                database.DBProvider
 	notify            *notifications.Emitter
+	cfg               *config.Config
 }
 
 // NewHostsHandler creates a new hosts handler.
-func NewHostsHandler(hosts *store.HostsStore, hostGroups *store.HostGroupsStore, settings *store.SettingsStore, queueClient *asynq.Client, registry *agentregistry.Registry, integrationStatus *store.IntegrationStatusStore, pendingConfig *store.PendingConfigStore, db database.DBProvider, notify *notifications.Emitter) *HostsHandler {
+func NewHostsHandler(hosts *store.HostsStore, hostGroups *store.HostGroupsStore, settings *store.SettingsStore, queueClient *asynq.Client, registry *agentregistry.Registry, integrationStatus *store.IntegrationStatusStore, pendingConfig *store.PendingConfigStore, db database.DBProvider, notify *notifications.Emitter, cfg *config.Config) *HostsHandler {
 	return &HostsHandler{
 		hosts:             hosts,
 		hostGroups:        hostGroups,
@@ -50,6 +52,7 @@ func NewHostsHandler(hosts *store.HostsStore, hostGroups *store.HostGroupsStore,
 		pendingConfig:     pendingConfig,
 		db:                db,
 		notify:            notify,
+		cfg:               cfg,
 	}
 }
 
@@ -173,6 +176,12 @@ func (h *HostsHandler) Create(w http.ResponseWriter, r *http.Request) {
 			Error(w, http.StatusForbidden, "Host limit reached for this host's package")
 			return
 		}
+	}
+
+	// Fork licence gate: active+pending slots against max + tolerance.
+	if licenseBlocksHostCreate(r.Context(), h.cfg, h.settings, h.hosts) {
+		Error(w, http.StatusForbidden, licenseLimitMessage)
+		return
 	}
 
 	machineID := "pending-" + uuid.New().String()

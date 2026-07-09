@@ -134,6 +134,9 @@ func dbSettingToModel(s db.Setting) models.Settings {
 		PasswordRateLimitWindowMs:       pgInt32ToIntPtr(s.PasswordRateLimitWindowMs),
 		PasswordRateLimitMax:            pgInt32ToIntPtr(s.PasswordRateLimitMax),
 		AuthBrowserSessionCookies:       s.AuthBrowserSessionCookies,
+		LicenseMaxHosts:                 pgInt32ToIntPtr(s.LicenseMaxHosts),
+		LicenseEnforce:                  s.LicenseEnforce,
+		LicensePackage:                  s.LicensePackage,
 	}
 }
 

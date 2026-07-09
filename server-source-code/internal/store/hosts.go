@@ -83,6 +83,18 @@ func (s *HostsStore) Count(ctx context.Context) (int, error) {
 	return int(n), nil
 }
 
+// CountByStatus returns the active and pending host counts. The license gate
+// counts active+pending (a slot is reserved at creation time), the license
+// display shows active only.
+func (s *HostsStore) CountByStatus(ctx context.Context) (active int, pending int, err error) {
+	d := s.db.DB(ctx)
+	row, err := d.Queries.CountHostsByStatus(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	return int(row.ActiveCount), int(row.PendingCount), nil
+}
+
 // GetByID returns a host by ID.
 func (s *HostsStore) GetByID(ctx context.Context, id string) (*models.Host, error) {
 	hosts, err := s.GetByIDs(ctx, []string{id})

@@ -22,6 +22,25 @@ func (q *Queries) CountHosts(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countHostsByStatus = `-- name: CountHostsByStatus :one
+SELECT
+    COUNT(*) FILTER (WHERE status = 'active')::int AS active_count,
+    COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count
+FROM hosts
+`
+
+type CountHostsByStatusRow struct {
+	ActiveCount  int32 `json:"active_count"`
+	PendingCount int32 `json:"pending_count"`
+}
+
+func (q *Queries) CountHostsByStatus(ctx context.Context) (CountHostsByStatusRow, error) {
+	row := q.db.QueryRow(ctx, countHostsByStatus)
+	var i CountHostsByStatusRow
+	err := row.Scan(&i.ActiveCount, &i.PendingCount)
+	return i, err
+}
+
 const countUnscannedHosts = `-- name: CountUnscannedHosts :one
 SELECT COUNT(*) FROM hosts h
 WHERE NOT EXISTS (SELECT 1 FROM compliance_scans cs WHERE cs.host_id = h.id)

@@ -117,6 +117,7 @@ type Querier interface {
 	CountDockerHosts(ctx context.Context) (int32, error)
 	CountEnabledHostRepositories(ctx context.Context) (int32, error)
 	CountHosts(ctx context.Context) (int64, error)
+	CountHostsByStatus(ctx context.Context) (CountHostsByStatusRow, error)
 	CountHostsForPackage(ctx context.Context, arg CountHostsForPackageParams) (int32, error)
 	CountImages(ctx context.Context, arg CountImagesParams) (int32, error)
 	CountNetworks(ctx context.Context, arg CountNetworksParams) (int32, error)
@@ -479,6 +480,7 @@ type Querier interface {
 	UpdateJobHistoryCompleted(ctx context.Context, jobID string) error
 	UpdateJobHistoryDelayed(ctx context.Context, jobID string) error
 	UpdateJobHistoryFailed(ctx context.Context, arg UpdateJobHistoryFailedParams) error
+	UpdateLicenseSettings(ctx context.Context, arg UpdateLicenseSettingsParams) error
 	UpdateNotificationDestination(ctx context.Context, arg UpdateNotificationDestinationParams) (NotificationDestination, error)
 	UpdateNotificationRoute(ctx context.Context, arg UpdateNotificationRouteParams) (NotificationRoute, error)
 	UpdatePassword(ctx context.Context, arg UpdatePasswordParams) error

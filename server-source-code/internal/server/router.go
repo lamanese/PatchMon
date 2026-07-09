@@ -151,13 +151,14 @@ func NewRouter(ctx context.Context, cfg *config.Config, db *database.DB, rdb *re
 	hostsStore := store.NewHostsStore(dbProvider)
 	billingHandler := handler.NewBillingHandler(cfg, log, hostsStore)
 	metricsHandler := handler.NewMetricsHandler(settingsStore, hostsStore, cfg)
+	licenseHandler := handler.NewLicenseHandler(settingsStore, hostsStore, cfg, dbProvider)
 	hostGroupsStore := store.NewHostGroupsStore(dbProvider)
 	var integrationStatusStore *store.IntegrationStatusStore
 	if rdb != nil {
 		integrationStatusStore = store.NewIntegrationStatusStore(redisResolver)
 	}
 	pendingConfigStore := store.NewPendingConfigStore(dbProvider)
-	hostsHandler := handler.NewHostsHandler(hostsStore, hostGroupsStore, settingsStore, queueClient, registry, integrationStatusStore, pendingConfigStore, dbProvider, notifyEmit)
+	hostsHandler := handler.NewHostsHandler(hostsStore, hostGroupsStore, settingsStore, queueClient, registry, integrationStatusStore, pendingConfigStore, dbProvider, notifyEmit, cfg)
 	rebootSchedulesHandler := handler.NewRebootSchedulesHandler(dbProvider)
 	patchSchedulesHandler := handler.NewPatchSchedulesHandler(dbProvider)
 	packagesHandler := handler.NewPackagesHandler(store.NewPackagesStore(dbProvider))
@@ -171,6 +172,8 @@ func NewRouter(ctx context.Context, cfg *config.Config, db *database.DB, rdb *re
 		usersStore,
 		dockerStore,
 		queueInspector,
+		settingsStore,
+		cfg,
 	)
 	hostGroupsHandler := handler.NewHostGroupsHandler(hostGroupsStore, hostsStore)
 	dashboardPrefsHandler := handler.NewDashboardPreferencesHandler(dashboardPrefsStore)
@@ -476,6 +479,9 @@ func NewRouter(ctx context.Context, cfg *config.Config, db *database.DB, rdb *re
 			r.With(middleware.RequirePermission("can_manage_settings", permissionsStore)).Put("/metrics", metricsHandler.Update)
 			r.With(middleware.RequirePermission("can_manage_settings", permissionsStore)).Post("/metrics/regenerate-id", metricsHandler.RegenerateID)
 			r.With(middleware.RequirePermission("can_manage_settings", permissionsStore)).Post("/metrics/send-now", metricsHandler.SendNow)
+			// Licence (fork feature): read for settings managers, write superadmin-only (checked in the handler).
+			r.With(middleware.RequirePermission("can_manage_settings", permissionsStore)).Get("/license", licenseHandler.Get)
+			r.With(middleware.RequirePermission("can_manage_settings", permissionsStore)).Put("/license", licenseHandler.Update)
 			r.Get("/version/current", settingsHandler.VersionCurrent(cfg.Version))
 			r.With(middleware.RequirePermission("can_manage_settings", permissionsStore)).Get("/version/check-updates", settingsHandler.VersionCheckUpdates(cfg.Version))
 			// AI routes gated by the ai module (Max tier).

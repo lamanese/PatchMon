@@ -486,6 +486,12 @@ func (h *AutoEnrollmentHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Fork licence gate: active+pending slots against max + tolerance.
+	if licenseBlocksHostCreate(ctx, h.cfg, h.settings, h.hosts) {
+		Error(w, http.StatusForbidden, licenseLimitMessage)
+		return
+	}
+
 	host := &models.Host{
 		MachineID:              &machineID,
 		FriendlyName:           req.FriendlyName,

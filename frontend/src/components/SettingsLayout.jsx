@@ -1,4 +1,5 @@
 import {
+	BadgeCheck,
 	BarChart3,
 	Bot,
 	ChevronDown,
@@ -178,6 +179,14 @@ const SettingsLayout = ({ children }) => {
 					name: "Metrics",
 					href: "/settings/metrics",
 					icon: BarChart3,
+				});
+			}
+			// Licence (fork feature): licensed host count for this instance.
+			if (!isAdminMode) {
+				serverItems.push({
+					name: "Licence",
+					href: "/settings/license",
+					icon: BadgeCheck,
 				});
 			}
 			nav.push({

@@ -237,6 +237,12 @@ export const settingsAPI = {
 		api.patch(`/settings/environment/${key}`, { value }),
 };
 
+// Licence API (fork feature: licensed host count)
+export const licenseAPI = {
+	get: () => api.get("/license"),
+	update: (data) => api.put("/license", data),
+};
+
 // Community links API (public - used in nav, login, wizard)
 export const communityAPI = {
 	getLinks: () => api.get("/community/links").then((res) => res.data),

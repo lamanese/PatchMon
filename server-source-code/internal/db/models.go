@@ -680,6 +680,9 @@ type Setting struct {
 	PasswordRateLimitWindowMs       *int32           `json:"password_rate_limit_window_ms"`
 	PasswordRateLimitMax            *int32           `json:"password_rate_limit_max"`
 	AuthBrowserSessionCookies       *bool            `json:"auth_browser_session_cookies"`
+	LicenseMaxHosts                 *int32           `json:"license_max_hosts"`
+	LicenseEnforce                  bool             `json:"license_enforce"`
+	LicensePackage                  *string          `json:"license_package"`
 }
 
 type SystemStatistic struct {
