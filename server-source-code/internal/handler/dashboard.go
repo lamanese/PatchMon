@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/PatchMon/PatchMon/server-source-code/internal/config"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/license"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/queue"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/store"
 	"github.com/go-chi/chi/v5"
@@ -20,11 +22,13 @@ type DashboardHandler struct {
 	users     *store.UsersStore
 	docker    *store.DockerStore
 	inspector *asynq.Inspector
+	settings  *store.SettingsStore
+	cfg       *config.Config
 }
 
 // NewDashboardHandler creates a new dashboard handler.
-func NewDashboardHandler(dashboard *store.DashboardStore, hosts *store.HostsStore, packages *store.PackagesStore, users *store.UsersStore, docker *store.DockerStore, inspector *asynq.Inspector) *DashboardHandler {
-	return &DashboardHandler{dashboard: dashboard, hosts: hosts, packages: packages, users: users, docker: docker, inspector: inspector}
+func NewDashboardHandler(dashboard *store.DashboardStore, hosts *store.HostsStore, packages *store.PackagesStore, users *store.UsersStore, docker *store.DockerStore, inspector *asynq.Inspector, settings *store.SettingsStore, cfg *config.Config) *DashboardHandler {
+	return &DashboardHandler{dashboard: dashboard, hosts: hosts, packages: packages, users: users, docker: docker, inspector: inspector, settings: settings, cfg: cfg}
 }
 
 // Stats handles GET /dashboard/stats.
@@ -34,6 +38,22 @@ func (h *DashboardHandler) Stats(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, "Failed to load dashboard stats")
 		return
 	}
+
+	// Fork licence info for the hosts card ("X aktiv / Y pending / Z lizenziert").
+	if s, sErr := h.settings.GetFirst(r.Context()); sErr == nil {
+		if eff := license.Resolve(h.cfg, s); eff.MaxHosts != nil {
+			if active, pending, cErr := h.hosts.CountByStatus(r.Context()); cErr == nil {
+				stats["license"] = map[string]interface{}{
+					"max_hosts":     *eff.MaxHosts,
+					"package":       eff.Package,
+					"active_count":  active,
+					"pending_count": pending,
+					"status":        eff.Status(active + pending),
+				}
+			}
+		}
+	}
+
 	JSON(w, http.StatusOK, stats)
 }
 

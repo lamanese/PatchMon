@@ -163,6 +163,22 @@ type Config struct {
 	// guard for internet-facing instances. Set PM_DISABLE_SIGNUP=true in .env.
 	DisableSignup bool
 
+	// LicenseMaxHosts overrides the license_max_hosts DB setting (fork
+	// feature: amanit sells packages by VM count). When > 0, the whole
+	// licence settings tab becomes read-only for the customer superadmin
+	// ("managed by amanit") and enforce/package are taken from the env as
+	// well. 0 = not set, DB settings apply. Set PM_LICENSE_MAX_HOSTS=<n>.
+	LicenseMaxHosts int
+
+	// LicenseEnforce overrides license_enforce when LicenseMaxHosts is set:
+	// true blocks new host registrations once active+pending reaches
+	// ceil(max*1.1). Set PM_LICENSE_ENFORCE=true.
+	LicenseEnforce bool
+
+	// LicensePackage overrides license_package (display name, e.g.
+	// "Paket 3, bis 200 VMs") when LicenseMaxHosts is set. Set PM_LICENSE_PACKAGE.
+	LicensePackage string
+
 	// BillingPortalURL is the Stripe customer portal URL shown to tenants when AdminMode is on.
 	BillingPortalURL string
 
@@ -259,6 +275,9 @@ func Load() (*Config, error) {
 		AdminMode:             getEnv("ADMIN_MODE", "") == "on",
 		HideCommunityLinks:    getEnv("PM_HIDE_COMMUNITY_LINKS", "") == "true",
 		DisableSignup:         getEnv("PM_DISABLE_SIGNUP", "") == "true",
+		LicenseMaxHosts:       getEnvInt("PM_LICENSE_MAX_HOSTS", 0),
+		LicenseEnforce:        getEnv("PM_LICENSE_ENFORCE", "") == "true",
+		LicensePackage:        getEnv("PM_LICENSE_PACKAGE", ""),
 		BillingPortalURL:      getEnv("BILLING_PORTAL_URL", ""),
 		BillingServiceURL:     getEnv("BILLING_SERVICE_URL", ""),
 		BillingInternalSecret: getEnv("BILLING_INTERNAL_SECRET", ""),

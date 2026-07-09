@@ -10,6 +10,12 @@ LIMIT $1 OFFSET $2;
 -- name: CountHosts :one
 SELECT COUNT(*) FROM hosts WHERE status = 'active';
 
+-- name: CountHostsByStatus :one
+SELECT
+    COUNT(*) FILTER (WHERE status = 'active')::int AS active_count,
+    COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count
+FROM hosts;
+
 -- name: GetHostByID :one
 SELECT * FROM hosts WHERE id = $1;
 

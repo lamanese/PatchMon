@@ -62,6 +62,7 @@ const SettingsServerConfig = lazy(
 	() => import("./pages/settings/SettingsServerConfig"),
 );
 const SettingsMetrics = lazy(() => import("./pages/settings/SettingsMetrics"));
+const SettingsLicense = lazy(() => import("./pages/settings/SettingsLicense"));
 const EnvironmentSettings = lazy(
 	() => import("./pages/settings/EnvironmentSettings"),
 );
@@ -506,6 +507,14 @@ function AppRoutes() {
 							element={
 								<ProtectedRoute requirePermission="can_manage_settings">
 									<SettingsMetrics />
+								</ProtectedRoute>
+							}
+						/>
+						<Route
+							path="license"
+							element={
+								<ProtectedRoute requirePermission="can_manage_settings">
+									<SettingsLicense />
 								</ProtectedRoute>
 							}
 						/>

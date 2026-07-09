@@ -42,6 +42,7 @@ import { useCommunityLinks } from "./CommunityLinks";
 import DiscordIcon from "./DiscordIcon";
 import DonateModal from "./DonateModal";
 import GlobalSearch from "./GlobalSearch";
+import LicenseBanner from "./LicenseBanner";
 import Logo from "./Logo";
 import ReleaseNotesModal from "./ReleaseNotesModal";
 import TierBadge from "./TierBadge";
@@ -1822,7 +1823,10 @@ const Layout = ({ children }) => {
 					</div>
 
 					<main className="flex-1 py-6 bg-secondary-50 dark:bg-transparent pt-24">
-						<div className="px-4 sm:px-6 lg:px-8">{content}</div>
+						<div className="px-4 sm:px-6 lg:px-8">
+							<LicenseBanner />
+							{content}
+						</div>
 					</main>
 				</div>
 

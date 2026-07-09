@@ -942,6 +942,22 @@ const Dashboard = () => {
 								<p className="text-xl font-semibold text-secondary-900 dark:text-white">
 									{stats.cards.totalHosts}
 								</p>
+								{stats.license && (
+									<p
+										className={`text-xs truncate ${
+											stats.license.status === "over_tolerance"
+												? "text-red-600 dark:text-red-400"
+												: stats.license.status === "over_limit"
+													? "text-yellow-600 dark:text-yellow-400"
+													: "text-secondary-500 dark:text-secondary-300"
+										}`}
+										title={`${stats.license.active_count} active / ${stats.license.pending_count} pending / ${stats.license.max_hosts} licensed`}
+									>
+										{stats.license.active_count} active /{" "}
+										{stats.license.pending_count} pending /{" "}
+										{stats.license.max_hosts} licensed
+									</p>
+								)}
 							</div>
 						</div>
 					</button>

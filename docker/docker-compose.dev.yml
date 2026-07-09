@@ -92,6 +92,10 @@ services:
       # container) - use the host's product_uuid value, not /etc/machine-id:
       #   export PM_SERVER_MACHINE_ID=$(sudo cat /sys/class/dmi/id/product_uuid)
       PM_SERVER_MACHINE_ID: ${PM_SERVER_MACHINE_ID:-}
+      # Optional fork licence override for local testing (locks the UI tab).
+      PM_LICENSE_MAX_HOSTS: ${PM_LICENSE_MAX_HOSTS:-}
+      PM_LICENSE_ENFORCE: ${PM_LICENSE_ENFORCE:-}
+      PM_LICENSE_PACKAGE: ${PM_LICENSE_PACKAGE:-}
     volumes:
       # Host machine-id for the reboot self-exclusion check: agents on hosts
       # without readable DMI (e.g. LXC) report this value as machine_id.
