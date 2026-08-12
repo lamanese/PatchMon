@@ -124,6 +124,8 @@ You can check the startup logs at any time with:
 docker compose logs -f server
 ```
 
+> **Upgrading from 2.0.2 or earlier?** `ENABLE_LOGGING` used to default to `false`, and with it off the server wrote no application logs at all, which made every "check the logs" step in this guide useless. From 2.0.3 it defaults to `true`. If you explicitly set `ENABLE_LOGGING=false` in your `.env`, or turned logging off in **Settings > Environment**, that choice is preserved and you will still see no logs.
+
 ---
 
 ### Container Image
@@ -633,7 +635,7 @@ The `server.env.*` keys map directly to the environment variables the PatchMon b
 | `CORS_ORIGIN` | Allowed origin for CORS (must match the URL users type in their browser; comma-separate with no spaces to allow multiple, e.g. `https://patchmon.example.com,https://patchmon.internal.lan`) | `http://localhost:3000` |
 | `ENABLE_HSTS` | Enable HSTS header for HTTPS | `false` |
 | `TRUST_PROXY` | Trust proxy headers when behind an Ingress controller | `true` |
-| `ENABLE_LOGGING` | Enable structured logging to stdout | `false` |
+| `ENABLE_LOGGING` | Enable structured logging to stdout | `true` |
 | `LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
 | `JSON_BODY_LIMIT` | Max JSON body size | `5mb` |
 | `AGENT_UPDATE_BODY_LIMIT` | Max agent update body size | `5mb` |
@@ -1716,7 +1718,7 @@ Rules applied when a user sets or changes a local account password. These do not
 
 | Variable | Default | Required | Description |
 |----------|---------|----------|-------------|
-| `ENABLE_LOGGING` | `false` | No | When `true`, enables structured application logging to stdout. Set to `true` in production to capture request and error logs. |
+| `ENABLE_LOGGING` | `true` | No | Structured application logging to stdout. **Setting this to `false` silences the server completely.** Not reduced logging: none at all, which leaves every instruction in this guide that asks you to check the server logs with nothing to show. Changed in 2.0.3; it previously defaulted to `false`. An explicit `false`, in either `.env` or **Settings > Environment**, is still honoured. |
 | `LOG_LEVEL` | `info` | No | Minimum log level to output. Accepted values: `debug`, `info`, `warn`, `error`. Must be one of these exact strings. The server will fail to start if an invalid value is provided. |
 | `ENABLE_PPROF` | `false` | No | When `true`, exposes Go pprof profiling endpoints. For diagnostics only. Do not enable in production unless actively investigating a performance issue. |
 | `MEMSTATS_INTERVAL_SEC` | `60` | No | How often (in seconds) the server logs Go runtime memory statistics when profiling is active. Only relevant when `ENABLE_PPROF=true`. |
@@ -2210,7 +2212,7 @@ docker compose up -d --force-recreate patchmon-server
 sudo systemctl restart <your-domain>
 ```
 
-Check the logs to confirm OIDC initialised:
+This check needs logging on, which is the default from 2.0.3. If you have set `ENABLE_LOGGING=false`, or you are on 2.0.2 or earlier where `false` was the default, the server writes no logs at all and the commands below return nothing regardless of whether OIDC loaded. Keep `LOG_LEVEL` at `info` or lower too, since the confirmation line is logged at info level.
 
 ```bash
 # Docker
@@ -2345,7 +2347,14 @@ OIDC_SYNC_ROLES=true
 
 **Logs show:** `OIDC is enabled but missing required configuration`
 
-All four required variables must be set: `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URI`. Check for typos or empty values.
+- **Logging is off.** `ENABLE_LOGGING` defaults to `true` from 2.0.3, but an explicit `false` in `.env` or **Settings > Environment** is still honoured, and it was the default on earlier releases. With logging disabled the server writes nothing at all, so this check tells you nothing
+- **`LOG_LEVEL` is above `info`.** The confirmation line is logged at info level, so `warn` or `error` hides it
+- **You are on 2.0.2 or older.** A correct configuration logged nothing at all on those releases
+- **Your configuration did not resolve.** Check for `missing required config` or `partially configured` in the same output
+
+If logging is off and you would rather not turn it on, check whether the SSO button appears on the login page instead. That is driven by the same resolved configuration.
+
+You may also see a second OIDC line warning that role sync cannot grant superadmin. That is unrelated to whether SSO loaded and is covered under Step 3.
 
 #### SSO Button Not Appearing
 
@@ -2675,13 +2684,14 @@ You'll see this if OIDC environment variables were set in `.env` before the UI w
 
 #### The "Sign in with Microsoft" button doesn't appear on the login page
 
-The button only shows when OIDC is both **enabled** and **successfully initialised** at runtime. Most common causes:
+The button shows when OIDC is enabled and all four required values are present. PatchMon does not contact Entra until someone actually clicks the button, so an egress firewall blocking `login.microsoftonline.com` will **not** hide it. Most common causes:
 
-- **Issuer URL is wrong:** it must end in `/v2.0`. Double-check for typos in the tenant GUID.
 - **Client Secret is empty or wrong:** the label will say "Not set". Re-enter it and click **Save** next to the secret field.
-- **PatchMon cannot reach `login.microsoftonline.com`:** an egress firewall or proxy is blocking it.
+- **Issuer URL, Client ID or Redirect URI is empty.** Any one of the four being blank disables SSO.
 
-Check the server logs; search for `oidc`:
+If the button appears but login fails, the problem is Entra connectivity or configuration instead. A blocked `login.microsoftonline.com` gives "Failed to reach the OIDC provider" on clicking the button, and a wrong issuer URL (it must end in `/v2.0`, so check the tenant GUID for typos) gives the same.
+
+Check the server logs; search for `oidc`. This needs `ENABLE_LOGGING` on, which is the default from 2.0.3:
 
 ```bash
 # Docker
@@ -5301,6 +5311,8 @@ The `server` container embeds the Go HTTP server, the frontend, the queue worker
 ### Gathering Diagnostic Info
 
 Before attempting any fix, capture the current state of the stack. These commands are safe and non-destructive.
+
+> **If the server logs look empty, check `ENABLE_LOGGING`.** It defaults to `true` from 2.0.3, but an explicit `false` silences the server completely, and `false` was the default on 2.0.2 and earlier. With it off, `docker compose logs server` shows container lifecycle output and nothing from PatchMon itself, so do not read anything into the silence.
 
 ```bash
 # In the directory where your docker-compose.yml lives
