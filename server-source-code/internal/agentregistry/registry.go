@@ -198,6 +198,33 @@ func (r *Registry) Unregister(apiID string) {
 	}
 }
 
+// UnregisterConn is the identity-aware teardown path: it only removes the
+// agent when the connection currently registered for apiID is the very one
+// being torn down. It reports whether it took ownership of the teardown.
+//
+// This closes a fleet-wide race: after a network drop the agent reconnects
+// within seconds and registers conn B, while the server notices the death of
+// the old conn A only minutes later (TCP timeout). A's teardown then deleted
+// B's entry by api_id — the agent held a perfectly live WebSocket while the
+// registry insisted it was disconnected, until the next network drop.
+func (r *Registry) UnregisterConn(apiID string, conn *websocket.Conn) bool {
+	r.mu.Lock()
+	if e, ok := r.conns[apiID]; ok && conn != nil && e.ws != conn {
+		// A newer connection owns this slot; leave it completely alone.
+		r.mu.Unlock()
+		return false
+	}
+	delete(r.meta, apiID)
+	delete(r.conns, apiID)
+	delete(r.podMap, apiID)
+	r.mu.Unlock()
+	if r.rdb != nil {
+		// best-effort notify other pods
+		_ = r.removePresence(apiID)
+	}
+	return true
+}
+
 // Get returns connection info for an api_id.
 func (r *Registry) Get(apiID string) ConnectionInfo {
 	r.mu.RLock()

@@ -132,11 +132,19 @@ func (h *AgentWSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		h.onConnect(connCtx, apiID)
 	}
 	defer func() {
+		// Registry teardown FIRST, and identity-aware: if the agent already
+		// reconnected, a newer connection owns the slot. The agent is then
+		// demonstrably live, so neither the registry entry nor the disconnect
+		// side effects may be touched by this stale teardown.
+		ownsTeardown := h.registry.UnregisterConn(apiID, conn)
+		_ = conn.Close()
+		if !ownsTeardown {
+			slog.Info("agent ws teardown superseded by reconnect", "api_id", apiID)
+			return
+		}
 		if h.onDisconnect != nil {
 			h.onDisconnect(connCtx, apiID)
 		}
-		h.registry.Unregister(apiID)
-		_ = conn.Close()
 	}()
 
 	slog.Info("agent ws connected", "api_id", apiID)
