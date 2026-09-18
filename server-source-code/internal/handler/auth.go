@@ -20,6 +20,7 @@ import (
 	"github.com/PatchMon/PatchMon/server-source-code/internal/util"
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -992,6 +993,10 @@ func (h *AuthHandler) createToken(userID, role string, expSec int64, sessionID, 
 		"typ":  tokenType,
 		"exp":  time.Now().Add(time.Duration(expSec) * time.Second).Unix(),
 		"iat":  time.Now().Unix(),
+		// Every other claim has second granularity, so without a jti two tokens
+		// minted for one user inside the same second are byte-identical and the
+		// second session insert violates the unique index on refresh_token.
+		"jti": uuid.NewString(),
 	}
 	if sessionID != "" {
 		claims["sessionId"] = sessionID
