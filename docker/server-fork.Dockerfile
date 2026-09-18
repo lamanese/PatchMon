@@ -40,7 +40,8 @@ RUN go mod download && \
 # -----------------------------------------------------------------------------
 # Stage 3: minimal runtime
 # -----------------------------------------------------------------------------
-FROM alpine:3.21
+# Alpine 3.21 is end of life on 2026-11-01; 3.23 is supported until 2027-11-01.
+FROM alpine:3.23
 
 RUN apk add --no-cache wget ca-certificates tzdata
 

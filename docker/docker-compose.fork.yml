@@ -85,7 +85,14 @@ services:
         max-file: "3"
 
   guacd:
-    image: guacamole/guacd:latest
+    # Pinned by digest: guacd 1.6.0, upstream's `latest` build of 2026-02-25.
+    # Upstream publishes the `1.6.0` tag once (2025-06) and only rebuilds
+    # `latest` with a patched base system, so the version tag is the OLDER
+    # image. A floating `latest` would let any `docker compose pull` change
+    # the RDP/SSH gateway unnoticed. To update: pick the new digest with
+    #   docker buildx imagetools inspect guacamole/guacd:latest
+    # test RDP + SSH terminal on staging, then change this line.
+    image: guacamole/guacd@sha256:2d266a525a72ad55d8ea7cd4ca8342a1b44075759b03660d8684821b3636a922
     restart: unless-stopped
     read_only: true
     tmpfs:
