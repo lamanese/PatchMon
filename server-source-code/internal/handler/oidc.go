@@ -228,6 +228,27 @@ func (h *OidcHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login?error=Authentication+failed", http.StatusFound)
 		return
 	}
+	// GetByOidcSubOrEmail matches on "oidc_sub = $1 OR LOWER(email) = LOWER($2)",
+	// so a row can come back purely because the IdP asserted an email address.
+	// Establish which it was before trusting anything.
+	matchedBySub := user != nil && user.OidcSub != nil && *user.OidcSub == userInfo.Sub
+
+	// An email-based match, or auto-creating an account, means the IdP's email
+	// claim is what decides who this is, so that claim has to be verified.
+	// Where an IdP lets a user set or change their email without verifying it
+	// (self-service profiles in Authentik or Keycloak, an open-registration
+	// realm, a social login upstream), an attacker can set theirs to an
+	// existing user's address and be handed that account. On a fresh instance
+	// it is worse: the first auto-created user is promoted to superadmin.
+	if !matchedBySub && !userInfo.EmailVerified {
+		if h.log != nil {
+			h.log.Warn("oidc login rejected: unverified email claim",
+				"email", userInfo.Email, "sub", userInfo.Sub)
+		}
+		http.Redirect(w, r, "/login?error=Unable+to+sign+in+with+this+account", http.StatusFound)
+		return
+	}
+
 	if user == nil && h.oidcAutoCreateUsers() {
 		user = h.createOidcUser(r.Context(), userInfo)
 	}
@@ -235,7 +256,7 @@ func (h *OidcHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		if h.log != nil {
 			h.log.Error("oidc user not found and auto-create disabled", "email", userInfo.Email)
 		}
-		http.Redirect(w, r, "/login?error=User+not+found", http.StatusFound)
+		http.Redirect(w, r, "/login?error=Unable+to+sign+in+with+this+account", http.StatusFound)
 		return
 	}
 	if !user.IsActive {
@@ -245,26 +266,35 @@ func (h *OidcHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login?error=Account+disabled", http.StatusFound)
 		return
 	}
-	if user.OidcSub == nil && user.OidcProvider == nil {
-		if !userInfo.EmailVerified {
+	// Reached only via an email match (the sub match is handled above). The
+	// email is verified by this point.
+	if !matchedBySub {
+		// An email match must never override an established identity binding.
+		// Previously this whole branch was skipped when the row already carried
+		// an oidc_sub, so the incoming subject was never compared with the
+		// stored one and any IdP identity with a matching email logged in as
+		// that account.
+		if user.OidcSub != nil {
 			if h.log != nil {
-				h.log.Warn("oidc skip link unverified email", "email", userInfo.Email)
+				h.log.Error("oidc login rejected: account is linked to a different subject",
+					"email", userInfo.Email, "sub", userInfo.Sub)
 			}
-		} else {
-			existing, _ := h.users.GetByOidcSub(r.Context(), userInfo.Sub)
-			if existing != nil && existing.ID != user.ID {
-				if h.log != nil {
-					h.log.Error("oidc sub already linked", "email", existing.Email)
-				}
-				http.Redirect(w, r, "/login?error=Account+linking+failed", http.StatusFound)
-				return
-			}
-			issuerHost := extractHost(h.oidcIssuerURL())
-			_ = h.users.UpdateOidcLink(r.Context(), user.ID, userInfo.Sub, issuerHost, strPtr(userInfo.Picture))
-			user.OidcSub = &userInfo.Sub
-			user.OidcProvider = &issuerHost
-			user.AvatarURL = strPtr(userInfo.Picture)
+			http.Redirect(w, r, "/login?error=Unable+to+sign+in+with+this+account", http.StatusFound)
+			return
 		}
+		existing, _ := h.users.GetByOidcSub(r.Context(), userInfo.Sub)
+		if existing != nil && existing.ID != user.ID {
+			if h.log != nil {
+				h.log.Error("oidc sub already linked", "email", existing.Email)
+			}
+			http.Redirect(w, r, "/login?error=Unable+to+sign+in+with+this+account", http.StatusFound)
+			return
+		}
+		issuerHost := extractHost(h.oidcIssuerURL())
+		_ = h.users.UpdateOidcLink(r.Context(), user.ID, userInfo.Sub, issuerHost, strPtr(userInfo.Picture))
+		user.OidcSub = &userInfo.Sub
+		user.OidcProvider = &issuerHost
+		user.AvatarURL = strPtr(userInfo.Picture)
 	}
 	effectiveRole := user.Role // preserve existing role by default
 	if h.oidcSyncRoles() {
@@ -857,7 +887,20 @@ func (h *OidcHandler) createOidcUser(ctx context.Context, info *oidc.UserInfo) *
 		h.log.Warn("oidc no groups in token for new user", "email", info.Email, "hint", "Create a Scope Mapping in Authentik to add 'groups' claim")
 	}
 	// If no admin/superadmin exists yet, promote the first auto-created user to superadmin.
-	adminCount, _ := h.users.CountAdmins(ctx)
+	//
+	// The error must be checked: CountAdmins returns (0, err) on a transient
+	// database failure, and discarding it fails OPEN, promoting an ordinary
+	// auto-created user to superadmin on an instance that already has admins.
+	// The first-run admin setup path gets this right (it tests err != nil ||
+	// count > 0); this one did not.
+	adminCount, adminCountErr := h.users.CountAdmins(ctx)
+	if adminCountErr != nil {
+		if h.log != nil {
+			h.log.Error("oidc: cannot determine admin count, refusing to auto-create",
+				"error", adminCountErr, "email", info.Email)
+		}
+		return nil
+	}
 	if adminCount == 0 {
 		role = "superadmin"
 		if h.log != nil {

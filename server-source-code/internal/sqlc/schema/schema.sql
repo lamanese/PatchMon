@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS role_permissions (
     can_manage_automation BOOLEAN NOT NULL DEFAULT false,
     can_use_remote_access BOOLEAN NOT NULL DEFAULT false,
     can_manage_billing BOOLEAN NOT NULL DEFAULT false,
+    can_reboot_hosts BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP(3) NOT NULL
 );
@@ -123,7 +124,10 @@ CREATE TABLE IF NOT EXISTS settings (
     agent_rate_limit_max INTEGER,
     password_rate_limit_window_ms INTEGER,
     password_rate_limit_max INTEGER,
-    auth_browser_session_cookies BOOLEAN
+    auth_browser_session_cookies BOOLEAN,
+    license_max_hosts INTEGER,
+    license_enforce BOOLEAN NOT NULL DEFAULT false,
+    license_package TEXT
 );
 
 -- host_groups
@@ -228,6 +232,7 @@ CREATE TABLE IF NOT EXISTS hosts (
     notes TEXT,
     needs_reboot BOOLEAN DEFAULT false,
     reboot_reason TEXT,
+    allow_reboot BOOLEAN NOT NULL DEFAULT false,
     docker_enabled BOOLEAN NOT NULL DEFAULT false,
     compliance_enabled BOOLEAN NOT NULL DEFAULT false,
     compliance_on_demand_only BOOLEAN NOT NULL DEFAULT true,
@@ -785,4 +790,41 @@ CREATE TABLE IF NOT EXISTS scheduled_report_runs (
     error_message TEXT,
     summary_hash TEXT,
     created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- reboot_schedules
+CREATE TABLE IF NOT EXISTS reboot_schedules (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    host_group_id TEXT NOT NULL REFERENCES host_groups(id) ON DELETE CASCADE,
+    schedule_type TEXT NOT NULL,          -- 'once' | 'weekly'
+    run_at TIMESTAMP(3),                  -- for 'once'
+    weekday INTEGER,                      -- 0 (Sunday) - 6 for 'weekly'
+    time_of_day TEXT,                     -- 'HH:MM' for 'weekly'
+    timezone TEXT NOT NULL DEFAULT 'UTC',
+    only_if_required BOOLEAN NOT NULL DEFAULT true,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    last_run_at TIMESTAMP(3),
+    missed_at TIMESTAMP(3),
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- patch_schedules
+CREATE TABLE IF NOT EXISTS patch_schedules (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    host_group_id TEXT NOT NULL REFERENCES host_groups(id) ON DELETE CASCADE,
+    schedule_type TEXT NOT NULL,          -- 'once' | 'weekly'
+    run_at TIMESTAMP(3),                  -- for 'once'
+    weekday INTEGER,                      -- 0 (Sunday) - 6 for 'weekly'
+    time_of_day TEXT,                     -- 'HH:MM' for 'weekly'
+    timezone TEXT NOT NULL DEFAULT 'UTC',
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    last_run_at TIMESTAMP(3),
+    missed_at TIMESTAMP(3),
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

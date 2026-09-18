@@ -2,13 +2,19 @@
 SELECT * FROM hosts ORDER BY friendly_name;
 
 -- name: ListHostsPaginated :many
-SELECT id, friendly_name, hostname, ip, os_type, os_version, architecture, last_update, status, api_id, agent_version, auto_update, created_at, notes, system_uptime, needs_reboot, docker_enabled, compliance_enabled
+SELECT id, friendly_name, hostname, ip, os_type, os_version, architecture, last_update, status, api_id, agent_version, auto_update, created_at, notes, system_uptime, needs_reboot, allow_reboot, docker_enabled, compliance_enabled
 FROM hosts
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2;
 
 -- name: CountHosts :one
 SELECT COUNT(*) FROM hosts WHERE status = 'active';
+
+-- name: CountHostsByStatus :one
+SELECT
+    COUNT(*) FILTER (WHERE status = 'active')::int AS active_count,
+    COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count
+FROM hosts;
 
 -- name: GetHostByID :one
 SELECT * FROM hosts WHERE id = $1;
@@ -74,6 +80,9 @@ UPDATE hosts SET api_id = $1, api_key = $2, updated_at = NOW() WHERE id = $3;
 
 -- name: UpdateHostRebootStatus :exec
 UPDATE hosts SET needs_reboot = $2, reboot_reason = $3, updated_at = NOW() WHERE id = $1;
+
+-- name: UpdateHostsAllowReboot :exec
+UPDATE hosts SET allow_reboot = $1, updated_at = NOW() WHERE id = ANY(sqlc.arg('ids')::text[]);
 
 -- name: UpdateHostPing :exec
 UPDATE hosts SET last_update = NOW(), updated_at = NOW(), status = 'active' WHERE id = $1;

@@ -1,0 +1,99 @@
+name: Build fork image (lamanese)
+
+on:
+  push:
+    branches: ["feat/**"]
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/lamanese/patchmon-server
+
+jobs:
+  build-agents:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: agent-source-code/go.mod
+          cache-dependency-path: agent-source-code/go.sum
+
+      - name: Build agent binaries
+        working-directory: agent-source-code
+        run: |
+          set -euo pipefail
+          out=../agents-prebuilt
+          mkdir -p "$out"
+          build() {
+            goos=$1; goarch=$2; ext=${3:-}; goarm=${4:-}
+            echo "Building $goos/$goarch${goarm:+ (arm v$goarm)}"
+            env GOOS="$goos" GOARCH="$goarch" GOARM="$goarm" CGO_ENABLED=0 \
+              go build -buildvcs=false -ldflags="-s -w" \
+              -o "$out/patchmon-agent-$goos-$goarch$ext" ./cmd/patchmon-agent
+          }
+          build linux amd64
+          build linux arm64
+          build linux 386
+          build linux arm "" 6
+          build freebsd amd64
+          build windows amd64 .exe
+          ls -la "$out"
+
+      - name: Upload agent binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-binaries
+          path: agents-prebuilt/patchmon-agent-*
+          if-no-files-found: error
+          retention-days: 7
+
+  build-server:
+    needs: build-agents
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download agent binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-binaries
+          path: agents-prebuilt
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # :latest belongs exclusively to feat/remote-reboot (production);
+      # feature branches only get their own branch tag.
+      - name: Compute image tags
+        id: tags
+        run: |
+          if [ "$GITHUB_REF_NAME" = "feat/remote-reboot" ]; then
+            echo "tags=$IMAGE:latest,$IMAGE:feat-remote-reboot" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=$IMAGE:${GITHUB_REF_NAME//\//-}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/server-fork.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

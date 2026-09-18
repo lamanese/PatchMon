@@ -69,6 +69,8 @@ func NewServer(opts asynq.RedisClientOpt, registry *agentregistry.Registry, db *
 			QueuePatching:                    2,
 			notifications.QueueNotifications: 2,
 			QueueScheduledReports:            1,
+			QueueRebootSchedules:             1,
+			QueuePatchSchedules:              1,
 			QueueMetricsSend:                 1,
 		},
 	})
@@ -89,6 +91,12 @@ type MuxOpts struct {
 	Log           *slog.Logger
 	Emit          *notifications.Emitter
 	Enc           *util.Encryption
+	// SkipUpstreamVersionCheck disables the daily upstream DNS version check
+	// and its update alerts (fork mode, PM_HIDE_COMMUNITY_LINKS).
+	SkipUpstreamVersionCheck bool
+	// SkipTelemetry disables the daily anonymous metrics send to the upstream
+	// metrics API (fork mode, PM_HIDE_COMMUNITY_LINKS).
+	SkipTelemetry bool
 }
 
 // Mux returns a ServeMux with all handlers registered.
@@ -98,6 +106,7 @@ func Mux(opts MuxOpts) *asynq.ServeMux {
 	registry, db, log := opts.Registry, opts.DB, opts.Log
 	wrap := func(typ string, h asynq.Handler) asynq.Handler { return loggingHandler(typ, h, log) }
 	mux.Handle(TypeReportNow, wrap(TypeReportNow, NewReportNowHandler(registry, db, log)))
+	mux.Handle(TypeReboot, wrap(TypeReboot, NewRebootHandler(registry, db, log)))
 	mux.Handle(TypeRefreshIntegrationStatus, wrap(TypeRefreshIntegrationStatus, NewRefreshIntegrationStatusHandler(registry, db, log)))
 	mux.Handle(TypeDockerInventoryRefresh, wrap(TypeDockerInventoryRefresh, NewDockerInventoryRefreshHandler(registry, db, log)))
 	mux.Handle(TypeUpdateAgent, wrap(TypeUpdateAgent, NewUpdateAgentHandler(registry, db, log)))
@@ -107,13 +116,15 @@ func Mux(opts MuxOpts) *asynq.ServeMux {
 	mux.Handle(notifications.TypeNotificationDeliver, wrap(notifications.TypeNotificationDeliver, NewNotificationDeliverHandler(db, opts.PoolCache, opts.Enc, opts.RDB, log)))
 	mux.Handle(TypeScheduledReportsDispatch, wrap(TypeScheduledReportsDispatch, NewScheduledReportsDispatchHandler(db, opts.PoolCache, opts.QueueClient, log)))
 	mux.Handle(TypeScheduledReportRun, wrap(TypeScheduledReportRun, NewScheduledReportRunHandler(db, opts.PoolCache, opts.QueueClient, opts.Enc, log)))
+	mux.Handle(TypeRebootSchedulesDispatch, wrap(TypeRebootSchedulesDispatch, NewRebootSchedulesDispatchHandler(db, opts.PoolCache, opts.QueueClient, log)))
+	mux.Handle(TypePatchSchedulesDispatch, wrap(TypePatchSchedulesDispatch, NewPatchSchedulesDispatchHandler(db, opts.PoolCache, opts.QueueClient, log)))
 	mux.Handle(TypeAlertCleanup, wrap(TypeAlertCleanup, NewAlertCleanupHandler(db, opts.PoolCache, store.NewAlertConfigStore(dbResolver), log)))
 	mux.Handle(TypeSessionCleanup, wrap(TypeSessionCleanup, NewSessionCleanupHandler(db, opts.PoolCache, log)))
 	mux.Handle(TypeOrphanedRepoCleanup, wrap(TypeOrphanedRepoCleanup, NewOrphanedRepoCleanupHandler(db, opts.PoolCache, log)))
 	mux.Handle(TypeOrphanedPkgCleanup, wrap(TypeOrphanedPkgCleanup, NewOrphanedPkgCleanupHandler(db, opts.PoolCache, log)))
 	mux.Handle(TypeDockerInvCleanup, wrap(TypeDockerInvCleanup, NewDockerInvCleanupHandler(db, opts.PoolCache, log)))
 	mux.Handle(TypeSystemStatistics, wrap(TypeSystemStatistics, NewSystemStatisticsHandler(db, opts.PoolCache, log)))
-	mux.Handle(TypeVersionUpdateCheck, wrap(TypeVersionUpdateCheck, NewVersionUpdateCheckHandler(db, opts.PoolCache, opts.ServerVersion, opts.Emit, log)))
+	mux.Handle(TypeVersionUpdateCheck, wrap(TypeVersionUpdateCheck, NewVersionUpdateCheckHandler(db, opts.PoolCache, opts.ServerVersion, opts.SkipUpstreamVersionCheck, opts.Emit, log)))
 	mux.Handle(TypeComplianceScanCleanup, wrap(TypeComplianceScanCleanup, NewComplianceScanCleanupHandler(db, opts.PoolCache, log)))
 	mux.Handle(TypePatchRunCleanup, wrap(TypePatchRunCleanup, NewPatchRunCleanupHandler(db, opts.PoolCache, log)))
 	mux.Handle(TypeSSGUpdateCheck, wrap(TypeSSGUpdateCheck, NewSSGUpdateCheckHandler(registry, db, opts.PoolCache, opts.QueueClient, opts.SSGContentDir, log)))
@@ -127,7 +138,7 @@ func Mux(opts MuxOpts) *asynq.ServeMux {
 	mux.Handle(TypeInstallComplianceTools, wrap(TypeInstallComplianceTools, NewInstallComplianceToolsHandler(registry, db, opts.RDB, opts.RedisCache, log)))
 	patchRunsStore := store.NewPatchRunsStore(&hostctx.DBResolver{Default: db})
 	mux.Handle(TypeRunPatch, wrap(TypeRunPatch, NewRunPatchHandler(registry, patchRunsStore, opts.PoolCache, opts.QueueClient, log)))
-	mux.Handle(TypeMetricsSend, wrap(TypeMetricsSend, NewMetricsSendHandler(db, opts.PoolCache, opts.ServerVersion, log)))
+	mux.Handle(TypeMetricsSend, wrap(TypeMetricsSend, NewMetricsSendHandler(db, opts.PoolCache, opts.ServerVersion, opts.SkipTelemetry, log)))
 	return mux
 }
 
@@ -248,6 +259,20 @@ func NewScheduler(opts asynq.RedisClientOpt, db *database.DB, log *slog.Logger) 
 	// This hourly fallback catches any reports missed during restarts or edge cases.
 	dispatchReports := asynq.NewTask(TypeScheduledReportsDispatch, nil)
 	if _, err := scheduler.Register("0 * * * *", dispatchReports, asynq.Queue(QueueScheduledReports), asynq.Retention(AutomationRetention)); err != nil {
+		return nil, err
+	}
+
+	// Reboot schedules are polled every minute: due slots fire only within a
+	// small tolerance window, so a coarser cadence would silently drop them.
+	dispatchReboots := asynq.NewTask(TypeRebootSchedulesDispatch, nil)
+	if _, err := scheduler.Register("* * * * *", dispatchReboots, asynq.Queue(QueueRebootSchedules)); err != nil {
+		return nil, err
+	}
+
+	// Patch schedules are polled every minute for the same reason as reboot
+	// schedules: due slots fire only within a small tolerance window.
+	dispatchPatches := asynq.NewTask(TypePatchSchedulesDispatch, nil)
+	if _, err := scheduler.Register("* * * * *", dispatchPatches, asynq.Queue(QueuePatchSchedules)); err != nil {
 		return nil, err
 	}
 

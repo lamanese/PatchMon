@@ -65,6 +65,7 @@ func (s *HostsStore) ListPaginated(ctx context.Context, limit, offset int) ([]mo
 			Notes:             r.Notes,
 			SystemUptime:      r.SystemUptime,
 			NeedsReboot:       r.NeedsReboot,
+			AllowReboot:       r.AllowReboot,
 			DockerEnabled:     r.DockerEnabled,
 			ComplianceEnabled: r.ComplianceEnabled,
 		}
@@ -80,6 +81,18 @@ func (s *HostsStore) Count(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return int(n), nil
+}
+
+// CountByStatus returns the active and pending host counts. The license gate
+// counts active+pending (a slot is reserved at creation time), the license
+// display shows active only.
+func (s *HostsStore) CountByStatus(ctx context.Context) (active int, pending int, err error) {
+	d := s.db.DB(ctx)
+	row, err := d.Queries.CountHostsByStatus(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	return int(row.ActiveCount), int(row.PendingCount), nil
 }
 
 // GetByID returns a host by ID.
@@ -202,6 +215,17 @@ func (s *HostsStore) UpdateAutoUpdate(ctx context.Context, id string, autoUpdate
 	return d.Queries.UpdateHostAutoUpdate(ctx, db.UpdateHostAutoUpdateParams{
 		AutoUpdate: autoUpdate,
 		ID:         id,
+	})
+}
+
+// UpdateAllowReboot updates the allow_reboot flag for a set of hosts.
+// Remote reboot is allowlist-based: only hosts with allow_reboot = true
+// can be rebooted via the bulk reboot endpoint.
+func (s *HostsStore) UpdateAllowReboot(ctx context.Context, ids []string, allow bool) error {
+	d := s.db.DB(ctx)
+	return d.Queries.UpdateHostsAllowReboot(ctx, db.UpdateHostsAllowRebootParams{
+		AllowReboot: allow,
+		Ids:         ids,
 	})
 }
 

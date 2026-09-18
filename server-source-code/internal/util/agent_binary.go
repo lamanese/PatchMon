@@ -77,7 +77,7 @@ func GetCurrentAgentVersionFromBinary(ctx context.Context, agentsDir string) str
 }
 
 // GetVersionFromBinaryPath gets version from a binary at the given path.
-// Tries executing the binary if it matches server platform (linux/linux, freebsd/freebsd), else uses "strings".
+// Tries executing the binary if it matches server platform (linux/linux, freebsd/freebsd), else reads the embedded version banner.
 // Callers must pass binaryPath validated with SafePathUnderBase(baseDir, binaryName) to prevent command injection.
 func GetVersionFromBinaryPath(ctx context.Context, binaryPath string) string {
 	versionRe := regexp.MustCompile(agentVersionRe)
@@ -104,15 +104,27 @@ func GetVersionFromBinaryPath(ctx context.Context, binaryPath string) string {
 		}
 	}
 
-	// Fallback: use "strings" command (cross-platform)
-	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	out, err := exec.CommandContext(runCtx, "strings", binaryPath).CombinedOutput()
-	cancel()
+	// Fallback for binaries this server cannot execute (Windows, FreeBSD,
+	// foreign CPU architectures): read the version from the agent's embedded
+	// banner. Never take the first X.Y.Z in the file - Go binaries contain
+	// unrelated matches such as "VersionEnumPageFilesWv0.0.0" long before the
+	// real version, which made those hosts permanently "up to date".
+	data, err := os.ReadFile(binaryPath)
 	if err != nil {
 		return ""
 	}
-	if m := versionRe.FindStringSubmatch(string(out)); len(m) >= 2 {
-		return m[1]
+	return extractEmbeddedAgentVersion(data)
+}
+
+// embeddedAgentVersionRe matches the banner compiled into every agent build
+// (cobra Long text in the agent's root command: "PatchMon Agent v<version>\n").
+var embeddedAgentVersionRe = regexp.MustCompile(`PatchMon Agent v([0-9]+\.[0-9]+\.[0-9]+)`)
+
+// extractEmbeddedAgentVersion returns the agent version embedded in raw binary
+// data, or "" when the banner is absent.
+func extractEmbeddedAgentVersion(data []byte) string {
+	if m := embeddedAgentVersionRe.FindSubmatch(data); len(m) >= 2 {
+		return string(m[1])
 	}
 	return ""
 }

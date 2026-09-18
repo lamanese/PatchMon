@@ -446,13 +446,14 @@ type VersionUpdateCheckHandler struct {
 	defaultDB     *database.DB
 	poolCache     *hostctx.PoolCache
 	serverVersion string
+	skipUpstream  bool
 	emit          *notifications.Emitter
 	log           *slog.Logger
 }
 
 // NewVersionUpdateCheckHandler creates a version update check handler.
-func NewVersionUpdateCheckHandler(defaultDB *database.DB, poolCache *hostctx.PoolCache, serverVersion string, emit *notifications.Emitter, log *slog.Logger) *VersionUpdateCheckHandler {
-	return &VersionUpdateCheckHandler{defaultDB: defaultDB, poolCache: poolCache, serverVersion: serverVersion, emit: emit, log: log}
+func NewVersionUpdateCheckHandler(defaultDB *database.DB, poolCache *hostctx.PoolCache, serverVersion string, skipUpstream bool, emit *notifications.Emitter, log *slog.Logger) *VersionUpdateCheckHandler {
+	return &VersionUpdateCheckHandler{defaultDB: defaultDB, poolCache: poolCache, serverVersion: serverVersion, skipUpstream: skipUpstream, emit: emit, log: log}
 }
 
 // ProcessTask implements asynq.Handler.
@@ -472,6 +473,12 @@ func (h *VersionUpdateCheckHandler) ProcessTask(ctx context.Context, t *asynq.Ta
 }
 
 func (h *VersionUpdateCheckHandler) checkVersions(ctx context.Context, d *database.DB, tenantHost string) error {
+	if h.skipUpstream {
+		// Fork mode (PM_HIDE_COMMUNITY_LINKS): updates ship via the fork's own
+		// image pipeline — no upstream DNS beacon, no upstream update alerts.
+		h.log.Debug("version update check skipped (upstream check disabled)")
+		return nil
+	}
 	if err := alerts.ProcessServerUpdate(ctx, d, h.serverVersion, tenantHost, h.emit, h.log); err != nil {
 		return err
 	}
@@ -617,16 +624,23 @@ type MetricsSendHandler struct {
 	defaultDB     *database.DB
 	poolCache     *hostctx.PoolCache
 	serverVersion string
+	skipTelemetry bool
 	log           *slog.Logger
 }
 
 // NewMetricsSendHandler creates a metrics send handler.
-func NewMetricsSendHandler(defaultDB *database.DB, poolCache *hostctx.PoolCache, serverVersion string, log *slog.Logger) *MetricsSendHandler {
-	return &MetricsSendHandler{defaultDB: defaultDB, poolCache: poolCache, serverVersion: serverVersion, log: log}
+func NewMetricsSendHandler(defaultDB *database.DB, poolCache *hostctx.PoolCache, serverVersion string, skipTelemetry bool, log *slog.Logger) *MetricsSendHandler {
+	return &MetricsSendHandler{defaultDB: defaultDB, poolCache: poolCache, serverVersion: serverVersion, skipTelemetry: skipTelemetry, log: log}
 }
 
 // ProcessTask implements asynq.Handler.
 func (h *MetricsSendHandler) ProcessTask(ctx context.Context, t *asynq.Task) error {
+	if h.skipTelemetry {
+		// Fork mode (PM_HIDE_COMMUNITY_LINKS): never phone home to the
+		// upstream metrics API, regardless of the metrics_enabled DB setting.
+		h.log.Debug("metrics send skipped (telemetry disabled)")
+		return nil
+	}
 	forEachDB(ctx, h.defaultDB, h.poolCache, func(ctx context.Context, d *database.DB, host string) {
 		if err := h.sendMetrics(ctx, d, host); err != nil {
 			h.log.Warn("metrics send failed", "host", host, "error", err)

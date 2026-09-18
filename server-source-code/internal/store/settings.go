@@ -39,6 +39,22 @@ func (s *SettingsStore) Update(ctx context.Context, settings *models.Settings) e
 	return d.Queries.UpdateSettings(ctx, arg)
 }
 
+// UpdateLicense updates only the license fields of the settings row.
+func (s *SettingsStore) UpdateLicense(ctx context.Context, settingsID string, maxHosts *int, enforce bool, licensePackage *string) error {
+	d := s.db.DB(ctx)
+	var max32 *int32
+	if maxHosts != nil {
+		v := int32(*maxHosts)
+		max32 = &v
+	}
+	return d.Queries.UpdateLicenseSettings(ctx, db.UpdateLicenseSettingsParams{
+		ID:              settingsID,
+		LicenseMaxHosts: max32,
+		LicenseEnforce:  enforce,
+		LicensePackage:  licensePackage,
+	})
+}
+
 // UpdateConfigKey updates a single config key. Key must be one of the DB-backed config keys.
 // current is used to preserve values for fields not being updated (e.g. default_user_role).
 func (s *SettingsStore) UpdateConfigKey(ctx context.Context, settingsID, key string, value interface{}, current *models.Settings) error {

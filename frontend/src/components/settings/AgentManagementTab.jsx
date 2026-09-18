@@ -372,7 +372,7 @@ const AgentManagementTab = () => {
 					image to update.
 				</p>
 				<a
-					href="https://github.com/PatchMon/PatchMon"
+					href="https://github.com/lamanese/PatchMon"
 					target="_blank"
 					rel="noopener noreferrer"
 					className="inline-flex items-center justify-center px-4 py-3 text-secondary-700 dark:text-white hover:text-primary-600 dark:hover:text-primary-400 transition-colors duration-200 font-medium border border-secondary-300 dark:border-secondary-600 rounded-lg hover:bg-secondary-50 dark:hover:bg-secondary-700"

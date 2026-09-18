@@ -130,11 +130,11 @@ const VersionUpdateTab = () => {
 								htmlFor="show-github-version-toggle"
 								className="text-sm font-medium text-secondary-900 dark:text-white cursor-pointer"
 							>
-								Show GitHub Version / Release Notes on Login Screen
+								Show Branding Panel on Login Screen
 							</label>
 							<p className="text-xs text-secondary-500 dark:text-white mt-1">
-								When enabled, the login screen will display the latest GitHub
-								release version and release notes information.
+								When enabled, the login screen displays the left-side branding
+								panel (logo and footer link).
 							</p>
 						</div>
 						<button
@@ -211,57 +211,32 @@ const VersionUpdateTab = () => {
 					)}
 				</div>
 
-				{/* Release Information */}
-				{versionInfo.latestRelease && (
-					<div className="bg-white dark:bg-secondary-800 rounded-lg p-4 border border-secondary-200 dark:border-secondary-600 mt-4">
-						<div className="flex items-center gap-2 mb-4">
-							<Code className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-							<span className="text-sm font-medium text-secondary-700 dark:text-white">
-								Release Information
-							</span>
-						</div>
+				{/* Source code (AGPL: users of this instance get the source of the running fork) */}
+				<div className="bg-white dark:bg-secondary-800 rounded-lg p-4 border border-secondary-200 dark:border-secondary-600 mt-4">
+					<div className="flex items-center gap-2 mb-4">
+						<Code className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+						<span className="text-sm font-medium text-secondary-700 dark:text-white">
+							Source Code
+						</span>
+					</div>
 
-						<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-							{/* Repository Link */}
-							<div className="space-y-2">
-								<span className="text-xs font-medium text-secondary-600 dark:text-white uppercase tracking-wide">
-									Repository
-								</span>
-								<div className="flex items-center gap-2">
-									<a
-										href="https://github.com/PatchMon/PatchMon"
-										target="_blank"
-										rel="noopener noreferrer"
-										className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 text-sm font-mono"
-									>
-										PatchMon/PatchMon{" "}
-										<ExternalLink className="h-3 w-3 inline ml-1" />
-									</a>
-								</div>
-							</div>
-
-							{/* Latest Release Info */}
-							{versionInfo.latestRelease.htmlUrl && (
-								<div className="space-y-2">
-									<span className="text-xs font-medium text-secondary-600 dark:text-white uppercase tracking-wide">
-										Release Link
-									</span>
-									<div className="flex items-center gap-2">
-										<a
-											href={versionInfo.latestRelease.htmlUrl}
-											target="_blank"
-											rel="noopener noreferrer"
-											className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 text-sm"
-										>
-											View Release{" "}
-											<ExternalLink className="h-3 w-3 inline ml-1" />
-										</a>
-									</div>
-								</div>
-							)}
+					<div className="space-y-2">
+						<span className="text-xs font-medium text-secondary-600 dark:text-white uppercase tracking-wide">
+							Repository
+						</span>
+						<div className="flex items-center gap-2">
+							<a
+								href="https://github.com/lamanese/PatchMon"
+								target="_blank"
+								rel="noopener noreferrer"
+								className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 text-sm font-mono"
+							>
+								lamanese/PatchMon{" "}
+								<ExternalLink className="h-3 w-3 inline ml-1" />
+							</a>
 						</div>
 					</div>
-				)}
+				</div>
 
 				{/* Last Checked Time */}
 				{versionInfo.last_update_check && (

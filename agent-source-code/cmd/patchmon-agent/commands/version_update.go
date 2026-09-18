@@ -209,7 +209,7 @@ func updateAgent() error {
 	logger.WithField("path", backupPath).Info("Backup saved")
 
 	// Write new version to temporary file (reuse the temp file we already created for version check)
-	tempPath := executablePath + ".new"
+	tempPath := updateTempPath(executablePath)
 	if err := os.WriteFile(tempPath, newAgentData, 0755); err != nil {
 		return fmt.Errorf("failed to write new agent: %w", err)
 	}
@@ -252,11 +252,26 @@ func updateAgent() error {
 		logger.WithError(err).Debug("Could not verify binary version (non-critical)")
 	}
 
+	// On Windows, schedule the restart/recovery helper BEFORE touching the
+	// executable: if this process dies between the two move-aside renames, the
+	// helper restores the .old binary so the host is never left without a
+	// startable agent. Fail closed if the helper cannot be started.
+	if runtime.GOOS == "windows" {
+		logger.Debug("Scheduling Windows service restart helper before replacing executable...")
+		if err := startWindowsRestartHelper(executablePath); err != nil {
+			if removeErr := os.Remove(tempPath); removeErr != nil {
+				logger.WithError(removeErr).Warn("Failed to remove temporary file after helper failure")
+			}
+			return err
+		}
+	}
+
 	// Replace current executable atomically
 	// On Linux, we can rename over a running executable - the old process keeps using the old inode
+	// On Windows the running .exe is moved aside first (see replaceExecutable)
 	// When the service restarts, it will use the new binary
 	logger.Debug("Replacing executable atomically...")
-	if err := os.Rename(tempPath, executablePath); err != nil {
+	if err := replaceExecutable(tempPath, executablePath); err != nil {
 		if removeErr := os.Remove(tempPath); removeErr != nil {
 			logger.WithError(removeErr).Warn("Failed to remove temporary file after rename failure")
 		}
@@ -544,12 +559,108 @@ func cleanupOldBackups(executablePath string) {
 	}
 }
 
+// updateTempPath returns the path for the downloaded binary before it is moved
+// into place. On Windows the .exe suffix must be preserved (patchmon-agent.new.exe),
+// otherwise the validation exec of the new binary fails.
+func updateTempPath(executablePath string) string {
+	if runtime.GOOS == "windows" {
+		return strings.TrimSuffix(executablePath, ".exe") + ".new.exe"
+	}
+	return executablePath + ".new"
+}
+
+// startWindowsRestartHelper launches a detached PowerShell process that restarts
+// the PatchMonAgent service after this process exits. It must be started BEFORE
+// the executable is replaced: if this process dies mid-replacement, the helper
+// restores the moved-aside .old binary before restarting the service, so the
+// SCM binary path never points at nothing. Stop-Service is best-effort because
+// this process normally has already exited by the time the helper runs.
+func startWindowsRestartHelper(executablePath string) error {
+	// Values are embedded in single-quoted PowerShell strings; escape embedded
+	// single quotes by doubling (paths come from os.Executable, defense in depth)
+	exePS := strings.ReplaceAll(executablePath, "'", "''")
+	exeNamePS := strings.ReplaceAll(filepath.Base(executablePath), "'", "''")
+	psCommand := "Start-Sleep -Seconds 5; " +
+		"if (-not (Test-Path -LiteralPath '" + exePS + "') -and (Test-Path -LiteralPath '" + exePS + ".old')) " +
+		"{ Rename-Item -LiteralPath '" + exePS + ".old' -NewName '" + exeNamePS + "' }; " +
+		"Stop-Service -Name PatchMonAgent -Force -ErrorAction SilentlyContinue; " +
+		"Start-Service -Name PatchMonAgent"
+
+	// Absolute path instead of PATH lookup - defensive for code running as SYSTEM
+	systemRoot := os.Getenv("SystemRoot")
+	if systemRoot == "" {
+		systemRoot = `C:\Windows`
+	}
+	powershellPath := filepath.Join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+
+	cmd := exec.Command(powershellPath, "-NoProfile", "-NonInteractive", "-Command", psCommand)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.SysProcAttr = sysProcAttrForDetach()
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start Windows restart helper: %w", err)
+	}
+	logger.Info("Scheduled service restart/recovery helper (Windows)")
+	return nil
+}
+
+// replaceExecutable moves the new binary into place. On Unix a running binary can
+// simply be renamed over (the old process keeps its inode). On Windows the running
+// .exe is locked against overwriting but may itself be renamed, so it is moved
+// aside to <exe>.old first; the leftover .old is cleaned up on next service start.
+func replaceExecutable(tempPath, executablePath string) error {
+	if runtime.GOOS != "windows" {
+		return os.Rename(tempPath, executablePath)
+	}
+
+	oldPath := executablePath + ".old"
+	// Remove a stale .old from a previous update (non-critical if it fails)
+	if err := os.Remove(oldPath); err != nil && !os.IsNotExist(err) {
+		logger.WithError(err).WithField("path", oldPath).Debug("Could not remove stale .old binary")
+	}
+	if err := os.Rename(executablePath, oldPath); err != nil {
+		return fmt.Errorf("failed to move running executable aside (an old agent process may still hold %s - restart the PatchMonAgent service and retry): %w", oldPath, err)
+	}
+	if err := os.Rename(tempPath, executablePath); err != nil {
+		// Roll back so the service can still restart with the old binary
+		if rollbackErr := os.Rename(oldPath, executablePath); rollbackErr != nil {
+			logger.WithError(rollbackErr).WithField("path", oldPath).Error("Rollback failed - old executable left aside, manual intervention required")
+		}
+		return err
+	}
+	return nil
+}
+
+// cleanupUpdateArtifacts removes leftovers of a previous self-update next to the
+// running executable: the moved-aside .old binary (Windows move-aside pattern) and
+// an orphaned temp binary from a failed update. Errors are ignored - if a file is
+// still locked, the next service start will clean it up.
+func cleanupUpdateArtifacts() {
+	executablePath, err := os.Executable()
+	if err != nil {
+		return
+	}
+	if resolvedPath, err := filepath.EvalSymlinks(executablePath); err == nil {
+		executablePath = resolvedPath
+	}
+	if err := os.Remove(executablePath + ".old"); err == nil {
+		logger.WithField("path", executablePath+".old").Info("Removed old binary from previous self-update")
+	}
+	if err := os.Remove(updateTempPath(executablePath)); err == nil {
+		logger.WithField("path", updateTempPath(executablePath)).Info("Removed orphaned temp binary from previous self-update")
+	}
+}
+
+// updateMarkerPath returns the OS-appropriate path of the update marker file
+// (next to the config file: /etc/patchmon on Unix, C:\ProgramData\PatchMon on Windows)
+func updateMarkerPath() string {
+	return filepath.Join(filepath.Dir(config.DefaultConfigFilePath()), ".last_update_timestamp")
+}
+
 // checkRecentUpdate checks if we updated recently to prevent update loops
 func checkRecentUpdate() error {
-	updateMarkerPath := "/etc/patchmon/.last_update_timestamp"
-
 	// Check if marker file exists
-	info, err := os.Stat(updateMarkerPath)
+	info, err := os.Stat(updateMarkerPath())
 	if err != nil {
 		if os.IsNotExist(err) {
 			// No recent update, allow update
@@ -559,9 +670,10 @@ func checkRecentUpdate() error {
 		return nil
 	}
 
-	// Check if update was within last 5 minutes
+	// Check if update was within last 5 minutes. A ModTime in the future
+	// (clock skew or tampering) must not suppress updates permanently.
 	timeSinceUpdate := time.Since(info.ModTime())
-	if timeSinceUpdate < 5*time.Minute {
+	if timeSinceUpdate >= 0 && timeSinceUpdate < 5*time.Minute {
 		return fmt.Errorf("update was performed %v ago, waiting to prevent update loop", timeSinceUpdate)
 	}
 
@@ -571,16 +683,16 @@ func checkRecentUpdate() error {
 
 // markRecentUpdate creates a timestamp file to mark that we just updated
 func markRecentUpdate() {
-	updateMarkerPath := "/etc/patchmon/.last_update_timestamp"
+	markerPath := updateMarkerPath()
 
 	// SECURITY: Ensure directory exists with restrictive permissions
-	if err := os.MkdirAll("/etc/patchmon", 0700); err != nil {
-		logger.WithError(err).Debug("Could not create /etc/patchmon directory (non-critical)")
+	if err := os.MkdirAll(filepath.Dir(markerPath), 0700); err != nil {
+		logger.WithError(err).Debug("Could not create update marker directory (non-critical)")
 		return
 	}
 
 	// Create or update the timestamp file
-	file, err := os.Create(updateMarkerPath)
+	file, err := os.Create(markerPath)
 	if err != nil {
 		logger.WithError(err).Debug("Could not create update marker file (non-critical)")
 		return
@@ -590,16 +702,26 @@ func markRecentUpdate() {
 	}
 
 	// Set permissions
-	if err := os.Chmod(updateMarkerPath, 0644); err != nil {
+	if err := os.Chmod(markerPath, 0644); err != nil {
 		logger.WithError(err).Debug("Could not set permissions on update marker file (non-critical)")
 	}
 	logger.Debug("Marked recent update to prevent update loops")
 }
 
-// restartService restarts the patchmon-agent service (supports systemd, OpenRC, and FreeBSD rc.d)
+// restartService restarts the patchmon-agent service (supports systemd, OpenRC, FreeBSD rc.d, and Windows SCM)
 func restartService(_ string, _ string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+
+	// Windows: the restart/recovery helper was already scheduled by updateAgent
+	// BEFORE the executable was replaced (see startWindowsRestartHelper). Just
+	// exit so the helper's stop/start sequence loads the new binary.
+	if runtime.GOOS == "windows" {
+		logger.Info("Restart helper already scheduled (Windows), exiting now...")
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+		return nil
+	}
 
 	// FreeBSD / pfSense: use service patchmon_agent restart (rc.d)
 	if runtime.GOOS == "freebsd" {

@@ -90,7 +90,10 @@ func (m *APTManager) GetPackages() []models.Package {
 	go func() {
 		defer wg.Done()
 		m.logger.Debug("Getting upgradable packages...")
-		upgradeCmd := exec.Command(packageManager, "-s", "-o", "Debug::NoLocking=1", "upgrade")
+		// --with-new-pkgs so packages held back for needing new dependencies
+		// (e.g. fwupd -> libfwupd3) are reported as upgradable, matching what
+		// patch_all actually upgrades.
+		upgradeCmd := exec.Command(packageManager, "-s", "-o", "Debug::NoLocking=1", "--with-new-pkgs", "upgrade")
 		upgradeCmd.Env = append(os.Environ(), "LANG=C")
 		out, err := upgradeCmd.Output()
 		if err != nil {

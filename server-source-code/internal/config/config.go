@@ -12,7 +12,9 @@ import (
 )
 
 // DefaultVersion is the default server version. Bump this when releasing; config_test.go uses it.
-const DefaultVersion = "2.0.2"
+// Fork scheme: <upstream-base>-am.<fork-revision> — bump the am-suffix per fork
+// release, reset to .1 after rebasing onto a new upstream version.
+const DefaultVersion = "2.0.2-am.4"
 
 // Config holds application configuration loaded from environment.
 // Uses same variable names as PatchMon/server for compatibility.
@@ -147,6 +149,36 @@ type Config struct {
 	// Set ADMIN_MODE=on in .env for managed/multi-context deployments.
 	AdminMode bool
 
+	// HideCommunityLinks hides the upstream community/social/donate links
+	// (nav bar, login footer, first-run wizard), the upstream newsletter
+	// opt-in (profile page, wizard, release-notes modal) and disables the
+	// upstream version checks (DNS beacons *.vcheck.patchmon.net, update
+	// alerts, release links) for self-hosted forks — updates ship via the
+	// fork's own image pipeline. Set PM_HIDE_COMMUNITY_LINKS=true in .env.
+	HideCommunityLinks bool
+
+	// DisableSignup hard-disables user self-registration regardless of the
+	// signup_enabled DB setting: the signup endpoints refuse, the toggle is
+	// hidden in the settings UI and Discord auto-create is off. Fail-closed
+	// guard for internet-facing instances. Set PM_DISABLE_SIGNUP=true in .env.
+	DisableSignup bool
+
+	// LicenseMaxHosts overrides the license_max_hosts DB setting (fork
+	// feature: amanit sells packages by VM count). When > 0, the whole
+	// licence settings tab becomes read-only for the customer superadmin
+	// ("managed by amanit") and enforce/package are taken from the env as
+	// well. 0 = not set, DB settings apply. Set PM_LICENSE_MAX_HOSTS=<n>.
+	LicenseMaxHosts int
+
+	// LicenseEnforce overrides license_enforce when LicenseMaxHosts is set:
+	// true blocks new host registrations once active+pending reaches
+	// ceil(max*1.1). Set PM_LICENSE_ENFORCE=true.
+	LicenseEnforce bool
+
+	// LicensePackage overrides license_package (display name, e.g.
+	// "Paket 3, bis 200 VMs") when LicenseMaxHosts is set. Set PM_LICENSE_PACKAGE.
+	LicensePackage string
+
 	// BillingPortalURL is the Stripe customer portal URL shown to tenants when AdminMode is on.
 	BillingPortalURL string
 
@@ -200,7 +232,7 @@ func Load() (*Config, error) {
 		CORSOrigin: getEnv("CORS_ORIGIN", "http://localhost:3000"),
 		AssetsDir:  getEnv("ASSETS_DIR", ""),
 
-		EnableLogging: getEnv("ENABLE_LOGGING", "") == "true",
+		EnableLogging: getEnv("ENABLE_LOGGING", "true") != "false",
 		LogLevel:      getEnv("LOG_LEVEL", "info"),
 
 		EnablePprof:         getEnv("ENABLE_PPROF", "") == "true",
@@ -241,6 +273,11 @@ func Load() (*Config, error) {
 
 		SSGContentDir:         getEnv("SSG_CONTENT_DIR", "./ssg-content"),
 		AdminMode:             getEnv("ADMIN_MODE", "") == "on",
+		HideCommunityLinks:    getEnv("PM_HIDE_COMMUNITY_LINKS", "") == "true",
+		DisableSignup:         getEnv("PM_DISABLE_SIGNUP", "") == "true",
+		LicenseMaxHosts:       getEnvInt("PM_LICENSE_MAX_HOSTS", 0),
+		LicenseEnforce:        getEnv("PM_LICENSE_ENFORCE", "") == "true",
+		LicensePackage:        getEnv("PM_LICENSE_PACKAGE", ""),
 		BillingPortalURL:      getEnv("BILLING_PORTAL_URL", ""),
 		BillingServiceURL:     getEnv("BILLING_SERVICE_URL", ""),
 		BillingInternalSecret: getEnv("BILLING_INTERNAL_SECRET", ""),
@@ -289,11 +326,46 @@ func Load() (*Config, error) {
 		GuacdAddress: getEnv("GUACD_ADDRESS", "127.0.0.1:4822"),
 	}
 
+	if err := cfg.applyLicenseEnv(); err != nil {
+		return nil, err
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
 	return cfg, nil
+}
+
+// applyLicenseEnv parses the PM_LICENSE_* overrides strictly. getEnvInt maps
+// anything unparsable to 0, and 0 means "licence not env-managed": a typo
+// would silently drop the lock and hand the licence back to the UI. These
+// variables therefore fail startup (fail-closed) rather than being ignored.
+func (c *Config) applyLicenseEnv() error {
+	rawMax := strings.TrimSpace(os.Getenv("PM_LICENSE_MAX_HOSTS"))
+	rawEnforce := strings.ToLower(strings.TrimSpace(os.Getenv("PM_LICENSE_ENFORCE")))
+
+	c.LicenseMaxHosts = 0
+	if rawMax != "" {
+		v, err := strconv.Atoi(rawMax)
+		if err != nil || v < 1 {
+			return fmt.Errorf("PM_LICENSE_MAX_HOSTS must be a positive integer, got %q", rawMax)
+		}
+		c.LicenseMaxHosts = v
+	}
+
+	switch rawEnforce {
+	case "":
+		c.LicenseEnforce = false
+	case "true", "false":
+		if rawMax == "" {
+			return fmt.Errorf("PM_LICENSE_ENFORCE is set but PM_LICENSE_MAX_HOSTS is not; the env licence only applies when PM_LICENSE_MAX_HOSTS is set")
+		}
+		c.LicenseEnforce = rawEnforce == "true"
+	default:
+		return fmt.Errorf("PM_LICENSE_ENFORCE must be true or false, got %q", rawEnforce)
+	}
+	return nil
 }
 
 // Validate checks required configuration.

@@ -26,7 +26,9 @@ const ReleaseNotesModal = ({ isOpen, onAccept }) => {
 	// omitted when `admin_mode` or already subscribed at open.
 	const buildSteps = () => {
 		const showSubscribeStep =
-			!publicSettings?.admin_mode && !user?.newsletter_subscribed;
+			!publicSettings?.admin_mode &&
+			publicSettings?.show_newsletter !== false &&
+			!user?.newsletter_subscribed;
 		return [
 			"whatsNew",
 			...(showSubscribeStep ? ["subscribe"] : []),

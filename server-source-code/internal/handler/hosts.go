@@ -4,16 +4,21 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 
 	"github.com/PatchMon/PatchMon/server-source-code/internal/agentregistry"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/config"
 	hostctx "github.com/PatchMon/PatchMon/server-source-code/internal/context"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/db"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/middleware"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/models"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/notifications"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/queue"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/serverident"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/store"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -32,10 +37,11 @@ type HostsHandler struct {
 	pendingConfig     *store.PendingConfigStore
 	db                database.DBProvider
 	notify            *notifications.Emitter
+	cfg               *config.Config
 }
 
 // NewHostsHandler creates a new hosts handler.
-func NewHostsHandler(hosts *store.HostsStore, hostGroups *store.HostGroupsStore, settings *store.SettingsStore, queueClient *asynq.Client, registry *agentregistry.Registry, integrationStatus *store.IntegrationStatusStore, pendingConfig *store.PendingConfigStore, db database.DBProvider, notify *notifications.Emitter) *HostsHandler {
+func NewHostsHandler(hosts *store.HostsStore, hostGroups *store.HostGroupsStore, settings *store.SettingsStore, queueClient *asynq.Client, registry *agentregistry.Registry, integrationStatus *store.IntegrationStatusStore, pendingConfig *store.PendingConfigStore, db database.DBProvider, notify *notifications.Emitter, cfg *config.Config) *HostsHandler {
 	return &HostsHandler{
 		hosts:             hosts,
 		hostGroups:        hostGroups,
@@ -46,6 +52,7 @@ func NewHostsHandler(hosts *store.HostsStore, hostGroups *store.HostGroupsStore,
 		pendingConfig:     pendingConfig,
 		db:                db,
 		notify:            notify,
+		cfg:               cfg,
 	}
 }
 
@@ -171,6 +178,12 @@ func (h *HostsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Fork licence gate: active+pending slots against max + tolerance.
+	if licenseBlocksHostCreate(r.Context(), h.cfg, h.settings, h.hosts) {
+		Error(w, http.StatusForbidden, licenseLimitMessage)
+		return
+	}
+
 	machineID := "pending-" + uuid.New().String()
 	host := &models.Host{
 		MachineID:              &machineID,
@@ -272,6 +285,34 @@ func (h *HostsHandler) UpdateGroups(w http.ResponseWriter, r *http.Request) {
 }
 
 // UpdateFriendlyName handles PATCH /hosts/:hostId/friendly-name.
+// requireHost loads the host and writes a 404 when it does not exist,
+// reporting whether the caller may continue.
+//
+// HostsStore.GetByID returns (nil, nil) for "no such row", so a caller that
+// only tests err goes on to dereference a nil host. The underlying update
+// statements are sqlc :exec and report no error for zero rows affected, so
+// without this check an unknown id produced a no-op write followed by a nil
+// dereference (converted to a 500 by the Recovery middleware) rather than the
+// 404 it should be.
+func (h *HostsHandler) requireHost(w http.ResponseWriter, r *http.Request, hostID string) (*models.Host, bool) {
+	host, err := h.hosts.GetByID(r.Context(), hostID)
+	if err != nil || host == nil {
+		Error(w, http.StatusNotFound, "Host not found")
+		return nil, false
+	}
+	return host, true
+}
+
+// reloadHost re-reads the host after a write so the response reflects it,
+// falling back to the pre-write row if the host was deleted concurrently.
+// The returned value is never nil.
+func (h *HostsHandler) reloadHost(r *http.Request, hostID string, fallback *models.Host) *models.Host {
+	if updated, err := h.hosts.GetByID(r.Context(), hostID); err == nil && updated != nil {
+		return updated
+	}
+	return fallback
+}
+
 func (h *HostsHandler) UpdateFriendlyName(w http.ResponseWriter, r *http.Request) {
 	hostID := chi.URLParam(r, "hostId")
 	var req struct {
@@ -286,11 +327,16 @@ func (h *HostsHandler) UpdateFriendlyName(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	existing, ok := h.requireHost(w, r, hostID)
+	if !ok {
+		return
+	}
+
 	if err := h.hosts.UpdateFriendlyName(r.Context(), hostID, req.FriendlyName); err != nil {
 		Error(w, http.StatusInternalServerError, "Failed to update friendly name")
 		return
 	}
-	host, _ := h.hosts.GetByID(r.Context(), hostID)
+	host := h.reloadHost(r, hostID, existing)
 	groups, _ := h.hosts.GetHostGroups(r.Context(), hostID)
 	JSON(w, http.StatusOK, map[string]interface{}{
 		"message": "Friendly name updated successfully",
@@ -309,11 +355,16 @@ func (h *HostsHandler) UpdateNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	existing, ok := h.requireHost(w, r, hostID)
+	if !ok {
+		return
+	}
+
 	if err := h.hosts.UpdateNotes(r.Context(), hostID, req.Notes); err != nil {
 		Error(w, http.StatusInternalServerError, "Failed to update notes")
 		return
 	}
-	host, _ := h.hosts.GetByID(r.Context(), hostID)
+	host := h.reloadHost(r, hostID, existing)
 	groups, _ := h.hosts.GetHostGroups(r.Context(), hostID)
 	JSON(w, http.StatusOK, map[string]interface{}{
 		"message": "Notes updated successfully",
@@ -333,11 +384,16 @@ func (h *HostsHandler) UpdateConnection(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	existing, ok := h.requireHost(w, r, hostID)
+	if !ok {
+		return
+	}
+
 	if err := h.hosts.UpdateConnection(r.Context(), hostID, req.IP, req.Hostname); err != nil {
 		Error(w, http.StatusInternalServerError, "Failed to update connection")
 		return
 	}
-	host, _ := h.hosts.GetByID(r.Context(), hostID)
+	host := h.reloadHost(r, hostID, existing)
 	groups, _ := h.hosts.GetHostGroups(r.Context(), hostID)
 	JSON(w, http.StatusOK, map[string]interface{}{
 		"message": "Host connection information updated successfully",
@@ -428,11 +484,16 @@ func (h *HostsHandler) UpdateAutoUpdate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	existing, ok := h.requireHost(w, r, hostID)
+	if !ok {
+		return
+	}
+
 	if err := h.hosts.UpdateAutoUpdate(r.Context(), hostID, req.AutoUpdate); err != nil {
 		Error(w, http.StatusInternalServerError, "Failed to update auto-update")
 		return
 	}
-	host, _ := h.hosts.GetByID(r.Context(), hostID)
+	host := h.reloadHost(r, hostID, existing)
 	JSON(w, http.StatusOK, map[string]interface{}{
 		"message": "Agent auto-update " + map[bool]string{true: "enabled", false: "disabled"}[req.AutoUpdate] + " successfully",
 		"host":    map[string]interface{}{"id": host.ID, "friendlyName": host.FriendlyName, "autoUpdate": req.AutoUpdate},
@@ -535,6 +596,286 @@ func (h *HostsHandler) FetchReportBulk(w http.ResponseWriter, r *http.Request) {
 		"message":  "Fetch report requested",
 		"success":  true,
 		"enqueued": enqueued,
+	})
+}
+
+// isSelfHost reports whether the given host is the machine the PatchMon server
+// itself runs on. The actual matching lives in the serverident package so the
+// scheduled-reboot queue worker applies the identical exclusion logic.
+func isSelfHost(host *models.Host) bool {
+	return serverident.IsSelf(host.MachineID)
+}
+
+// AllowRebootBulk handles PUT /hosts/bulk/allow-reboot. Sets the allow_reboot
+// allowlist flag on the given hosts. The change is audited before it is
+// applied (fail closed): the flag gates a destructive action, so an
+// unauditable change must not happen. The PatchMon server's own host is
+// refused here as well, mirroring the reboot self-exclusion.
+func (h *HostsHandler) AllowRebootBulk(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		HostIDs     []string `json:"hostIds"`
+		AllowReboot bool     `json:"allowReboot"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if len(req.HostIDs) == 0 {
+		Error(w, http.StatusBadRequest, "hostIds required")
+		return
+	}
+
+	seen := make(map[string]struct{}, len(req.HostIDs))
+	hostIDs := make([]string, 0, len(req.HostIDs))
+	for _, id := range req.HostIDs {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		hostIDs = append(hostIDs, id)
+	}
+
+	hosts, err := h.hosts.GetByIDs(r.Context(), hostIDs)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "Failed to resolve hosts")
+		return
+	}
+	found := make(map[string]*models.Host, len(hosts))
+	for i := range hosts {
+		found[hosts[i].ID] = &hosts[i]
+	}
+
+	updateIDs := []string{}
+	updated := []map[string]string{}
+	skipped := []map[string]string{}
+	for _, hostID := range hostIDs {
+		host, ok := found[hostID]
+		if !ok {
+			skipped = append(skipped, map[string]string{"hostId": hostID, "reason": "Host not found"})
+			continue
+		}
+		hostname := host.FriendlyName
+		if host.Hostname != nil && *host.Hostname != "" {
+			hostname = *host.Hostname
+		}
+		if req.AllowReboot && isSelfHost(host) {
+			skipped = append(skipped, map[string]string{"hostId": hostID, "hostname": hostname, "reason": "PatchMon server host cannot be made rebootable"})
+			continue
+		}
+		updateIDs = append(updateIDs, hostID)
+		updated = append(updated, map[string]string{"hostId": hostID, "hostname": hostname})
+	}
+
+	if len(updateIDs) > 0 {
+		if err := h.writeAuditLog(r, "host_allow_reboot_updated", true, map[string]interface{}{
+			"allow_reboot": req.AllowReboot,
+			"hosts":        updated,
+			"skipped":      skipped,
+		}); err != nil {
+			slog.Error("refusing allow_reboot change: audit log write failed", "error", err)
+			Error(w, http.StatusInternalServerError, "Failed to write audit log")
+			return
+		}
+		if err := h.hosts.UpdateAllowReboot(r.Context(), updateIDs, req.AllowReboot); err != nil {
+			// The intent entry above is already written; log the divergence.
+			slog.Error("allow_reboot update failed after audit write", "error", err)
+			Error(w, http.StatusInternalServerError, "Failed to update hosts")
+			return
+		}
+	}
+
+	JSON(w, http.StatusOK, map[string]interface{}{
+		"message": "Reboot permission " + map[bool]string{true: "granted", false: "revoked"}[req.AllowReboot],
+		"success": true,
+		"updated": len(updateIDs),
+		"skipped": skipped,
+	})
+}
+
+// RebootBulk handles POST /hosts/bulk/reboot. The host running the PatchMon
+// server itself is excluded and reported back in the skipped list.
+func (h *HostsHandler) RebootBulk(w http.ResponseWriter, r *http.Request) {
+	if h.queueClient == nil {
+		Error(w, http.StatusServiceUnavailable, "Queue service unavailable")
+		return
+	}
+	var req struct {
+		HostIDs        []string `json:"hostIds"`
+		OnlyIfRequired bool     `json:"onlyIfRequired"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if len(req.HostIDs) == 0 {
+		Error(w, http.StatusBadRequest, "hostIds required")
+		return
+	}
+
+	// Fail closed: without a known server machine identity the self-exclusion
+	// check cannot work, so no reboot is allowed at all.
+	if len(serverident.MachineIDs()) == 0 {
+		slog.Error("refusing reboot request: self-exclusion not configured (no DMI product UUID, no /run/host-machine-id mount, no PM_SERVER_MACHINE_ID)")
+		Error(w, http.StatusServiceUnavailable, "Reboot refused: self-exclusion is not configured. Mount the host's /etc/machine-id to /run/host-machine-id or set PM_SERVER_MACHINE_ID.")
+		return
+	}
+
+	// Deduplicate before the batch-size check so repeated IDs neither inflate
+	// the count nor produce duplicate audit entries / misleading skip reasons.
+	seen := make(map[string]struct{}, len(req.HostIDs))
+	hostIDs := make([]string, 0, len(req.HostIDs))
+	for _, id := range req.HostIDs {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		hostIDs = append(hostIDs, id)
+	}
+	if len(hostIDs) > queue.MaxRebootBatchSize {
+		Error(w, http.StatusBadRequest, fmt.Sprintf("Too many hosts: maximum %d per reboot request", queue.MaxRebootBatchSize))
+		return
+	}
+
+	// Phase 1: resolve hosts, apply the allow_reboot allowlist and the
+	// self-exclusion check. allow_reboot is fail-closed by design: hosts an
+	// operator never opted in are not rebootable.
+	type rebootTarget struct {
+		host     *models.Host
+		hostID   string
+		hostname string
+	}
+	targets := []rebootTarget{}
+	requested := []map[string]string{}
+	skipped := []map[string]string{}
+	for _, hostID := range hostIDs {
+		host, err := h.hosts.GetByID(r.Context(), hostID)
+		if err != nil || host == nil {
+			skipped = append(skipped, map[string]string{"hostId": hostID, "reason": "Host not found"})
+			continue
+		}
+		hostname := host.FriendlyName
+		if host.Hostname != nil && *host.Hostname != "" {
+			hostname = *host.Hostname
+		}
+		if isSelfHost(host) {
+			skipped = append(skipped, map[string]string{"hostId": hostID, "hostname": hostname, "reason": "PatchMon server host cannot be rebooted"})
+			continue
+		}
+		if !host.AllowReboot {
+			skipped = append(skipped, map[string]string{"hostId": hostID, "hostname": hostname, "reason": "Reboot not allowed for this host (allow_reboot is not set)"})
+			continue
+		}
+		targets = append(targets, rebootTarget{host: host, hostID: hostID, hostname: hostname})
+		requested = append(requested, map[string]string{"hostId": hostID, "hostname": hostname})
+	}
+
+	// Phase 2: write the audit intent BEFORE enqueueing. Fail closed: a reboot
+	// that cannot be audited must not happen.
+	if err := h.auditRebootRequest(r, req.OnlyIfRequired, requested, skipped); err != nil {
+		slog.Error("refusing reboot request: audit log write failed", "error", err)
+		Error(w, http.StatusInternalServerError, "Failed to write audit log")
+		return
+	}
+
+	// Phase 3: enqueue. Per-host delivery status is tracked in job_history.
+	enqueued := 0
+	failed := []map[string]string{}
+	for _, t := range targets {
+		task, err := queue.NewRebootTask(queue.RebootPayload{
+			ApiID:          t.host.ApiID,
+			Host:           hostFromRequest(r),
+			OnlyIfRequired: req.OnlyIfRequired,
+		})
+		if err != nil {
+			failed = append(failed, map[string]string{"hostId": t.hostID, "hostname": t.hostname, "reason": "Failed to create reboot task"})
+			continue
+		}
+		if _, err := h.queueClient.Enqueue(task); err != nil {
+			reason := "Failed to enqueue reboot task"
+			if errors.Is(err, asynq.ErrTaskIDConflict) {
+				reason = "Reboot already pending for this host (cooldown)"
+			}
+			failed = append(failed, map[string]string{"hostId": t.hostID, "hostname": t.hostname, "reason": reason})
+			continue
+		}
+		enqueued++
+	}
+	skipped = append(skipped, failed...)
+
+	// Phase 4: record the effective outcome. The intent entry above can claim
+	// success while every enqueue fails; this follow-up entry closes that gap.
+	// Best effort: the action already happened, so a write failure is logged
+	// rather than turned into a client error.
+	if err := h.auditRebootResult(r, enqueued, failed); err != nil {
+		slog.Error("failed to write reboot result audit log", "error", err)
+	}
+
+	JSON(w, http.StatusOK, map[string]interface{}{
+		"message":  "Reboot requested",
+		"success":  true,
+		"enqueued": enqueued,
+		"skipped":  skipped,
+	})
+}
+
+// auditRebootRequest writes an audit_logs entry attributing the reboot request
+// to the acting user, before any task is enqueued. job_history covers the
+// per-host command lifecycle but has no user attribution, so this destructive
+// action is additionally audited here.
+func (h *HostsHandler) auditRebootRequest(r *http.Request, onlyIfRequired bool, requested, skipped []map[string]string) error {
+	return h.writeAuditLog(r, "host_reboot_requested", len(requested) > 0, map[string]interface{}{
+		"only_if_required": onlyIfRequired,
+		"requested":        requested,
+		"skipped":          skipped,
+	})
+}
+
+// auditRebootResult records the effective enqueue outcome, complementing the
+// intent entry written by auditRebootRequest.
+func (h *HostsHandler) auditRebootResult(r *http.Request, enqueued int, failed []map[string]string) error {
+	return h.writeAuditLog(r, "host_reboot_enqueued", enqueued > 0, map[string]interface{}{
+		"enqueued": enqueued,
+		"failed":   failed,
+	})
+}
+
+// writeAuditLog inserts an audit_logs entry attributed to the acting user.
+func (h *HostsHandler) writeAuditLog(r *http.Request, event string, success bool, detail map[string]interface{}) error {
+	if h.db == nil {
+		return fmt.Errorf("no database available for audit log")
+	}
+	ctx := r.Context()
+	d := h.db.DB(ctx)
+	if d == nil {
+		return fmt.Errorf("no database available for audit log")
+	}
+
+	var userID *string
+	if uid, _ := ctx.Value(middleware.UserIDKey).(string); uid != "" {
+		userID = &uid
+	}
+	var requestID *string
+	if rid, _ := ctx.Value(middleware.RequestIDKey).(string); rid != "" {
+		requestID = &rid
+	}
+	ip := clientIPFromRequest(r)
+	ua := r.UserAgent()
+
+	var details *string
+	if b, err := json.Marshal(detail); err == nil {
+		s := string(b)
+		details = &s
+	}
+
+	return d.Queries.InsertAuditLog(ctx, db.InsertAuditLogParams{
+		ID:        uuid.New().String(),
+		Event:     event,
+		UserID:    userID,
+		IpAddress: &ip,
+		UserAgent: &ua,
+		RequestID: requestID,
+		Details:   details,
+		Success:   success,
 	})
 }
 
@@ -703,10 +1044,12 @@ func (h *HostsHandler) BulkDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify all exist
+	// Verify all exist. GetByID returns (nil, nil) for "no such row", so the
+	// nil check is what actually enforces this; testing err alone let unknown
+	// ids through and reported a successful delete for them.
 	for _, id := range req.HostIds {
-		_, err := h.hosts.GetByID(r.Context(), id)
-		if err != nil {
+		existing, err := h.hosts.GetByID(r.Context(), id)
+		if err != nil || existing == nil {
 			Error(w, http.StatusNotFound, "Some hosts not found")
 			return
 		}
@@ -1009,8 +1352,11 @@ func (h *HostsHandler) SetComplianceScanners(w http.ResponseWriter, r *http.Requ
 		Error(w, http.StatusBadRequest, "At least one of openscap_enabled or docker_bench_enabled must be provided")
 		return
 	}
-	_, err := h.hosts.GetByID(r.Context(), hostID)
-	if err != nil {
+	// GetByID returns (nil, nil) for "no such row", so the nil check is what
+	// actually makes this a 404; testing err alone let an unknown id fall
+	// through to a no-op update reported as success.
+	existing, err := h.hosts.GetByID(r.Context(), hostID)
+	if err != nil || existing == nil {
 		Error(w, http.StatusNotFound, "Host not found")
 		return
 	}
@@ -1049,8 +1395,11 @@ func (h *HostsHandler) SetComplianceDefaultProfile(w http.ResponseWriter, r *htt
 		Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
-	_, err := h.hosts.GetByID(r.Context(), hostID)
-	if err != nil {
+	// GetByID returns (nil, nil) for "no such row", so the nil check is what
+	// actually makes this a 404; testing err alone let an unknown id fall
+	// through to a no-op update reported as success.
+	existing, err := h.hosts.GetByID(r.Context(), hostID)
+	if err != nil || existing == nil {
 		Error(w, http.StatusNotFound, "Host not found")
 		return
 	}
@@ -1233,7 +1582,7 @@ func hostToResponse(h *models.Host, groups []models.HostGroup) map[string]interf
 		"os_type": h.OSType, "os_version": h.OSVersion, "architecture": h.Architecture,
 		"last_update": h.LastUpdate, "status": h.Status, "api_id": h.ApiID, "agent_version": h.AgentVersion,
 		"auto_update": h.AutoUpdate, "created_at": h.CreatedAt, "notes": h.Notes,
-		"system_uptime": h.SystemUptime, "needs_reboot": h.NeedsReboot,
+		"system_uptime": h.SystemUptime, "needs_reboot": h.NeedsReboot, "allow_reboot": h.AllowReboot,
 		"docker_enabled": h.DockerEnabled, "compliance_enabled": h.ComplianceEnabled,
 		"package_manager": h.PackageManager, "primary_interface": h.PrimaryInterface,
 		"awaiting_post_patch_report_run_id": h.AwaitingPostPatchReportRunID,
