@@ -326,11 +326,46 @@ func Load() (*Config, error) {
 		GuacdAddress: getEnv("GUACD_ADDRESS", "127.0.0.1:4822"),
 	}
 
+	if err := cfg.applyLicenseEnv(); err != nil {
+		return nil, err
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
 	return cfg, nil
+}
+
+// applyLicenseEnv parses the PM_LICENSE_* overrides strictly. getEnvInt maps
+// anything unparsable to 0, and 0 means "licence not env-managed": a typo
+// would silently drop the lock and hand the licence back to the UI. These
+// variables therefore fail startup (fail-closed) rather than being ignored.
+func (c *Config) applyLicenseEnv() error {
+	rawMax := strings.TrimSpace(os.Getenv("PM_LICENSE_MAX_HOSTS"))
+	rawEnforce := strings.ToLower(strings.TrimSpace(os.Getenv("PM_LICENSE_ENFORCE")))
+
+	c.LicenseMaxHosts = 0
+	if rawMax != "" {
+		v, err := strconv.Atoi(rawMax)
+		if err != nil || v < 1 {
+			return fmt.Errorf("PM_LICENSE_MAX_HOSTS must be a positive integer, got %q", rawMax)
+		}
+		c.LicenseMaxHosts = v
+	}
+
+	switch rawEnforce {
+	case "":
+		c.LicenseEnforce = false
+	case "true", "false":
+		if rawMax == "" {
+			return fmt.Errorf("PM_LICENSE_ENFORCE is set but PM_LICENSE_MAX_HOSTS is not; the env licence only applies when PM_LICENSE_MAX_HOSTS is set")
+		}
+		c.LicenseEnforce = rawEnforce == "true"
+	default:
+		return fmt.Errorf("PM_LICENSE_ENFORCE must be true or false, got %q", rawEnforce)
+	}
+	return nil
 }
 
 // Validate checks required configuration.
