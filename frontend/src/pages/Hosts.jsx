@@ -1072,27 +1072,37 @@ const Hosts = () => {
 				);
 			case "host":
 				return (
-					<InlineEdit
-						value={host.friendly_name}
-						onSave={(newName) =>
-							updateFriendlyNameMutation.mutate({
-								hostId: host.id,
-								friendlyName: newName,
-							})
-						}
-						placeholder="Enter friendly name..."
-						maxLength={100}
-						linkTo={`/hosts/${host.id}`}
-						validate={(value) => {
-							if (!value.trim()) return "Friendly name is required";
-							if (value.trim().length < 1)
-								return "Friendly name must be at least 1 character";
-							if (value.trim().length > 100)
-								return "Friendly name must be less than 100 characters";
-							return null;
-						}}
-						className="w-full"
-					/>
+					<div className="flex items-center gap-2">
+						{host.pkg_broken && (
+							<span
+								className="inline-flex items-center flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+								title={`Package installation incomplete${host.pkg_broken_detail ? `: ${host.pkg_broken_detail}` : ""}. An administrator has to run "sudo dpkg --configure -a" in a terminal on the host. PatchMon does not repair this.`}
+							>
+								<AlertTriangle className="h-3 w-3" />
+							</span>
+						)}
+						<InlineEdit
+							value={host.friendly_name}
+							onSave={(newName) =>
+								updateFriendlyNameMutation.mutate({
+									hostId: host.id,
+									friendlyName: newName,
+								})
+							}
+							placeholder="Enter friendly name..."
+							maxLength={100}
+							linkTo={`/hosts/${host.id}`}
+							validate={(value) => {
+								if (!value.trim()) return "Friendly name is required";
+								if (value.trim().length < 1)
+									return "Friendly name must be at least 1 character";
+								if (value.trim().length > 100)
+									return "Friendly name must be less than 100 characters";
+								return null;
+							}}
+							className="w-full"
+						/>
+					</div>
 				);
 			case "hostname":
 				return (

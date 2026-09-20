@@ -159,6 +159,7 @@ func sanitizeReportPayload(p *ReportPayload) {
 	p.CPUModel = sanitizeText(p.CPUModel)
 	p.GatewayIP = sanitizeText(p.GatewayIP)
 	p.RebootReason = sanitizeText(p.RebootReason)
+	p.PackageStateDetail = sanitizeText(p.PackageStateDetail)
 	p.PackageManager = sanitizeText(p.PackageManager)
 	sanitizeTextSlice(p.DNSServers)
 

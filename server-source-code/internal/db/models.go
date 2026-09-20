@@ -288,6 +288,8 @@ type Host struct {
 	NeedsReboot                  *bool            `json:"needs_reboot"`
 	RebootReason                 *string          `json:"reboot_reason"`
 	AllowReboot                  bool             `json:"allow_reboot"`
+	ForkPkgBroken                bool             `json:"fork_pkg_broken"`
+	ForkPkgBrokenDetail          *string          `json:"fork_pkg_broken_detail"`
 	DockerEnabled                bool             `json:"docker_enabled"`
 	ComplianceEnabled            bool             `json:"compliance_enabled"`
 	ComplianceOnDemandOnly       bool             `json:"compliance_on_demand_only"`

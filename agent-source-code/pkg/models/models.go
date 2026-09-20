@@ -109,6 +109,9 @@ type ReportPayload struct {
 	NeedsReboot            bool               `json:"needsReboot"`
 	RebootReason           string             `json:"rebootReason,omitempty"`
 	PackageManager         string             `json:"packageManager,omitempty"`
+	// Fork: set only on dpkg hosts where the state could be determined.
+	PackageStateBroken *bool  `json:"packageStateBroken,omitempty"`
+	PackageStateDetail string `json:"packageStateDetail,omitempty"`
 }
 
 // PingResponse represents server ping response

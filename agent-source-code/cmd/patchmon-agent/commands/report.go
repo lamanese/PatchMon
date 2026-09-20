@@ -89,6 +89,8 @@ func sendReport(outputJSON bool) error {
 		networkInfo                   models.NetworkInfo
 		needsReboot                   bool
 		rebootReason                  string
+		pkgStateBroken                *bool
+		pkgStateDetail                string
 		installedKernel               string
 		packageList                   []models.Package
 		pkgErr                        error
@@ -135,6 +137,11 @@ func sendReport(outputJSON bool) error {
 		}
 	})
 	runTask("reboot", func() { needsReboot, rebootReason = systemDetector.CheckRebootRequired() })
+	runTask("packageState", func() {
+		if broken, detail, known := packages.DpkgPackageState(); known {
+			pkgStateBroken, pkgStateDetail = &broken, detail
+		}
+	})
 	runTask("kernel", func() { installedKernel = systemDetector.GetLatestInstalledKernel() })
 	runTask("machineID", func() { machineID = systemDetector.GetMachineID() })
 	runTask("packageMgr", func() { detectedPackageMgr = packageMgr.DetectPackageManager() })
@@ -261,6 +268,8 @@ func sendReport(outputJSON bool) error {
 		NeedsReboot:            needsReboot,
 		RebootReason:           rebootReason,
 		PackageManager:         detectedPackageMgr,
+		PackageStateBroken:     pkgStateBroken,
+		PackageStateDetail:     pkgStateDetail,
 	}
 
 	// If --report-json flag is set, output JSON and exit

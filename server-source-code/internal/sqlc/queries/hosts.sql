@@ -100,3 +100,10 @@ WHERE NOT EXISTS (SELECT 1 FROM compliance_scans cs WHERE cs.host_id = h.id);
 
 -- name: SetHostAwaitingPostPatchReport :exec
 UPDATE hosts SET awaiting_post_patch_report_run_id = $1, updated_at = NOW() WHERE id = $2;
+
+-- name: ForkUpdateHostPackageState :exec
+-- Fork: "package manager is in a broken state" hint reported by agents 2.0.15+.
+-- Kept out of UpdateHostFromReport so that upstream query stays untouched.
+UPDATE hosts
+SET fork_pkg_broken = sqlc.arg('broken'), fork_pkg_broken_detail = sqlc.narg('detail')
+WHERE id = sqlc.arg('id');

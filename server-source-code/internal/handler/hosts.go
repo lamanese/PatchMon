@@ -1583,6 +1583,7 @@ func hostToResponse(h *models.Host, groups []models.HostGroup) map[string]interf
 		"last_update": h.LastUpdate, "status": h.Status, "api_id": h.ApiID, "agent_version": h.AgentVersion,
 		"auto_update": h.AutoUpdate, "created_at": h.CreatedAt, "notes": h.Notes,
 		"system_uptime": h.SystemUptime, "needs_reboot": h.NeedsReboot, "allow_reboot": h.AllowReboot,
+		"pkg_broken": h.PkgBroken, "pkg_broken_detail": h.PkgBrokenDetail,
 		"docker_enabled": h.DockerEnabled, "compliance_enabled": h.ComplianceEnabled,
 		"package_manager": h.PackageManager, "primary_interface": h.PrimaryInterface,
 		"awaiting_post_patch_report_run_id": h.AwaitingPostPatchReportRunID,

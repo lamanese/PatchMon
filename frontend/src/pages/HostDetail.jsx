@@ -1254,6 +1254,15 @@ const HostDetail = () => {
 									Reboot Required
 								</span>
 							)}
+							{host.pkg_broken && (
+								<span
+									className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+									title={`Affected packages: ${host.pkg_broken_detail || "unknown"}. An earlier package installation was interrupted. An administrator has to run "sudo dpkg --configure -a" and "sudo apt-get -f install" in a terminal on the host. PatchMon does not repair this.`}
+								>
+									<AlertTriangle className="h-3 w-3" />
+									Package installation incomplete
+								</span>
+							)}
 							{host.awaiting_post_patch_report_run_id && (
 								<Link
 									to={`/patching/runs/${host.awaiting_post_patch_report_run_id}`}

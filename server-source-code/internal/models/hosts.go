@@ -37,6 +37,8 @@ type Host struct {
 	NeedsReboot                  *bool      `db:"needs_reboot"`
 	RebootReason                 *string    `db:"reboot_reason"`
 	AllowReboot                  bool       `db:"allow_reboot"`
+	PkgBroken                    bool       `db:"fork_pkg_broken"`
+	PkgBrokenDetail              *string    `db:"fork_pkg_broken_detail"`
 	DockerEnabled                bool       `db:"docker_enabled"`
 	ComplianceEnabled            bool       `db:"compliance_enabled"`
 	ComplianceOnDemandOnly       bool       `db:"compliance_on_demand_only"`

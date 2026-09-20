@@ -119,6 +119,9 @@ type ReportPayload struct {
 	NeedsReboot            bool               `json:"needsReboot"`
 	RebootReason           string             `json:"rebootReason"`
 	PackageManager         string             `json:"packageManager"`
+	// Fork: nil for agents older than 2.0.15, which do not report it.
+	PackageStateBroken *bool  `json:"packageStateBroken,omitempty"`
+	PackageStateDetail string `json:"packageStateDetail,omitempty"`
 }
 
 // ProcessReportResult is the result of processing a host report.
@@ -331,6 +334,23 @@ func (s *ReportStore) ProcessReport(ctx context.Context, hostID string, payload 
 
 	if err := q.UpdateHostFromReport(ctx, params); err != nil {
 		return nil, fmt.Errorf("UpdateHostFromReport: %w", err)
+	}
+	// Fork: package-state hint. Agents that do not report it leave the stored
+	// value alone; a reporting agent always overwrites it, so the flag clears
+	// itself once the administrator has repaired the host.
+	if payload.PackageStateBroken != nil {
+		var detail *string
+		if *payload.PackageStateBroken && payload.PackageStateDetail != "" {
+			if len(payload.PackageStateDetail) > 1000 {
+				payload.PackageStateDetail = payload.PackageStateDetail[:1000]
+			}
+			detail = &payload.PackageStateDetail
+		}
+		if err := q.ForkUpdateHostPackageState(ctx, db.ForkUpdateHostPackageStateParams{
+			ID: hostID, Broken: *payload.PackageStateBroken, Detail: detail,
+		}); err != nil {
+			return nil, fmt.Errorf("ForkUpdateHostPackageState: %w", err)
+		}
 	}
 
 	if err := q.DeleteHostPackagesByHostID(ctx, hostID); err != nil {
