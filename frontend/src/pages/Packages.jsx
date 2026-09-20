@@ -460,8 +460,11 @@ const Packages = () => {
 						>
 							<Package className="h-5 w-5 text-secondary-400 mr-3 flex-shrink-0" />
 							<div className="flex-1">
-								<div className="text-sm font-medium text-secondary-900 dark:text-white group-hover:text-primary-600 dark:group-hover:text-primary-400">
+								<div className="text-sm font-medium text-secondary-900 dark:text-white group-hover:text-primary-600 dark:group-hover:text-primary-400 flex items-center gap-2">
 									{pkg.name}
+									{pkg.is_definition_update && (
+										<span className="badge-secondary text-xs">Definition</span>
+									)}
 								</div>
 								{pkg.category && (
 									<div className="text-xs text-secondary-400 dark:text-white">
@@ -962,8 +965,13 @@ const Packages = () => {
 													>
 														<div className="flex items-center gap-3">
 															<Package className="h-5 w-5 text-secondary-400 flex-shrink-0" />
-															<div className="text-base font-semibold text-secondary-900 dark:text-white hover:text-primary-600 dark:hover:text-primary-400">
+															<div className="text-base font-semibold text-secondary-900 dark:text-white hover:text-primary-600 dark:hover:text-primary-400 flex items-center gap-2">
 																{pkg.name}
+																{pkg.is_definition_update && (
+																	<span className="badge-secondary text-xs">
+																		Definition
+																	</span>
+																)}
 															</div>
 														</div>
 													</button>
