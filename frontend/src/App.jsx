@@ -362,14 +362,10 @@ function AppRoutes() {
 					<Route
 						path="/settings"
 						element={
-							<ProtectedRoute
-								requireAnyPermissions={[
-									"can_view_users",
-									"can_manage_notifications",
-									"can_view_notification_logs",
-									"can_manage_settings",
-								]}
-							>
+							// No permission here on purpose: "My Profile" (password, TFA,
+							// sessions) and the read-only licence page belong to every
+							// signed-in user. All other children carry their own guard.
+							<ProtectedRoute>
 								<SettingsLayout>
 									<Suspense fallback={<PageLoadingFallback />}>
 										<Outlet />
@@ -513,7 +509,7 @@ function AppRoutes() {
 						<Route
 							path="license"
 							element={
-								<ProtectedRoute requirePermission="can_manage_settings">
+								<ProtectedRoute>
 									<SettingsLicense />
 								</ProtectedRoute>
 							}

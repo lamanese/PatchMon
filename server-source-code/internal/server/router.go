@@ -490,8 +490,11 @@ func NewRouter(ctx context.Context, cfg *config.Config, db *database.DB, rdb *re
 			r.With(middleware.RequirePermission("can_manage_settings", permissionsStore)).Put("/metrics", metricsHandler.Update)
 			r.With(middleware.RequirePermission("can_manage_settings", permissionsStore)).Post("/metrics/regenerate-id", metricsHandler.RegenerateID)
 			r.With(middleware.RequirePermission("can_manage_settings", permissionsStore)).Post("/metrics/send-now", metricsHandler.SendNow)
-			// Licence (fork feature): read for settings managers, write superadmin-only (checked in the handler).
-			r.With(middleware.RequirePermission("can_manage_settings", permissionsStore)).Get("/license", licenseHandler.Get)
+			// Licence (fork feature): every signed-in user may read the usage (host
+			// counts and the licensed number, nothing secret; the dashboard stats
+			// expose the same figures). Write stays superadmin-only: permission gate
+			// here plus the role check in the handler.
+			r.Get("/license", licenseHandler.Get)
 			r.With(middleware.RequirePermission("can_manage_settings", permissionsStore)).Put("/license", licenseHandler.Update)
 			r.Get("/version/current", settingsHandler.VersionCurrent(cfg.Version))
 			r.With(middleware.RequirePermission("can_manage_settings", permissionsStore)).Get("/version/check-updates", settingsHandler.VersionCheckUpdates(cfg.Version))

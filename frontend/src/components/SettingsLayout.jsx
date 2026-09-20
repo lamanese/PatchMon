@@ -37,6 +37,24 @@ const SettingsLayout = ({ children }) => {
 	const buildSecondaryNavigation = () => {
 		const nav = [];
 
+		// Personal pages: available to every signed-in user, whatever their role
+		// may or may not see of user management and server settings.
+		const accountItems = [
+			{
+				name: "My Profile",
+				href: "/settings/profile",
+				icon: UserCircle,
+			},
+		];
+		if (!publicSettings?.admin_mode) {
+			accountItems.push({
+				name: "Licence",
+				href: "/settings/license",
+				icon: BadgeCheck,
+			});
+		}
+		nav.push({ section: "My Account", items: accountItems });
+
 		// Users section
 		if (canViewUsers() || canManageUsers()) {
 			const userItems = [
@@ -61,11 +79,6 @@ const SettingsLayout = ({ children }) => {
 					lockedTier: locked ? getRequiredTier("rbac_custom") : null,
 				});
 			}
-			userItems.push({
-				name: "My Profile",
-				href: "/settings/profile",
-				icon: UserCircle,
-			});
 			if (canManageSettings()) {
 				userItems.push(
 					{
@@ -181,14 +194,8 @@ const SettingsLayout = ({ children }) => {
 					icon: BarChart3,
 				});
 			}
-			// Licence (fork feature): licensed host count for this instance.
-			if (!isAdminMode) {
-				serverItems.push({
-					name: "Licence",
-					href: "/settings/license",
-					icon: BadgeCheck,
-				});
-			}
+			// Licence (fork feature) lives under "My Account": every user may
+			// read it, only superadmins can change it.
 			nav.push({
 				section: "Server",
 				items: serverItems,

@@ -32,7 +32,7 @@ func NewLicenseHandler(settings *store.SettingsStore, hosts *store.HostsStore, c
 }
 
 // Get handles GET /api/v1/license - effective licence plus current usage.
-// Read-only, visible to anyone with can_manage_settings.
+// Read-only, visible to every signed-in user (usage figures only, nothing secret).
 func (h *LicenseHandler) Get(w http.ResponseWriter, r *http.Request) {
 	s, err := h.settings.GetFirst(r.Context())
 	if err != nil {
