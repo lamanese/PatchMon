@@ -11,6 +11,84 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// pool_cache.go may call Run for one database from several goroutines.
+func TestBridge_ConcurrentRunsBridgeOnce(t *testing.T) {
+	dbURL := newTestDB(t)
+	makeLegacyForkDB(t, dbURL, 5)
+
+	const callers = 4
+	errs := make(chan error, callers)
+	for i := 0; i < callers; i++ {
+		go func() { errs <- Run(dbURL, discardLogger()) }()
+	}
+	for i := 0; i < callers; i++ {
+		if err := <-errs; err != nil {
+			t.Errorf("concurrent Run %d: %v", i, err)
+		}
+	}
+	up, fork, _ := dbVersions(t, dbURL)
+	if want := highestVersion(t, migrationsFS, "migrations"); up != want {
+		t.Errorf("upstream version = %d, want %d", up, want)
+	}
+	if want := highestVersion(t, forkMigrationsFS, "migrations_fork"); fork != want {
+		t.Errorf("fork version = %d, want %d", fork, want)
+	}
+}
+
+// schemaFingerprint lists columns, indexes and constraints in a stable order.
+func schemaFingerprint(t *testing.T, dbURL string) string {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dbURL)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	const q = `
+SELECT 'col|' || table_name || '|' || column_name || '|' || data_type || '|' || is_nullable || '|' || COALESCE(column_default, '')
+  FROM information_schema.columns WHERE table_schema = current_schema()
+UNION ALL
+SELECT 'idx|' || tablename || '|' || indexname || '|' || indexdef
+  FROM pg_indexes WHERE schemaname = current_schema()
+UNION ALL
+SELECT 'con|' || conrelid::regclass::text || '|' || conname || '|' || pg_get_constraintdef(oid)
+  FROM pg_constraint WHERE connamespace = current_schema()::regnamespace
+ORDER BY 1`
+	rows, err := conn.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("fingerprint query: %v", err)
+	}
+	defer rows.Close()
+	var sb strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		sb.WriteString(line)
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
+// A bridged legacy database must end up with the same schema as a fresh install.
+func TestBridge_SchemaMatchesFreshInstall(t *testing.T) {
+	fresh := newTestDB(t)
+	if err := Run(fresh, discardLogger()); err != nil {
+		t.Fatalf("Run fresh: %v", err)
+	}
+	legacy := newTestDB(t)
+	makeLegacyForkDB(t, legacy, 5)
+	if err := Run(legacy, discardLogger()); err != nil {
+		t.Fatalf("Run legacy: %v", err)
+	}
+	a, b := schemaFingerprint(t, fresh), schemaFingerprint(t, legacy)
+	if a != b {
+		t.Errorf("schemas differ.\n--- fresh\n%s\n--- bridged\n%s", a, b)
+	}
+}
+
 func TestBridge_LegacyDatabaseAtEveryLevel(t *testing.T) {
 	// The set of legacy levels a pre-split image could have produced is closed
 	// at len(forkMarkers) forever (fork 1..6 = old 41..46); it must never track
