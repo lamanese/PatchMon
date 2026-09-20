@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -242,6 +243,12 @@ func parseHexByte(hex string) (byte, error) {
 func (m *Manager) getDNSServers() []string {
 	// Initialize as empty slice (not nil) to ensure JSON marshals as [] instead of null
 	servers := []string{}
+
+	// /etc/resolv.conf doesn't exist on Windows; don't even attempt the read
+	// (avoids a misleading "Failed to read /etc/resolv.conf" warning on every report).
+	if runtime.GOOS == "windows" {
+		return servers
+	}
 
 	// Read /etc/resolv.conf
 	data, err := os.ReadFile("/etc/resolv.conf")

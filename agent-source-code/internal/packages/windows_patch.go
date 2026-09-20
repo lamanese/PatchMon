@@ -162,8 +162,8 @@ if ($candidate) {
     }
 }
 if (-not $wingetPath) {
-    Write-Output "ERROR:winget.exe not found"
-    exit 1
+    Write-Output "WINGET_NOT_FOUND"
+    exit 0
 }
 `
 
@@ -187,10 +187,7 @@ $env:TERM = 'dumb'
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
 	out, err := cmd.CombinedOutput()
 	output := sanitizeWinGetOutput(string(out))
-	if err != nil {
-		return output, fmt.Errorf("winget upgrade --all failed: %w", err)
-	}
-	return output, nil
+	return interpretWinGetUpgradeAllResult(output, err)
 }
 
 // WinGetUpgradePackage upgrades a specific application by WinGet package ID.
@@ -222,10 +219,7 @@ $env:TERM = 'dumb'
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
 	out, err := cmd.CombinedOutput()
 	output := sanitizeWinGetOutput(string(out))
-	if err != nil {
-		return output, fmt.Errorf("winget upgrade --id %s failed: %w", packageID, err)
-	}
-	return output, nil
+	return interpretWinGetUpgradePackageResult(packageID, output, err)
 }
 
 // RebootRequired checks whether a Windows reboot is pending after update installation.

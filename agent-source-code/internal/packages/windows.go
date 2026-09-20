@@ -1,13 +1,13 @@
 package packages
 
 import (
-	"encoding/json"
 	"os/exec"
 	"regexp"
 	"runtime"
 	"strings"
 
 	"patchmon-agent/internal/logutil"
+	"patchmon-agent/internal/utils"
 	"patchmon-agent/pkg/models"
 
 	"github.com/sirupsen/logrus"
@@ -226,15 +226,10 @@ $result | ConvertTo-Json -Compress -Depth 3
 	}
 
 	outputStr := strings.TrimSpace(string(output))
-	if outputStr == "" || outputStr == "null" || outputStr == "[]" {
-		return nil
-	}
 
-	// PowerShell outputs a single object (not array) when there is exactly one result
-	if !strings.HasPrefix(outputStr, "[") {
-		outputStr = "[" + outputStr + "]"
-	}
-
+	// PowerShell's ConvertTo-Json outputs a bare object (not an array) when
+	// there is exactly one result; UnmarshalPSJSONArray normalizes that
+	// (and "null"/empty output) before decoding.
 	var raw []struct {
 		Name        string `json:"Name"`
 		Version     string `json:"Version"`
@@ -242,8 +237,11 @@ $result | ConvertTo-Json -Compress -Depth 3
 		InstallDate string `json:"InstallDate"`
 		Size        string `json:"Size"`
 	}
-	if err := json.Unmarshal([]byte(outputStr), &raw); err != nil {
+	if err := utils.UnmarshalPSJSONArray([]byte(outputStr), &raw); err != nil {
 		m.logger.WithError(err).Warn("Failed to parse registry JSON")
+		return nil
+	}
+	if len(raw) == 0 {
 		return nil
 	}
 
@@ -744,15 +742,10 @@ $result | ConvertTo-Json -Compress -Depth 4
 		}
 	}
 
-	if outputStr == "" || outputStr == "null" || outputStr == "[]" {
-		return nil
-	}
-
-	// PowerShell may output a single object (not array) when there is exactly one result
-	if !strings.HasPrefix(outputStr, "[") {
-		outputStr = "[" + outputStr + "]"
-	}
-
+	// PowerShell's ConvertTo-Json outputs a bare object (not an array) when
+	// there is exactly one result; UnmarshalPSJSONArray normalizes that
+	// (and "null"/empty output, from either the happy path above or the
+	// COM-error extraction) before decoding.
 	var raw []struct {
 		Name              string   `json:"Name"`
 		CurrentVersion    string   `json:"CurrentVersion"`
@@ -766,8 +759,11 @@ $result | ConvertTo-Json -Compress -Depth 4
 		WUASupportURL     string   `json:"WUASupportURL"`
 		WUARevisionNumber int32    `json:"WUARevisionNumber"`
 	}
-	if err := json.Unmarshal([]byte(outputStr), &raw); err != nil {
+	if err := utils.UnmarshalPSJSONArray([]byte(outputStr), &raw); err != nil {
 		m.logger.WithError(err).Warn("Failed to parse Windows updates JSON")
+		return nil
+	}
+	if len(raw) == 0 {
 		return nil
 	}
 
