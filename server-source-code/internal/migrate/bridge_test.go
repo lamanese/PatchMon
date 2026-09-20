@@ -190,6 +190,26 @@ func TestBridge_AbortsAndLeavesDatabaseUntouched(t *testing.T) {
 	}
 }
 
+// Opening the fork set creates its version table. Doing that on a legacy
+// database before the bridge would hide the database from the bridge for good.
+func TestNeedsBridge(t *testing.T) {
+	legacy := newTestDB(t)
+	makeLegacyForkDB(t, legacy, 6)
+	if need, err := NeedsBridge(context.Background(), legacy); err != nil || !need {
+		t.Fatalf("legacy: NeedsBridge = %v, %v; want true, nil", need, err)
+	}
+	if err := Run(legacy, discardLogger()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if need, err := NeedsBridge(context.Background(), legacy); err != nil || need {
+		t.Fatalf("bridged: NeedsBridge = %v, %v; want false, nil", need, err)
+	}
+	fresh := newTestDB(t)
+	if need, err := NeedsBridge(context.Background(), fresh); err != nil || need {
+		t.Fatalf("fresh: NeedsBridge = %v, %v; want false, nil", need, err)
+	}
+}
+
 // Once a legacy database has been bridged, hasForkTable short-circuits the
 // bridge on every later Run. It must stay a silent no-op: no error, no
 // version change, and no repeat of the "legacy fork database bridged" log.

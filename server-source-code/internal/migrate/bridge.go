@@ -140,3 +140,28 @@ func bridgeLegacyFork(ctx context.Context, databaseURL string, log *slog.Logger)
 	log.Info("legacy fork database bridged", "old_version", version, "fork_version", level, "upstream_version", forkBaseVersion)
 	return nil
 }
+
+// NeedsBridge reports whether the database still has the pre-split layout.
+// Callers that only inspect state (the CLI) must check this before opening the
+// fork set: golang-migrate creates its version table on open, and an empty fork
+// table would make bridgeLegacyFork treat the database as already converted.
+func NeedsBridge(ctx context.Context, databaseURL string) (bool, error) {
+	conn, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		return false, fmt.Errorf("connect: %w", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	var hasUpstreamTable, hasForkTable, hasForkObjects bool
+	if err := conn.QueryRow(ctx,
+		"SELECT to_regclass('schema_migrations') IS NOT NULL, to_regclass($1) IS NOT NULL",
+		ForkMigrationsTable).Scan(&hasUpstreamTable, &hasForkTable); err != nil {
+		return false, fmt.Errorf("inspect version tables: %w", err)
+	}
+	if !hasUpstreamTable || hasForkTable {
+		return false, nil
+	}
+	if err := conn.QueryRow(ctx, forkMarkers[0].query).Scan(&hasForkObjects); err != nil {
+		return false, fmt.Errorf("check fork marker: %w", err)
+	}
+	return hasForkObjects, nil
+}
