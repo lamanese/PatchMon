@@ -18,6 +18,12 @@ func TestAptFailureHints(t *testing.T) {
 			want: []string{"only half installed", "  - fwupd\n", "  - php8.0-fpm\n", "sudo dpkg --configure -a", "sudo dpkg --audit", "keeping the local version"},
 		},
 		{
+			// Byte-exact from a real run on Staging: dpkg output arrives with CRLF.
+			name:   "half installed package with CRLF line endings",
+			output: "Setting up pm-demo-broken (1) ...\r\ndpkg: error processing package pm-demo-broken (--configure):\r\n installed pm-demo-broken package post-installation script subprocess returned error exit status 1\r\nErrors were encountered while processing:\r\n pm-demo-broken\r\nneedrestart is being skipped since dpkg has failed\nE: Sub-process /usr/bin/dpkg returned an error code (1)\n",
+			want:   []string{"only half installed", "  - pm-demo-broken\n", "sudo dpkg --configure -a"},
+		},
+		{
 			name:   "interrupted dpkg (aacdm03)",
 			output: "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem. \n",
 			want:   []string{"sudo dpkg --configure -a", "sudo apt-get -f install"},

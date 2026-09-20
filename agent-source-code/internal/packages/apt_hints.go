@@ -144,6 +144,9 @@ var aptFailureHints = []aptFailureHint{
 // to run in a terminal on the host. PatchMon itself runs none of them. Returns
 // "" when nothing is recognised.
 func AptFailureHints(output string) string {
+	// dpkg runs under a pseudo-terminal during a patch run, so parts of the
+	// output arrive with CRLF line endings.
+	output = strings.ReplaceAll(output, "\r\n", "\n")
 	var b strings.Builder
 	b.WriteString(AptReleaseInfoChangeHint(output))
 	b.WriteString(AptDpkgInterruptedHint(output))
