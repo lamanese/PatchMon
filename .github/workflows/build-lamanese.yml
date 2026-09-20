@@ -50,8 +50,27 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The collision-guard tests in internal/migrate assert that upstream migrations
+  # never touch fork-owned objects; this job must be able to break the fork
+  # build, especially at upstream-sync time.
+  test-migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server-source-code/go.mod
+          cache-dependency-path: server-source-code/go.sum
+
+      - name: Run migrate package tests
+        working-directory: server-source-code
+        run: go test ./internal/migrate/...
+
   build-server:
-    needs: build-agents
+    needs: [build-agents, test-migrate]
     runs-on: ubuntu-latest
     permissions:
       contents: read
