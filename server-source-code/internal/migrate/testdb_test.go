@@ -113,7 +113,6 @@ func dbVersions(t *testing.T, dbURL string) (upstream, fork int64, forkTable boo
 	return upstream, fork, forkTable
 }
 
-//nolint:unused // consumed by makeLegacyForkDB and the bridge tests added in task 2
 func execSQL(t *testing.T, dbURL, sql string, args ...any) {
 	t.Helper()
 	ctx := context.Background()
@@ -130,8 +129,6 @@ func execSQL(t *testing.T, dbURL, sql string, args ...any) {
 // makeLegacyForkDB builds a database exactly as a pre-split fork image left it:
 // upstream migrations up to forkBaseVersion, the first n fork migrations applied
 // by hand, ONE version table holding forkBaseVersion+n, no fork table.
-//
-//nolint:unused // consumed by the bridge tests added in task 2
 func makeLegacyForkDB(t *testing.T, dbURL string, n int) {
 	t.Helper()
 	m, err := OpenSet(dbURL, SetUpstream)

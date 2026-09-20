@@ -1,0 +1,109 @@
+package migrate
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log/slog"
+	"strings"
+	"testing"
+
+	"github.com/jackc/pgx/v5"
+)
+
+func TestBridge_LegacyDatabaseAtEveryLevel(t *testing.T) {
+	forkMax := highestVersion(t, forkMigrationsFS, "migrations_fork")
+	for n := 1; n <= int(forkMax); n++ {
+		n := n
+		t.Run(fmt.Sprintf("legacy_version_%d", forkBaseVersion+n), func(t *testing.T) {
+			dbURL := newTestDB(t)
+			makeLegacyForkDB(t, dbURL, n)
+
+			var buf bytes.Buffer
+			log := slog.New(slog.NewTextHandler(&buf, nil))
+			if err := Run(dbURL, log); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			up, fork, forkTable := dbVersions(t, dbURL)
+			if !forkTable {
+				t.Fatal("fork table missing after bridge")
+			}
+			if want := highestVersion(t, migrationsFS, "migrations"); up != want {
+				t.Errorf("upstream version = %d, want %d", up, want)
+			}
+			if fork != forkMax {
+				t.Errorf("fork version = %d, want %d (missing fork migrations must run after the bridge)", fork, forkMax)
+			}
+			if !strings.Contains(buf.String(), "legacy fork database bridged") {
+				t.Errorf("bridge was not logged; log:\n%s", buf.String())
+			}
+		})
+	}
+}
+
+// 000001_fork re-grants can_reboot_hosts to admin. The bridge must seed the fork
+// table so that migration never runs again on a database that already had it.
+func TestBridge_DoesNotRegrantRebootPermission(t *testing.T) {
+	dbURL := newTestDB(t)
+	makeLegacyForkDB(t, dbURL, 6)
+	execSQL(t, dbURL, "UPDATE role_permissions SET can_reboot_hosts = false WHERE role = 'admin'")
+
+	if err := Run(dbURL, discardLogger()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dbURL)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	var granted bool
+	if err := conn.QueryRow(ctx, "SELECT can_reboot_hosts FROM role_permissions WHERE role = 'admin'").Scan(&granted); err != nil {
+		t.Fatalf("read permission: %v", err)
+	}
+	if granted {
+		t.Error("can_reboot_hosts was re-granted to admin; the bridge re-ran fork migration 1")
+	}
+}
+
+func TestBridge_AbortsAndLeavesDatabaseUntouched(t *testing.T) {
+	cases := []struct {
+		name    string
+		break_  string // SQL that makes the legacy database inconsistent
+		wantErr string
+	}{
+		{"dirty", "UPDATE schema_migrations SET dirty = true", "dirty"},
+		{"version below range", "UPDATE schema_migrations SET version = 39", "outside"},
+		{"version above range", "UPDATE schema_migrations SET version = 47", "outside"},
+		{"marker missing for claimed level", "DROP TABLE patch_schedules", "patch_schedules"},
+		// Version 44 claims fork level 4, but markers 5 and 6 exist. Markers are
+		// checked in level order, so the first one reported is level 5.
+		{"marker present above claimed level", "UPDATE schema_migrations SET version = 44", "theme_preference"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			dbURL := newTestDB(t)
+			makeLegacyForkDB(t, dbURL, 6)
+			execSQL(t, dbURL, tc.break_)
+			upBefore, _, _ := dbVersions(t, dbURL)
+
+			err := Run(dbURL, discardLogger())
+			if err == nil {
+				t.Fatal("Run succeeded on an inconsistent legacy database, want error")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %q, want it to mention %q", err.Error(), tc.wantErr)
+			}
+			up, _, forkTable := dbVersions(t, dbURL)
+			if forkTable {
+				t.Error("fork table was created although the bridge aborted")
+			}
+			if up != upBefore {
+				t.Errorf("schema_migrations changed: %d -> %d", upBefore, up)
+			}
+		})
+	}
+}
