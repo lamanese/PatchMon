@@ -1497,6 +1497,8 @@ When the agent detects it is running on Windows, patch runs are handled by the W
 
 Windows patching is flagged **beta** in 2.0 and the Run Detail page renders the same way regardless of OS. The terminal pane simply shows PowerShell / `winget` output instead of `apt-get` output.
 
+**Definition updates inflating the outstanding-update count.** Microsoft republishes the "Security Intelligence Update for Microsoft Defender Antivirus" (KB2267602) several times a day, and Windows Update Agent reports each one as a new pending update. Left alone, this means a healthy, fully-patched Windows host can permanently show 1 outstanding update. Setting `PM_IGNORE_DEFINITION_UPDATES=true` (see PatchMon Environment Variables Reference) excludes updates in the WUA "Definition Updates" category from every outstanding/security-update count the UI shows (dashboard cards, host list, host detail, alerts) - the updates themselves stay visible in the raw package/update lists and remain fully installable; only the counters change.
+
 ---
 
 ### Where Patching Lives in the UI

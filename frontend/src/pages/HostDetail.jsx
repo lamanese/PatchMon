@@ -315,6 +315,15 @@ const HostDetail = () => {
 	const isWindowsHost = (host?.os_type || host?.expected_platform || "")
 		.toLowerCase()
 		.includes("windows");
+
+	// fork: PM_IGNORE_DEFINITION_UPDATES - show a hint under the update counters
+	// when this host has pending Windows Defender definition updates that the
+	// server is not counting as outstanding.
+	const hasUncountedDefinitionUpdates =
+		settings?.ignore_definition_updates === true &&
+		(host?.host_packages || []).some(
+			(pkg) => pkg.is_definition_update && pkg.needs_update,
+		);
 	const isFreeBSDHost =
 		(host?.package_manager || "").toLowerCase() === "pkg" ||
 		(host?.os_type || host?.expected_platform || "")
@@ -1451,6 +1460,12 @@ const HostDetail = () => {
 					</div>
 				</button>
 			</div>
+
+			{hasUncountedDefinitionUpdates && (
+				<p className="text-xs text-secondary-500 dark:text-white -mt-4 mb-6">
+					Definition updates are not counted (PM_IGNORE_DEFINITION_UPDATES)
+				</p>
+			)}
 
 			{/* Main Content - Full Width */}
 			<div className="flex-1 md:overflow-hidden">
