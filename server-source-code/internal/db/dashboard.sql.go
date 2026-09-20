@@ -39,7 +39,7 @@ hp_package_counts AS (
     FROM host_packages
     WHERE needs_update = true
       -- fork: PM_IGNORE_DEFINITION_UPDATES
-      AND NOT ($3::boolean AND COALESCE(wua_categories @> '["Definition Updates"]'::jsonb, false))
+      AND NOT ($3::boolean AND fork_is_definition_update(wua_categories, wua_kb))
 )
 SELECT
     hc.total_hosts,
@@ -106,7 +106,7 @@ hosts_needing_updates AS (
     JOIN active_hosts ah ON ah.id = hp.host_id
     WHERE hp.needs_update = true
       -- fork: PM_IGNORE_DEFINITION_UPDATES
-      AND NOT ($2::boolean AND COALESCE(hp.wua_categories @> '["Definition Updates"]'::jsonb, false))
+      AND NOT ($2::boolean AND fork_is_definition_update(hp.wua_categories, hp.wua_kb))
 ),
 hosts_with_security AS (
     SELECT COUNT(DISTINCT hp.host_id)::int AS cnt
@@ -114,7 +114,7 @@ hosts_with_security AS (
     JOIN active_hosts ah ON ah.id = hp.host_id
     WHERE hp.needs_update = true AND hp.is_security_update = true
       -- fork: PM_IGNORE_DEFINITION_UPDATES
-      AND NOT ($2::boolean AND COALESCE(hp.wua_categories @> '["Definition Updates"]'::jsonb, false))
+      AND NOT ($2::boolean AND fork_is_definition_update(hp.wua_categories, hp.wua_kb))
 ),
 package_counts AS (
     SELECT
@@ -123,7 +123,7 @@ package_counts AS (
     FROM host_packages
     WHERE needs_update = true
       -- fork: PM_IGNORE_DEFINITION_UPDATES
-      AND NOT ($2::boolean AND COALESCE(wua_categories @> '["Definition Updates"]'::jsonb, false))
+      AND NOT ($2::boolean AND fork_is_definition_update(wua_categories, wua_kb))
 )
 SELECT
     hc.total_hosts,
@@ -171,8 +171,8 @@ func (q *Queries) GetHomepageStats(ctx context.Context, arg GetHomepageStatsPara
 
 const getHostPackageStats = `-- name: GetHostPackageStats :one
 SELECT COUNT(*)::int,
-    COUNT(*) FILTER (WHERE needs_update AND NOT ($1::boolean AND COALESCE(wua_categories @> '["Definition Updates"]'::jsonb, false)))::int,
-    COUNT(*) FILTER (WHERE needs_update AND is_security_update AND NOT ($1::boolean AND COALESCE(wua_categories @> '["Definition Updates"]'::jsonb, false)))::int
+    COUNT(*) FILTER (WHERE needs_update AND NOT ($1::boolean AND fork_is_definition_update(wua_categories, wua_kb)))::int,
+    COUNT(*) FILTER (WHERE needs_update AND is_security_update AND NOT ($1::boolean AND fork_is_definition_update(wua_categories, wua_kb)))::int
 FROM host_packages WHERE host_id = $2
 `
 
@@ -256,7 +256,7 @@ SELECT hp.id, hp.host_id, hp.package_id, hp.current_version, hp.available_versio
     hp.needs_update, hp.is_security_update, hp.last_checked,
     p.name as pkg_name,
     -- fork: PM_IGNORE_DEFINITION_UPDATES (list stays complete; this only flags rows for the frontend badge)
-    COALESCE(hp.wua_categories @> '["Definition Updates"]'::jsonb, false)::boolean AS is_definition_update
+    fork_is_definition_update(hp.wua_categories, hp.wua_kb) AS is_definition_update
 FROM host_packages hp
 JOIN packages p ON p.id = hp.package_id
 WHERE hp.host_id = $1
@@ -349,8 +349,8 @@ SELECT h.id, h.machine_id, h.friendly_name, h.hostname, h.ip, h.os_type, h.os_ve
     COALESCE(sc.cnt, 0)::int as security_updates_count,
     COALESCE(tc.cnt, 0)::int as total_packages_count
 FROM hosts h
-LEFT JOIN (SELECT host_id, COUNT(*) as cnt FROM host_packages WHERE needs_update = true AND NOT ($1::boolean AND COALESCE(wua_categories @> '["Definition Updates"]'::jsonb, false)) GROUP BY host_id) uc ON uc.host_id = h.id
-LEFT JOIN (SELECT host_id, COUNT(*) as cnt FROM host_packages WHERE needs_update = true AND is_security_update = true AND NOT ($1::boolean AND COALESCE(wua_categories @> '["Definition Updates"]'::jsonb, false)) GROUP BY host_id) sc ON sc.host_id = h.id
+LEFT JOIN (SELECT host_id, COUNT(*) as cnt FROM host_packages WHERE needs_update = true AND NOT ($1::boolean AND fork_is_definition_update(wua_categories, wua_kb)) GROUP BY host_id) uc ON uc.host_id = h.id
+LEFT JOIN (SELECT host_id, COUNT(*) as cnt FROM host_packages WHERE needs_update = true AND is_security_update = true AND NOT ($1::boolean AND fork_is_definition_update(wua_categories, wua_kb)) GROUP BY host_id) sc ON sc.host_id = h.id
 LEFT JOIN (SELECT host_id, COUNT(*) as cnt FROM host_packages GROUP BY host_id) tc ON tc.host_id = h.id
 WHERE ($2::text IS NULL OR h.friendly_name ILIKE '%' || $2 || '%' OR h.hostname ILIKE '%' || $2 || '%' OR h.ip ILIKE '%' || $2 || '%' OR h.os_type ILIKE '%' || $2 || '%' OR h.notes ILIKE '%' || $2 || '%')
 AND (

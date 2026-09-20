@@ -54,6 +54,10 @@ type PackageWithStats struct {
 	PackageHosts      []PackageHostRef `json:"packageHosts"`
 	Stats             PackageStats     `json:"stats"`
 	SourceRepos       []PackageRepoRef `json:"sourceRepos"`
+	// IsDefinitionUpdate is independent of PM_IGNORE_DEFINITION_UPDATES - it
+	// only flags the row for the frontend badge; it never hides rows or
+	// changes counts. fork: PM_IGNORE_DEFINITION_UPDATES
+	IsDefinitionUpdate bool `json:"is_definition_update"`
 }
 
 // orEmptyRepos returns an empty slice instead of nil so JSON serialises as [] not null.
@@ -242,7 +246,8 @@ func (s *PackagesStore) List(ctx context.Context, p ListParams) ([]PackageWithSt
 				UpdatesNeeded:   updatesNeeded,
 				SecurityUpdates: securityUpdates,
 			},
-			SourceRepos: orEmptyRepos(reposByPkg[p.ID]),
+			SourceRepos:        orEmptyRepos(reposByPkg[p.ID]),
+			IsDefinitionUpdate: p.IsDefinitionUpdate,
 		}
 	}
 	return out, int(total), nil

@@ -426,7 +426,7 @@ func (h *SystemStatisticsHandler) ProcessTask(ctx context.Context, t *asynq.Task
 }
 
 func (h *SystemStatisticsHandler) collectStats(ctx context.Context, d *database.DB) error {
-	stats, err := d.Queries.GetSystemStatsForInsert(ctx)
+	stats, err := d.Queries.GetSystemStatsForInsert(ctx, d.IgnoreDefinitionUpdates()) // fork: PM_IGNORE_DEFINITION_UPDATES
 	if err != nil {
 		return err
 	}

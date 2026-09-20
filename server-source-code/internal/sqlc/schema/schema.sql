@@ -828,3 +828,37 @@ CREATE TABLE IF NOT EXISTS patch_schedules (
     created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- =============================================================================
+-- Fork additions (functions) - kept together here so sqlc can see them.
+-- Source of truth / migration: internal/migrate/migrations_fork/*_fork_is_definition_update_function.up.sql
+-- =============================================================================
+
+-- fork_is_definition_update: see the migration file above for the full
+-- rationale (localised WUA category names + KB2267602 fallback).
+CREATE OR REPLACE FUNCTION fork_is_definition_update(categories jsonb, kb text)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT COALESCE(
+        jsonb_typeof(categories) = 'array'
+        AND categories ?| ARRAY[
+            'Definition Updates',                  -- en
+            'Definitionsupdates',                  -- de
+            'Mises à jour de définitions',          -- fr
+            'Aggiornamenti delle definizioni'       -- it
+        ],
+        false
+    )
+    OR COALESCE(
+        kb IS NOT NULL
+        AND EXISTS (
+            SELECT 1
+            FROM regexp_split_to_table(upper(kb), '\s*,\s*') AS t(tok)
+            WHERE regexp_replace(t.tok, '^KB', '') = '2267602'
+        ),
+        false
+    );
+$$;

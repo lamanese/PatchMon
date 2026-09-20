@@ -51,7 +51,7 @@ func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, "Failed to load settings")
 		return
 	}
-	JSON(w, http.StatusOK, settingsToResponse(s, h.enc, h.cfg != nil && h.cfg.DisableSignup, h.cfg != nil && h.cfg.HideCommunityLinks))
+	JSON(w, http.StatusOK, settingsToResponse(s, h.enc, h.cfg != nil && h.cfg.DisableSignup, h.cfg != nil && h.cfg.HideCommunityLinks, h.cfg != nil && h.cfg.IgnoreDefinitionUpdates))
 }
 
 // GetServerURL handles GET /settings/server-url (public, used by install commands and Add Host wizard).
@@ -730,10 +730,10 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	JSON(w, http.StatusOK, settingsToResponse(s, h.enc, h.cfg != nil && h.cfg.DisableSignup, h.cfg != nil && h.cfg.HideCommunityLinks))
+	JSON(w, http.StatusOK, settingsToResponse(s, h.enc, h.cfg != nil && h.cfg.DisableSignup, h.cfg != nil && h.cfg.HideCommunityLinks, h.cfg != nil && h.cfg.IgnoreDefinitionUpdates))
 }
 
-func settingsToResponse(s *models.Settings, enc *util.Encryption, signupLocked bool, forkMode bool) map[string]interface{} {
+func settingsToResponse(s *models.Settings, enc *util.Encryption, signupLocked bool, forkMode bool, ignoreDefinitionUpdates bool) map[string]interface{} {
 	discordSecretSet := false
 	if s.DiscordClientSecret != nil && *s.DiscordClientSecret != "" && enc != nil {
 		_, err := enc.Decrypt(*s.DiscordClientSecret)
@@ -773,6 +773,10 @@ func settingsToResponse(s *models.Settings, enc *util.Encryption, signupLocked b
 		"discord_oauth_enabled": s.DiscordOAuthEnabled, "discord_client_id": s.DiscordClientID,
 		"discord_client_secret_set": discordSecretSet,
 		"discord_redirect_uri":      s.DiscordRedirectURI, "discord_button_text": s.DiscordButtonText,
+		// fork: PM_IGNORE_DEFINITION_UPDATES - HostDetail.jsx falls back to the
+		// full settings response on 401/403 from /settings/public, so this must
+		// be here too or the hint silently disappears for those users.
+		"ignore_definition_updates": ignoreDefinitionUpdates,
 	}
 	return res
 }

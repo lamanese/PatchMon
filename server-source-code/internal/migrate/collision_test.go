@@ -20,6 +20,7 @@ var forkOwnedIdentifiers = []string{
 	"license_max_hosts",
 	"license_enforce",
 	"license_package",
+	"fork_is_definition_update",
 }
 
 func TestUpstreamMigrationsDoNotTouchForkObjects(t *testing.T) {

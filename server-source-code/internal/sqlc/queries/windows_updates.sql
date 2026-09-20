@@ -10,7 +10,7 @@ SELECT hp.id, hp.host_id, hp.package_id, hp.current_version, hp.available_versio
     hp.wua_date_installed, hp.wua_install_result, hp.last_checked,
     p.name AS pkg_name, p.description AS pkg_description,
     -- fork: PM_IGNORE_DEFINITION_UPDATES (list stays complete; this only flags rows for the frontend badge)
-    COALESCE(hp.wua_categories @> '["Definition Updates"]'::jsonb, false)::boolean AS is_definition_update
+    fork_is_definition_update(hp.wua_categories, hp.wua_kb) AS is_definition_update
 FROM host_packages hp
 JOIN packages p ON p.id = hp.package_id
 WHERE hp.host_id = $1
@@ -59,8 +59,8 @@ WHERE hp.host_id = sqlc.arg('host_id')
 -- Counts pending Windows Updates for a host (for dashboard/stats).
 -- fork: PM_IGNORE_DEFINITION_UPDATES (pending/security exclude Definition Updates when the flag is on; installed_count is untouched)
 SELECT
-    COUNT(*) FILTER (WHERE needs_update = true AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND COALESCE(wua_categories @> '["Definition Updates"]'::jsonb, false)))::int AS pending_count,
-    COUNT(*) FILTER (WHERE needs_update = true AND is_security_update = true AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND COALESCE(wua_categories @> '["Definition Updates"]'::jsonb, false)))::int AS security_count,
+    COUNT(*) FILTER (WHERE needs_update = true AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(wua_categories, wua_kb)))::int AS pending_count,
+    COUNT(*) FILTER (WHERE needs_update = true AND is_security_update = true AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(wua_categories, wua_kb)))::int AS security_count,
     COUNT(*) FILTER (WHERE needs_update = false)::int                         AS installed_count
 FROM host_packages
 WHERE host_id = sqlc.arg('host_id') AND wua_guid IS NOT NULL;

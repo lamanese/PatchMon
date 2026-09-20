@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"testing"
 )
 
@@ -63,11 +64,13 @@ func TestLoad_EnableLoggingDefault(t *testing.T) {
 // false and only turn on for the literal string "true".
 func TestLoad_IgnoreDefinitionUpdatesDefault(t *testing.T) {
 	tests := []struct {
-		name string
-		env  string
-		want bool
+		name  string
+		env   string
+		unset bool // when true, the variable is genuinely absent (os.Unsetenv), not just set to ""
+		want  bool
 	}{
-		{name: "unset defaults to off", env: "", want: false},
+		{name: "genuinely unset defaults to off", unset: true, want: false},
+		{name: "explicit empty string defaults to off", env: "", want: false},
 		{name: "explicit true", env: "true", want: true},
 		{name: "explicit false stays off", env: "false", want: false},
 		{name: "garbage value stays off (fail closed, not fail open)", env: "TRUE", want: false},
@@ -77,7 +80,22 @@ func TestLoad_IgnoreDefinitionUpdatesDefault(t *testing.T) {
 			t.Setenv("ENV_FILE", "/nonexistent")
 			t.Setenv("DATABASE_URL", "postgresql://localhost/test")
 			t.Setenv("JWT_SECRET", "test-secret")
-			t.Setenv("PM_IGNORE_DEFINITION_UPDATES", tt.env)
+			if tt.unset {
+				// t.Setenv can only set a value, never remove the variable, so a
+				// genuinely-absent PM_IGNORE_DEFINITION_UPDATES needs a manual
+				// unset with restore, distinct from the "set to empty string" case.
+				original, wasSet := os.LookupEnv("PM_IGNORE_DEFINITION_UPDATES")
+				if err := os.Unsetenv("PM_IGNORE_DEFINITION_UPDATES"); err != nil {
+					t.Fatalf("Unsetenv: %v", err)
+				}
+				t.Cleanup(func() {
+					if wasSet {
+						_ = os.Setenv("PM_IGNORE_DEFINITION_UPDATES", original)
+					}
+				})
+			} else {
+				t.Setenv("PM_IGNORE_DEFINITION_UPDATES", tt.env)
+			}
 
 			cfg, err := Load()
 			if err != nil {

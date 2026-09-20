@@ -436,7 +436,8 @@ func (s *HostsStore) ListForScopedApi(ctx context.Context, groupIDs []string, in
 	}
 
 	if includeStats && len(hostIDs) > 0 {
-		rows, err := d.Queries.GetHostPackageStatsByHostIDs(ctx, hostIDs)
+		// fork: PM_IGNORE_DEFINITION_UPDATES - keep in agreement with GetHostPackageStats
+		rows, err := d.Queries.GetHostPackageStatsByHostIDs(ctx, db.GetHostPackageStatsByHostIDsParams{HostIds: hostIDs, IgnoreDefinitionUpdates: d.IgnoreDefinitionUpdates()})
 		if err != nil {
 			return nil, nil, nil, err
 		}

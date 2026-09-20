@@ -609,7 +609,7 @@ func (s *DashboardStore) GetPackageTrends(ctx context.Context, days int, hostID 
 					securityCount: int(latest.UniqueSecurityCount),
 				})
 			} else {
-				fallback, err := d.Queries.GetSystemStatsForInsert(ctx)
+				fallback, err := d.Queries.GetSystemStatsForInsert(ctx, d.IgnoreDefinitionUpdates()) // fork: PM_IGNORE_DEFINITION_UPDATES
 				if err == nil {
 					aggregated = append(aggregated, packageTrendPoint{
 						timeKey:       endDate.Format("2006-01-02"),
@@ -818,7 +818,7 @@ func (s *DashboardStore) buildPackageTrendsResponse(ctx context.Context, filled 
 				"security_count": latest.UniqueSecurityCount,
 			}
 		} else {
-			fallback, err := d.Queries.GetSystemStatsForInsert(ctx)
+			fallback, err := d.Queries.GetSystemStatsForInsert(ctx, d.IgnoreDefinitionUpdates()) // fork: PM_IGNORE_DEFINITION_UPDATES
 			if err == nil {
 				currentPackageState = map[string]interface{}{
 					"total_packages": fallback.Column3,
