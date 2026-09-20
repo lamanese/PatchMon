@@ -31,16 +31,18 @@ export const extractHostCommands = (output) => {
 	const commands = [];
 	const seen = new Set();
 	let inBlock = false;
+	let lastResort = false;
 	for (const line of lines) {
 		if (line.startsWith("[PatchMon]")) {
 			inBlock = line.trimEnd().endsWith(":");
+			lastResort = line.startsWith("[PatchMon] Last resort");
 			continue;
 		}
 		if (inBlock && /^ {2}\S/.test(line) && !line.startsWith("  - ")) {
 			const [command, comment] = line.trim().split(/\s{3,}#\s*/);
 			if (command && !seen.has(command)) {
 				seen.add(command);
-				commands.push({ command, comment: comment || "" });
+				commands.push({ command, comment: comment || "", lastResort });
 			}
 			continue;
 		}
@@ -77,8 +79,11 @@ export const CopyCommandButton = ({ text, label = "Copy", className = "" }) => {
 // with a copy button. They are run by an administrator on the host; PatchMon
 // never runs them.
 const PatchRunHelp = ({ output, className = "" }) => {
-	const commands = extractHostCommands(output);
-	if (commands.length === 0) return null;
+	const all = extractHostCommands(output);
+	if (all.length === 0) return null;
+	// Last-resort commands (removing a package) are never part of "Copy all".
+	const commands = all.filter((c) => !c.lastResort);
+	const lastResort = all.filter((c) => c.lastResort);
 	return (
 		<div
 			className={`rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20 p-3 ${className}`}
@@ -112,6 +117,24 @@ const PatchRunHelp = ({ output, className = "" }) => {
 					</li>
 				))}
 			</ul>
+			{lastResort.length > 0 && (
+				<div className="mt-3 rounded border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/30 p-2">
+					<p className="text-xs font-medium text-red-900 dark:text-red-100">
+						Last resort, only if the package is not needed on this host. apt
+						lists everything it would remove and asks before doing it.
+					</p>
+					<ul className="mt-1.5 space-y-1.5">
+						{lastResort.map((c) => (
+							<li key={c.command} className="flex items-start gap-2">
+								<CopyCommandButton text={c.command} className="flex-shrink-0" />
+								<code className="block font-mono text-xs text-secondary-900 dark:text-white break-all">
+									{c.command}
+								</code>
+							</li>
+						))}
+					</ul>
+				</div>
+			)}
 			<p className="mt-2 text-xs text-amber-900/80 dark:text-amber-100/80">
 				PatchMon does not run these commands. The explanation is at the end of
 				the output below.

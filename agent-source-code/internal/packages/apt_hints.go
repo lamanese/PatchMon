@@ -16,6 +16,10 @@ type aptFailureHint struct {
 	problem  string
 	commands []string
 	note     string
+	// lastResort builds commands that are only right in some situations and can
+	// do damage in others. They are printed under their own heading, which the
+	// UI keeps out of "Copy all".
+	lastResort func(details []string) []string
 }
 
 var (
@@ -26,6 +30,10 @@ var (
 	aptNoReleaseRe        = regexp.MustCompile(`The repository '([^']+)' (?:does not have a Release file|no longer has a Release file|is not signed)`)
 	aptResolveRe          = regexp.MustCompile(`Temporary failure resolving '([^']+)'|Could not resolve '([^']+)'`)
 )
+
+// validHintPackageName keeps anything that is not a plain package name out of
+// a command the operator is invited to copy.
+var validHintPackageName = regexp.MustCompile(`^[a-z0-9][a-z0-9+.\-]*(:[a-z0-9\-]+)?$`)
 
 func uniqueSorted(in []string) []string {
 	seen := map[string]bool{}
@@ -90,6 +98,15 @@ var aptFailureHints = []aptFailureHint{
 			"If 'dpkg --configure -a' stops with the same error again, the installation script of that package itself is failing: " +
 			"the line above 'Errors were encountered' says why, and the fix is specific to that package (its documentation or vendor). " +
 			"Do not remove a package to get rid of the error unless you know nothing depends on it.",
+		lastResort: func(pkgs []string) []string {
+			var cmds []string
+			for _, p := range pkgs {
+				if validHintPackageName.MatchString(p) {
+					cmds = append(cmds, "sudo apt-get remove "+p)
+				}
+			}
+			return cmds
+		},
 	},
 	{
 		match:    contains("Unmet dependencies"),
@@ -170,6 +187,14 @@ func AptFailureHints(output string) string {
 		}
 		if h.note != "" {
 			b.WriteString("[PatchMon] " + h.note + "\n")
+		}
+		if h.lastResort != nil {
+			if cmds := h.lastResort(details); len(cmds) > 0 {
+				b.WriteString("[PatchMon] Last resort, only if the package is not needed on this host (apt lists everything it would remove and asks before doing it):\n")
+				for _, c := range cmds {
+					b.WriteString("  " + c + "\n")
+				}
+			}
 		}
 	}
 	if b.Len() == 0 {

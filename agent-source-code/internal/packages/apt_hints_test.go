@@ -21,7 +21,7 @@ func TestAptFailureHints(t *testing.T) {
 			// Byte-exact from a real run on Staging: dpkg output arrives with CRLF.
 			name:   "half installed package with CRLF line endings",
 			output: "Setting up pm-demo-broken (1) ...\r\ndpkg: error processing package pm-demo-broken (--configure):\r\n installed pm-demo-broken package post-installation script subprocess returned error exit status 1\r\nErrors were encountered while processing:\r\n pm-demo-broken\r\nneedrestart is being skipped since dpkg has failed\nE: Sub-process /usr/bin/dpkg returned an error code (1)\n",
-			want:   []string{"only half installed", "  - pm-demo-broken\n", "sudo dpkg --configure -a", "stops with the same error again", "Do not remove a package"},
+			want:   []string{"only half installed", "  - pm-demo-broken\n", "sudo dpkg --configure -a", "stops with the same error again", "Do not remove a package", "[PatchMon] Last resort", "  sudo apt-get remove pm-demo-broken\n"},
 		},
 		{
 			name:   "interrupted dpkg (aacdm03)",
@@ -69,5 +69,21 @@ func TestAptFailureHints(t *testing.T) {
 	}
 	if got := AptFailureHints("E: Unable to locate package does-not-exist\n"); got != "" {
 		t.Errorf("unknown failure must not produce a hint, got:\n%s", got)
+	}
+}
+
+// TestAptFailureHints_LastResortOnlyForPlainPackageNames: text taken from the
+// run output ends up in a command the operator may copy, so anything that is
+// not a plain package name must never get there.
+func TestAptFailureHints_LastResortOnlyForPlainPackageNames(t *testing.T) {
+	out := "Errors were encountered while processing:\n evil;rm\n $(reboot)\n good-pkg1.2\n"
+	got := AptFailureHints(out)
+	if !strings.Contains(got, "  sudo apt-get remove good-pkg1.2\n") {
+		t.Errorf("valid package name must get a last-resort command:\n%s", got)
+	}
+	for _, bad := range []string{"remove evil", "remove $(", "remove ;"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("unsafe name leaked into a command (%q):\n%s", bad, got)
+		}
 	}
 }
