@@ -2588,7 +2588,10 @@ func runPatch(patchRunID, patchType string, packageNames []string, dryRun bool) 
 						stepErr = err
 					}
 				} else {
-					if err, abort := runStep(false, "apt-get upgrade --with-new-pkgs", "apt-get upgrade failed: %w", "apt-get", "upgrade", "-y", "--with-new-pkgs"); abort {
+					// Keep locally modified configuration files instead of letting
+					// dpkg fail at a prompt nobody can answer (see AptKeepLocalConfigArgs).
+					args := append([]string{"upgrade", "-y", "--with-new-pkgs"}, packages.AptKeepLocalConfigArgs()...)
+					if err, abort := runStep(false, "apt-get upgrade --with-new-pkgs", "apt-get upgrade failed: %w", "apt-get", args...); abort {
 						stepErr = err
 					}
 				}
@@ -2637,7 +2640,8 @@ func runPatch(patchRunID, patchType string, packageNames []string, dryRun bool) 
 						stepErr = err
 					}
 				} else {
-					args := append([]string{"install", "-y"}, packageNames...)
+					args := append([]string{"install", "-y"}, packages.AptKeepLocalConfigArgs()...)
+					args = append(args, packageNames...)
 					if err, abort := runStep(false, "apt-get install", "apt-get install failed: %w", "apt-get", args...); abort {
 						stepErr = err
 					}
@@ -2696,6 +2700,12 @@ func runPatch(patchRunID, patchType string, packageNames []string, dryRun bool) 
 	// authoritative shell_output blob we send with the terminal stage, so
 	// the same text is present whether the frontend is showing the live
 	// buffer or the persisted one.
+	if stepErr != nil && pkgManager == "apt" {
+		// Hint only: the agent never runs "dpkg --configure -a" itself.
+		if hint := packages.AptDpkgInterruptedHint(fullOutput.String()); hint != "" {
+			sink.WriteString(hint)
+		}
+	}
 	trailer := patchRunTrailer(wasStopped, stepErr, dryRun)
 	sink.WriteString(trailer)
 	sink.Flush()

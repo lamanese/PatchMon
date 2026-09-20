@@ -37,3 +37,29 @@ func TestAptReleaseInfoChangeHint(t *testing.T) {
 		t.Errorf("unrelated failure must not produce a hint, got %q", got)
 	}
 }
+
+func TestAptKeepLocalConfigArgs(t *testing.T) {
+	args := strings.Join(AptKeepLocalConfigArgs(), " ")
+	for _, want := range []string{"Dpkg::Options::=--force-confdef", "Dpkg::Options::=--force-confold"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("AptKeepLocalConfigArgs() = %q, missing %q", args, want)
+		}
+	}
+	// confnew would overwrite configuration files the admin has edited.
+	if strings.Contains(args, "confnew") {
+		t.Errorf("AptKeepLocalConfigArgs() = %q must never replace local configuration files", args)
+	}
+}
+
+func TestAptDpkgInterruptedHint(t *testing.T) {
+	out := "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem. \n"
+	hint := AptDpkgInterruptedHint(out)
+	for _, want := range []string{"sudo dpkg --configure -a", "sudo apt-get -f install", "does not repair this automatically"} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("hint missing %q:\n%s", want, hint)
+		}
+	}
+	if got := AptDpkgInterruptedHint("E: Unable to locate package foo"); got != "" {
+		t.Errorf("unrelated failure must not produce a hint, got %q", got)
+	}
+}
