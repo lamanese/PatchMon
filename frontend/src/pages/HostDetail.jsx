@@ -43,6 +43,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import InlineEdit from "../components/InlineEdit";
 import InlineMultiGroupEdit from "../components/InlineMultiGroupEdit";
 import { PackageListDisplay } from "../components/PackageListDisplay";
+import { CopyCommandButton } from "../components/PatchRunHelp";
 import { PatchRunStatusBadge } from "../components/PatchRunStatusBadge";
 import PatchWizard from "../components/PatchWizard";
 import RdpViewer from "../components/RdpViewer";
@@ -1282,11 +1283,19 @@ const HostDetail = () => {
 									. Patch runs will fail until an administrator finishes it in a
 									terminal on the host. PatchMon does not repair this.
 								</p>
-								<pre className="mt-1 select-all whitespace-pre-wrap font-mono">
-									{
-										"sudo dpkg --configure -a\nsudo apt-get -f install\nsudo dpkg --audit"
-									}
-								</pre>
+								<div className="mt-1 flex items-start gap-2">
+									<CopyCommandButton
+										text={
+											"sudo dpkg --configure -a\nsudo apt-get -f install\nsudo dpkg --audit"
+										}
+										className="flex-shrink-0"
+									/>
+									<pre className="select-all whitespace-pre-wrap font-mono">
+										{
+											"sudo dpkg --configure -a\nsudo apt-get -f install\nsudo dpkg --audit"
+										}
+									</pre>
+								</div>
 								<p className="mt-1">
 									If dpkg asks about a modified configuration file, keeping the
 									local version (N, the default) leaves the current settings

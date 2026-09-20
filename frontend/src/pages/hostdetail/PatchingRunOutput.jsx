@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
+import PatchRunHelp from "../../components/PatchRunHelp";
 import { patchingAPI } from "../../utils/patchingApi";
 
 const PatchingRunOutput = ({ runId }) => {
@@ -46,6 +47,7 @@ const PatchingRunOutput = ({ runId }) => {
 					{run.error_message}
 				</p>
 			)}
+			<PatchRunHelp output={run.shell_output} className="mb-3" />
 			<div className="rounded-lg border border-secondary-700 dark:border-secondary-600 bg-[#0d1117] dark:bg-black overflow-hidden shadow-inner">
 				<pre
 					className="block w-full min-h-[120px] max-h-[50vh] overflow-auto p-4 text-[13px] leading-relaxed font-mono text-[#e6edf3] whitespace-pre-wrap break-words"

@@ -86,7 +86,10 @@ var aptFailureHints = []aptFailureHint{
 		},
 		problem:  "These packages could not be configured and are only half installed:",
 		commands: []string{"sudo dpkg --configure -a", "sudo apt-get -f install", "sudo dpkg --audit   # must print nothing afterwards"},
-		note:     "The real error is further up in this output, at the 'Setting up <package>' line of the first package listed.",
+		note: "The real error is further up in this output, at the 'Setting up <package>' line of the first package listed. " +
+			"If 'dpkg --configure -a' stops with the same error again, the installation script of that package itself is failing: " +
+			"the line above 'Errors were encountered' says why, and the fix is specific to that package (its documentation or vendor). " +
+			"Do not remove a package to get rid of the error unless you know nothing depends on it.",
 	},
 	{
 		match:    contains("Unmet dependencies"),

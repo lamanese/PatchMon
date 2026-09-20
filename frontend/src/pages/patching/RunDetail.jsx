@@ -19,6 +19,7 @@ import {
 	PackageListDisplay,
 	PackageNameList,
 } from "../../components/PackageListDisplay";
+import PatchRunHelp from "../../components/PatchRunHelp";
 import { PatchRunStatusBadge } from "../../components/PatchRunStatusBadge";
 import { useToast } from "../../contexts/ToastContext";
 import { formatDate } from "../../utils/api";
@@ -761,6 +762,9 @@ const RunDetail = () => {
 								)}
 							</div>
 						</div>
+						{!LIVE_STATUSES.has(run.status) && (
+							<PatchRunHelp output={shellDisplay} className="mb-3" />
+						)}
 						<div className="flex-1 min-h-0 rounded-lg border border-secondary-700 dark:border-secondary-600 bg-[#0d1117] dark:bg-black overflow-hidden shadow-inner">
 							<pre
 								ref={outputRef}
