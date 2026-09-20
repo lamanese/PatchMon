@@ -12,8 +12,12 @@ import (
 )
 
 func TestBridge_LegacyDatabaseAtEveryLevel(t *testing.T) {
+	// The set of legacy levels a pre-split image could have produced is closed
+	// at len(forkMarkers) forever (fork 1..6 = old 41..46); it must never track
+	// the growing fork migration set. forkMax is only the post-bridge target:
+	// migrations added after the split (000007+) must still run after bridging.
 	forkMax := highestVersion(t, forkMigrationsFS, "migrations_fork")
-	for n := 1; n <= int(forkMax); n++ {
+	for n := 1; n <= len(forkMarkers); n++ {
 		n := n
 		t.Run(fmt.Sprintf("legacy_version_%d", forkBaseVersion+n), func(t *testing.T) {
 			dbURL := newTestDB(t)
@@ -46,7 +50,7 @@ func TestBridge_LegacyDatabaseAtEveryLevel(t *testing.T) {
 // table so that migration never runs again on a database that already had it.
 func TestBridge_DoesNotRegrantRebootPermission(t *testing.T) {
 	dbURL := newTestDB(t)
-	makeLegacyForkDB(t, dbURL, 6)
+	makeLegacyForkDB(t, dbURL, len(forkMarkers))
 	execSQL(t, dbURL, "UPDATE role_permissions SET can_reboot_hosts = false WHERE role = 'admin'")
 
 	if err := Run(dbURL, discardLogger()); err != nil {
@@ -86,7 +90,7 @@ func TestBridge_AbortsAndLeavesDatabaseUntouched(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			dbURL := newTestDB(t)
-			makeLegacyForkDB(t, dbURL, 6)
+			makeLegacyForkDB(t, dbURL, len(forkMarkers))
 			execSQL(t, dbURL, tc.break_)
 			upBefore, _, _ := dbVersions(t, dbURL)
 
@@ -105,5 +109,35 @@ func TestBridge_AbortsAndLeavesDatabaseUntouched(t *testing.T) {
 				t.Errorf("schema_migrations changed: %d -> %d", upBefore, up)
 			}
 		})
+	}
+}
+
+// Once a legacy database has been bridged, hasForkTable short-circuits the
+// bridge on every later Run. It must stay a silent no-op: no error, no
+// version change, and no repeat of the "legacy fork database bridged" log.
+func TestBridge_SecondRunOnBridgedDatabaseIsNoOp(t *testing.T) {
+	dbURL := newTestDB(t)
+	makeLegacyForkDB(t, dbURL, len(forkMarkers))
+
+	if err := Run(dbURL, discardLogger()); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	upBefore, forkBefore, _ := dbVersions(t, dbURL)
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	if err := Run(dbURL, log); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	up, fork, forkTable := dbVersions(t, dbURL)
+	if !forkTable {
+		t.Fatal("fork table missing after second Run")
+	}
+	if up != upBefore || fork != forkBefore {
+		t.Errorf("versions changed on second run: %d/%d -> %d/%d", upBefore, forkBefore, up, fork)
+	}
+	if strings.Contains(buf.String(), "legacy fork database bridged") {
+		t.Errorf("bridge ran again on an already-bridged database; log:\n%s", buf.String())
 	}
 }

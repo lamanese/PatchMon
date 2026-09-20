@@ -35,6 +35,12 @@ func tableExists(table string) string {
 	return fmt.Sprintf(`SELECT to_regclass('%s') IS NOT NULL`, table)
 }
 
+// forkMarkers is CLOSED: it describes only the six pre-split fork migrations
+// (fork level N = legacy version forkBaseVersion+N, for N in 1..6). New fork
+// migrations (000007 and beyond) run through the normal fork migration set
+// after the bridge and must never get an entry here — a pre-split image could
+// never have produced them, and adding one would silently widen the accepted
+// legacy version range.
 var forkMarkers = []forkMarker{
 	{1, "column role_permissions.can_reboot_hosts", columnExists("role_permissions", "can_reboot_hosts")},
 	{2, "column hosts.allow_reboot", columnExists("hosts", "allow_reboot")},
