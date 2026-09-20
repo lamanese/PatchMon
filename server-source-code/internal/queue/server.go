@@ -235,8 +235,12 @@ func NewScheduler(opts asynq.RedisClientOpt, db *database.DB, log *slog.Logger) 
 		return nil, err
 	}
 
+	// Hourly, not daily: a 'running' patch run can go stale well within a day
+	// (see patchRunRunningStaleAfter), and daily left every other stale
+	// status (queued/pending_validation/pending_approval/validated/approved)
+	// piling up for up to 24h before the next sweep even looked at them.
 	patchRunCleanupTask := asynq.NewTask(TypePatchRunCleanup, nil)
-	if _, err := scheduler.Register("30 0 * * *", patchRunCleanupTask, asynq.Queue(QueuePatchRunCleanup), asynq.Retention(AutomationRetention)); err != nil {
+	if _, err := scheduler.Register("30 * * * *", patchRunCleanupTask, asynq.Queue(QueuePatchRunCleanup), asynq.Retention(AutomationRetention)); err != nil {
 		return nil, err
 	}
 

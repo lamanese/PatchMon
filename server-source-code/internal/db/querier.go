@@ -210,6 +210,25 @@ type Querier interface {
 	FindSessionByUserAndDeviceID(ctx context.Context, arg FindSessionByUserAndDeviceIDParams) (UserSession, error)
 	FindSessionWithTfaBypass(ctx context.Context, arg FindSessionWithTfaBypassParams) (FindSessionWithTfaBypassRow, error)
 	FindValidTrustedDevice(ctx context.Context, arg FindValidTrustedDeviceParams) (UserTrustedDevice, error)
+	// Fork additions below - do not edit CancelStalledPatchRuns above so an
+	// upstream sync never conflicts on it; the fork's patch-run-cleanup job
+	// (internal/queue/workers.go) uses the two queries below instead, which
+	// close the gaps CancelStalledPatchRuns has: it never matches 'running' rows
+	// whose started_at is NULL (a code path can reset a run to 'running' without
+	// setting it - see cleanupDB's comment), and it has no notion of any other
+	// status ever getting stuck (queued/pending_validation forever if a host
+	// never reconnects, pending_approval/validated/approved forever if nobody
+	// approves them).
+	// COALESCE(started_at, updated_at, created_at) covers a 'running' row whose
+	// started_at was left NULL by a status reset that didn't also set it.
+	ForkCancelStaleRunningPatchRuns(ctx context.Context, arg ForkCancelStaleRunningPatchRunsParams) (int64, error)
+	// Generic "stuck in a non-terminal, non-running status" reaper, parameterised
+	// by which statuses and threshold the caller wants (queued/pending_validation
+	// at 24h, or pending_approval/validated/approved at 7 days - see cleanupDB).
+	// updated_at is bumped by every write to the row (every UPDATE ... patch_runs
+	// query above sets it), so GREATEST(updated_at, scheduled_at) never reaps a
+	// run before its own scheduled_at plus the caller's threshold has elapsed.
+	ForkCancelStaleWaitingPatchRuns(ctx context.Context, arg ForkCancelStaleWaitingPatchRunsParams) (int64, error)
 	GetAcceptedVersionsByUserID(ctx context.Context, userID string) ([]string, error)
 	GetAlertActionByName(ctx context.Context, name string) (AlertAction, error)
 	GetAlertByID(ctx context.Context, id string) (GetAlertByIDRow, error)

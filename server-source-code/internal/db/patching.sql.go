@@ -245,6 +245,65 @@ func (q *Queries) ExistsPatchPolicyExclusion(ctx context.Context, arg ExistsPatc
 	return exists, err
 }
 
+const forkCancelStaleRunningPatchRuns = `-- name: ForkCancelStaleRunningPatchRuns :execrows
+
+UPDATE patch_runs
+SET status = 'cancelled', error_message = $1, completed_at = NOW(), updated_at = NOW()
+WHERE status = 'running'
+  AND COALESCE(started_at, updated_at, created_at) < $2
+`
+
+type ForkCancelStaleRunningPatchRunsParams struct {
+	ErrorMessage *string          `json:"error_message"`
+	Threshold    pgtype.Timestamp `json:"threshold"`
+}
+
+// Fork additions below - do not edit CancelStalledPatchRuns above so an
+// upstream sync never conflicts on it; the fork's patch-run-cleanup job
+// (internal/queue/workers.go) uses the two queries below instead, which
+// close the gaps CancelStalledPatchRuns has: it never matches 'running' rows
+// whose started_at is NULL (a code path can reset a run to 'running' without
+// setting it - see cleanupDB's comment), and it has no notion of any other
+// status ever getting stuck (queued/pending_validation forever if a host
+// never reconnects, pending_approval/validated/approved forever if nobody
+// approves them).
+// COALESCE(started_at, updated_at, created_at) covers a 'running' row whose
+// started_at was left NULL by a status reset that didn't also set it.
+func (q *Queries) ForkCancelStaleRunningPatchRuns(ctx context.Context, arg ForkCancelStaleRunningPatchRunsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, forkCancelStaleRunningPatchRuns, arg.ErrorMessage, arg.Threshold)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const forkCancelStaleWaitingPatchRuns = `-- name: ForkCancelStaleWaitingPatchRuns :execrows
+UPDATE patch_runs
+SET status = 'cancelled', error_message = $1, completed_at = NOW(), updated_at = NOW()
+WHERE status = ANY($2::text[])
+  AND GREATEST(updated_at, COALESCE(scheduled_at, updated_at)) < $3
+`
+
+type ForkCancelStaleWaitingPatchRunsParams struct {
+	ErrorMessage *string          `json:"error_message"`
+	Statuses     []string         `json:"statuses"`
+	Threshold    pgtype.Timestamp `json:"threshold"`
+}
+
+// Generic "stuck in a non-terminal, non-running status" reaper, parameterised
+// by which statuses and threshold the caller wants (queued/pending_validation
+// at 24h, or pending_approval/validated/approved at 7 days - see cleanupDB).
+// updated_at is bumped by every write to the row (every UPDATE ... patch_runs
+// query above sets it), so GREATEST(updated_at, scheduled_at) never reaps a
+// run before its own scheduled_at plus the caller's threshold has elapsed.
+func (q *Queries) ForkCancelStaleWaitingPatchRuns(ctx context.Context, arg ForkCancelStaleWaitingPatchRunsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, forkCancelStaleWaitingPatchRuns, arg.ErrorMessage, arg.Statuses, arg.Threshold)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getDirectPatchPolicyAssignment = `-- name: GetDirectPatchPolicyAssignment :one
 SELECT pp.id, pp.name, pp.description, pp.patch_delay_type, pp.delay_minutes, pp.fixed_time_utc, pp.timezone, pp.created_at, pp.updated_at FROM patch_policy_assignments ppa
 JOIN patch_policies pp ON ppa.patch_policy_id = pp.id

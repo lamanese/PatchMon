@@ -705,6 +705,20 @@ func (h *UpdateAgentHandler) ProcessTask(ctx context.Context, t *asynq.Task) err
 	return nil
 }
 
+// terminalPatchRunStatuses are statuses from which a patch run is done -
+// dispatching it to an agent again would re-execute (or re-arm) a run that
+// has already finished, been rejected, or been cancelled (including by the
+// patch-run-cleanup reaper). A run_patch task can fire long after it was
+// enqueued (the deterministic 5-minute offline-retry task, or a task that
+// was already queued when the reaper cancelled the run and only fires once
+// the host reconnects), so this is checked unconditionally, before looking
+// at whether the agent is currently connected.
+var terminalPatchRunStatuses = map[string]bool{
+	"completed": true,
+	"failed":    true,
+	"cancelled": true,
+}
+
 // RunPatchHandler handles run_patch jobs.
 type RunPatchHandler struct {
 	registry    *agentregistry.Registry
@@ -733,14 +747,19 @@ func (h *RunPatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		}
 	}
 
-	if !h.registry.IsConnected(p.ApiID) {
-		// Check if the patch run still exists in the DB (user may have deleted it).
-		run, runErr := h.patchRuns.GetByID(ctx, p.PatchRunID)
-		if runErr != nil || run == nil {
-			h.log.Info("run_patch: patch run deleted or not found, dropping task", "api_id", p.ApiID, "patch_run_id", p.PatchRunID)
-			return nil
-		}
+	// Load the run once, up front, and check its current DB status before
+	// doing anything else - see terminalPatchRunStatuses.
+	run, runErr := h.patchRuns.GetByID(ctx, p.PatchRunID)
+	if runErr != nil || run == nil {
+		h.log.Info("run_patch: patch run deleted or not found, dropping task", "api_id", p.ApiID, "patch_run_id", p.PatchRunID)
+		return nil
+	}
+	if terminalPatchRunStatuses[run.Status] {
+		h.log.Info("run_patch: run already in a terminal state, dropping task", "api_id", p.ApiID, "patch_run_id", p.PatchRunID, "status", run.Status)
+		return nil
+	}
 
+	if !h.registry.IsConnected(p.ApiID) {
 		// Keep the correct status: pending_validation for dry runs, queued for real runs.
 		status := "queued"
 		if p.DryRun {
