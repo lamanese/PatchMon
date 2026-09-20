@@ -740,6 +740,19 @@ var terminalPatchRunStatuses = map[string]bool{
 	"cancelled": true,
 }
 
+// dispatchablePatchRunStatuses are the only statuses a run_patch task may
+// dispatch from. Every run that gets a task is created as "queued" (real and
+// scheduled runs) or "pending_validation" (dry runs) and leaves that status
+// the moment the agent has been told to start. A task that fires for any other
+// status is a duplicate: an asynq redelivery after the send, or a second task
+// for the same run (retry-validation while an offline-retry task was still
+// pending). Dispatching it would run the same patch twice on the host, or
+// reset a "validated" run back to "running".
+var dispatchablePatchRunStatuses = map[string]bool{
+	"queued":             true,
+	"pending_validation": true,
+}
+
 // RunPatchHandler handles run_patch jobs.
 type RunPatchHandler struct {
 	registry    *agentregistry.Registry
@@ -783,6 +796,11 @@ func (h *RunPatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 	}
 	if terminalPatchRunStatuses[run.Status] {
 		h.log.Info("run_patch: run already in a terminal state, dropping task", "api_id", p.ApiID, "patch_run_id", p.PatchRunID, "status", run.Status)
+		return nil
+	}
+
+	if !dispatchablePatchRunStatuses[run.Status] {
+		h.log.Info("run_patch: run is not waiting for dispatch, dropping duplicate task", "api_id", p.ApiID, "patch_run_id", p.PatchRunID, "status", run.Status)
 		return nil
 	}
 

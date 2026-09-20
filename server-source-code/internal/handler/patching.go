@@ -784,6 +784,14 @@ func (h *PatchingHandler) RetryValidation(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// A pending offline-retry task for this run would dispatch the same dry
+	// run a second time once the host is back; this task replaces it.
+	if h.queueInspector != nil {
+		for _, retryID := range queue.OfflineRetryTaskIDs(id) {
+			_ = h.queueInspector.DeleteTask(queue.QueuePatching, retryID)
+		}
+	}
+
 	if _, err := h.queueClient.Enqueue(task); err != nil {
 		h.log.Error("patching: enqueue retry-validation error", "error", err)
 		JSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to queue validation retry"})

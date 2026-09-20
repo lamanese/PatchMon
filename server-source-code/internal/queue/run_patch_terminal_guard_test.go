@@ -36,7 +36,9 @@ func TestRunPatchHandler_DropsTaskForTerminalStatus(t *testing.T) {
 	ctx := context.Background()
 	hostID := insertTestHost(t, d, "guard-host")
 
-	for _, status := range []string{"completed", "failed", "cancelled"} {
+	// "running", "validated", "approved" and "pending_approval" are not terminal,
+	// but a task firing for them is a duplicate (see dispatchablePatchRunStatuses).
+	for _, status := range []string{"completed", "failed", "cancelled", "running", "validated", "approved", "pending_approval"} {
 		status := status
 		t.Run(status, func(t *testing.T) {
 			runID := insertTestPatchRun(t, d, hostID, patchRunFixture{status: status, updatedAt: time.Now()})

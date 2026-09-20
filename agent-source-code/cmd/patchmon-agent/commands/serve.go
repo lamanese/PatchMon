@@ -1566,14 +1566,31 @@ func readWSMessage(conn *websocket.Conn) ([]byte, error) {
 // on an attempted read, so an unbounded send disables the connection watchdog
 // for as long as the service loop is busy. The service loop runs check-ins and
 // reports inline, and proxy input frames fill the buffer in milliseconds.
+//
+// Fork: patch control messages are never dropped. The server has already marked
+// the run as running (run_patch) or answered the operator with "stopping"
+// (patch_run_stop), so losing the message leaves a run stuck until the reaper
+// cancels it hours later, or a patch running on after a stop. They are rare, so
+// a late delivery from a goroutine is safe and keeps the read loop unblocked.
 func dispatchWSMessage(out chan<- wsMsg, m wsMsg) {
 	timer := time.NewTimer(wsDispatchWait)
 	defer timer.Stop()
 	select {
 	case out <- m:
 	case <-timer.C:
+		if wsMustDeliverKinds[m.kind] {
+			logger.WithField("type", logutil.Sanitize(m.kind)).Warn("Service loop busy; delivering WebSocket message late")
+			go func() { out <- m }()
+			return
+		}
 		logger.WithField("type", logutil.Sanitize(m.kind)).Warn("Service loop busy; dropping WebSocket message")
 	}
+}
+
+// wsMustDeliverKinds lists the message kinds dispatchWSMessage must not drop.
+var wsMustDeliverKinds = map[string]bool{
+	"run_patch":      true,
+	"patch_run_stop": true,
 }
 
 func wsLoop(out chan<- wsMsg, dockerEvents <-chan interface{}) {
