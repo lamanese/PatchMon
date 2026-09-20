@@ -140,10 +140,11 @@ WHERE NOT EXISTS (SELECT 1 FROM host_packages hp WHERE hp.package_id = p.id);
 DELETE FROM packages WHERE id = ANY($1::text[]);
 
 -- name: GetPendingUpdateCountsPerHost :many
+-- fork: PM_IGNORE_DEFINITION_UPDATES (used only by the update-threshold alert monitor)
 SELECT
     hp.host_id,
-    SUM(CASE WHEN hp.needs_update THEN 1 ELSE 0 END)::int AS pending_count,
-    SUM(CASE WHEN hp.needs_update AND hp.is_security_update THEN 1 ELSE 0 END)::int AS security_count
+    SUM(CASE WHEN hp.needs_update AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND COALESCE(hp.wua_categories @> '["Definition Updates"]'::jsonb, false)) THEN 1 ELSE 0 END)::int AS pending_count,
+    SUM(CASE WHEN hp.needs_update AND hp.is_security_update AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND COALESCE(hp.wua_categories @> '["Definition Updates"]'::jsonb, false)) THEN 1 ELSE 0 END)::int AS security_count
 FROM host_packages hp
 JOIN hosts h ON h.id = hp.host_id AND h.status = 'active'
 GROUP BY hp.host_id;

@@ -57,6 +57,39 @@ func TestLoad_EnableLoggingDefault(t *testing.T) {
 	}
 }
 
+// TestLoad_IgnoreDefinitionUpdatesDefault mirrors TestLoad_EnableLoggingDefault:
+// PM_IGNORE_DEFINITION_UPDATES follows the same "empty env" == "" comparison
+// style as PM_HIDE_COMMUNITY_LINKS / PM_DISABLE_SIGNUP, so it must default to
+// false and only turn on for the literal string "true".
+func TestLoad_IgnoreDefinitionUpdatesDefault(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want bool
+	}{
+		{name: "unset defaults to off", env: "", want: false},
+		{name: "explicit true", env: "true", want: true},
+		{name: "explicit false stays off", env: "false", want: false},
+		{name: "garbage value stays off (fail closed, not fail open)", env: "TRUE", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENV_FILE", "/nonexistent")
+			t.Setenv("DATABASE_URL", "postgresql://localhost/test")
+			t.Setenv("JWT_SECRET", "test-secret")
+			t.Setenv("PM_IGNORE_DEFINITION_UPDATES", tt.env)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.IgnoreDefinitionUpdates != tt.want {
+				t.Errorf("IgnoreDefinitionUpdates = %v, want %v", cfg.IgnoreDefinitionUpdates, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoad_MissingDatabaseURL(t *testing.T) {
 	t.Setenv("ENV_FILE", "/nonexistent")
 	t.Setenv("DATABASE_URL", "")

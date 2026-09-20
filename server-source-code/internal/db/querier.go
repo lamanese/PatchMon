@@ -136,7 +136,8 @@ type Querier interface {
 	CountVolumes(ctx context.Context, arg CountVolumesParams) (int32, error)
 	CountVolumesByHostID(ctx context.Context, hostID string) (int32, error)
 	// Counts pending Windows Updates for a host (for dashboard/stats).
-	CountWindowsUpdatesByHostID(ctx context.Context, hostID string) (CountWindowsUpdatesByHostIDRow, error)
+	// fork: PM_IGNORE_DEFINITION_UPDATES (pending/security exclude Definition Updates when the flag is on; installed_count is untouched)
+	CountWindowsUpdatesByHostID(ctx context.Context, arg CountWindowsUpdatesByHostIDParams) (CountWindowsUpdatesByHostIDRow, error)
 	CreateAlert(ctx context.Context, arg CreateAlertParams) (Alert, error)
 	CreateAutoEnrollmentToken(ctx context.Context, arg CreateAutoEnrollmentTokenParams) error
 	CreateComplianceProfile(ctx context.Context, arg CreateComplianceProfileParams) (ComplianceProfile, error)
@@ -268,7 +269,7 @@ type Querier interface {
 	GetDockerHostsMinimalByIDs(ctx context.Context, dollar_1 []string) ([]GetDockerHostsMinimalByIDsRow, error)
 	GetFirstComplianceProfileByType(ctx context.Context, type_ string) (ComplianceProfile, error)
 	GetFirstSettings(ctx context.Context) (Setting, error)
-	GetHomepageStats(ctx context.Context, since pgtype.Timestamp) (GetHomepageStatsRow, error)
+	GetHomepageStats(ctx context.Context, arg GetHomepageStatsParams) (GetHomepageStatsRow, error)
 	GetHostByApiID(ctx context.Context, apiID string) (Host, error)
 	GetHostByID(ctx context.Context, id string) (Host, error)
 	GetHostCountsForRepos(ctx context.Context, dollar_1 []string) ([]GetHostCountsForReposRow, error)
@@ -278,7 +279,8 @@ type Querier interface {
 	GetHostGroupsForHosts(ctx context.Context, dollar_1 []string) ([]GetHostGroupsForHostsRow, error)
 	GetHostIDsByGroup(ctx context.Context, hostGroupID string) ([]string, error)
 	GetHostIDsByGroupIDs(ctx context.Context, dollar_1 []string) ([]string, error)
-	GetHostPackageStats(ctx context.Context, hostID string) (GetHostPackageStatsRow, error)
+	// fork: PM_IGNORE_DEFINITION_UPDATES (outdated/security FILTERs exclude Definition Updates when the flag is on; total install count is untouched)
+	GetHostPackageStats(ctx context.Context, arg GetHostPackageStatsParams) (GetHostPackageStatsRow, error)
 	GetHostPackageStatsByHostIDs(ctx context.Context, dollar_1 []string) ([]GetHostPackageStatsByHostIDsRow, error)
 	GetHostPackageStatsByPackageIDs(ctx context.Context, arg GetHostPackageStatsByPackageIDsParams) ([]GetHostPackageStatsByPackageIDsRow, error)
 	GetHostPackagesForScopedApi(ctx context.Context, hostID string) ([]GetHostPackagesForScopedApiRow, error)
@@ -294,6 +296,7 @@ type Querier interface {
 	GetHostWindowsUpdates(ctx context.Context, hostID string) ([]GetHostWindowsUpdatesRow, error)
 	GetHostsByIDs(ctx context.Context, dollar_1 []string) ([]Host, error)
 	GetHostsForPackageTrends(ctx context.Context) ([]GetHostsForPackageTrendsRow, error)
+	// fork: PM_IGNORE_DEFINITION_UPDATES (uc/sc exclude Definition Updates when the flag is on; tc is a total-installed count, left untouched)
 	GetHostsWithCounts(ctx context.Context, arg GetHostsWithCountsParams) ([]GetHostsWithCountsRow, error)
 	// Images
 	GetImageByID(ctx context.Context, id string) (DockerImage, error)
@@ -323,7 +326,8 @@ type Querier interface {
 	GetPatchRunByIDSimple(ctx context.Context, id string) (PatchRun, error)
 	GetPatchScheduleByID(ctx context.Context, id string) (PatchSchedule, error)
 	GetPendingConfig(ctx context.Context, hostID string) (HostPendingConfig, error)
-	GetPendingUpdateCountsPerHost(ctx context.Context) ([]GetPendingUpdateCountsPerHostRow, error)
+	// fork: PM_IGNORE_DEFINITION_UPDATES (used only by the update-threshold alert monitor)
+	GetPendingUpdateCountsPerHost(ctx context.Context, ignoreDefinitionUpdates bool) ([]GetPendingUpdateCountsPerHostRow, error)
 	// Returns WUA GUIDs that are still pending (needs_update=true, not yet installed) for a host.
 	// Used by the server to tell the agent which updates to install.
 	GetPendingWindowsUpdateGUIDs(ctx context.Context, hostID string) ([]*string, error)

@@ -163,6 +163,16 @@ type Config struct {
 	// guard for internet-facing instances. Set PM_DISABLE_SIGNUP=true in .env.
 	DisableSignup bool
 
+	// IgnoreDefinitionUpdates excludes host_packages whose wua_categories
+	// contains "Definition Updates" (Windows Defender's Security Intelligence
+	// Update, KB2267602, which Microsoft republishes several times a day) from
+	// every outstanding/security update counter the product shows or acts on:
+	// dashboard cards, host list columns, host detail stats, homepage stats
+	// and the update-threshold alerts. The rows themselves stay visible and
+	// installable everywhere - only counts change. Set
+	// PM_IGNORE_DEFINITION_UPDATES=true in .env.
+	IgnoreDefinitionUpdates bool
+
 	// LicenseMaxHosts overrides the license_max_hosts DB setting (fork
 	// feature: amanit sells packages by VM count). When > 0, the whole
 	// licence settings tab becomes read-only for the customer superadmin
@@ -271,17 +281,18 @@ func Load() (*Config, error) {
 		OidcUserGroup:        getEnv("OIDC_USER_GROUP", ""),
 		OidcEnforceHTTPS:     getEnv("OIDC_ENFORCE_HTTPS", "true") != "false",
 
-		SSGContentDir:         getEnv("SSG_CONTENT_DIR", "./ssg-content"),
-		AdminMode:             getEnv("ADMIN_MODE", "") == "on",
-		HideCommunityLinks:    getEnv("PM_HIDE_COMMUNITY_LINKS", "") == "true",
-		DisableSignup:         getEnv("PM_DISABLE_SIGNUP", "") == "true",
-		LicenseMaxHosts:       getEnvInt("PM_LICENSE_MAX_HOSTS", 0),
-		LicenseEnforce:        getEnv("PM_LICENSE_ENFORCE", "") == "true",
-		LicensePackage:        getEnv("PM_LICENSE_PACKAGE", ""),
-		BillingPortalURL:      getEnv("BILLING_PORTAL_URL", ""),
-		BillingServiceURL:     getEnv("BILLING_SERVICE_URL", ""),
-		BillingInternalSecret: getEnv("BILLING_INTERNAL_SECRET", ""),
-		ProvisionerURL:        getEnv("PROVISIONER_URL", ""),
+		SSGContentDir:           getEnv("SSG_CONTENT_DIR", "./ssg-content"),
+		AdminMode:               getEnv("ADMIN_MODE", "") == "on",
+		HideCommunityLinks:      getEnv("PM_HIDE_COMMUNITY_LINKS", "") == "true",
+		DisableSignup:           getEnv("PM_DISABLE_SIGNUP", "") == "true",
+		IgnoreDefinitionUpdates: getEnv("PM_IGNORE_DEFINITION_UPDATES", "") == "true",
+		LicenseMaxHosts:         getEnvInt("PM_LICENSE_MAX_HOSTS", 0),
+		LicenseEnforce:          getEnv("PM_LICENSE_ENFORCE", "") == "true",
+		LicensePackage:          getEnv("PM_LICENSE_PACKAGE", ""),
+		BillingPortalURL:        getEnv("BILLING_PORTAL_URL", ""),
+		BillingServiceURL:       getEnv("BILLING_SERVICE_URL", ""),
+		BillingInternalSecret:   getEnv("BILLING_INTERNAL_SECRET", ""),
+		ProvisionerURL:          getEnv("PROVISIONER_URL", ""),
 
 		MaxLoginAttempts:   getEnvInt("MAX_LOGIN_ATTEMPTS", 5),
 		LockoutDurationMin: getEnvInt("LOCKOUT_DURATION_MINUTES", 15),

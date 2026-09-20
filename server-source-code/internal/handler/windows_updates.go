@@ -247,6 +247,8 @@ func (h *WindowsUpdatesHandler) ListForHost(w http.ResponseWriter, r *http.Reque
 			"needs_update":       row.NeedsUpdate,
 			"is_security_update": row.IsSecurityUpdate,
 			"last_checked":       pgTimestampToString(row.LastChecked),
+			// fork: PM_IGNORE_DEFINITION_UPDATES
+			"is_definition_update": row.IsDefinitionUpdate,
 		}
 		if row.WuaGuid != nil {
 			u["guid"] = *row.WuaGuid
@@ -281,7 +283,8 @@ func (h *WindowsUpdatesHandler) ListForHost(w http.ResponseWriter, r *http.Reque
 		updates = append(updates, u)
 	}
 
-	stats, _ := d.Queries.CountWindowsUpdatesByHostID(r.Context(), hostID)
+	// fork: PM_IGNORE_DEFINITION_UPDATES
+	stats, _ := d.Queries.CountWindowsUpdatesByHostID(r.Context(), db.CountWindowsUpdatesByHostIDParams{HostID: hostID, IgnoreDefinitionUpdates: d.IgnoreDefinitionUpdates()})
 
 	JSON(w, http.StatusOK, map[string]interface{}{
 		"host_id":         hostID,

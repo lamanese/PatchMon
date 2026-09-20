@@ -339,8 +339,8 @@ func (q *Queries) GetPackageByID(ctx context.Context, id string) (Package, error
 const getPendingUpdateCountsPerHost = `-- name: GetPendingUpdateCountsPerHost :many
 SELECT
     hp.host_id,
-    SUM(CASE WHEN hp.needs_update THEN 1 ELSE 0 END)::int AS pending_count,
-    SUM(CASE WHEN hp.needs_update AND hp.is_security_update THEN 1 ELSE 0 END)::int AS security_count
+    SUM(CASE WHEN hp.needs_update AND NOT ($1::boolean AND COALESCE(hp.wua_categories @> '["Definition Updates"]'::jsonb, false)) THEN 1 ELSE 0 END)::int AS pending_count,
+    SUM(CASE WHEN hp.needs_update AND hp.is_security_update AND NOT ($1::boolean AND COALESCE(hp.wua_categories @> '["Definition Updates"]'::jsonb, false)) THEN 1 ELSE 0 END)::int AS security_count
 FROM host_packages hp
 JOIN hosts h ON h.id = hp.host_id AND h.status = 'active'
 GROUP BY hp.host_id
@@ -352,8 +352,9 @@ type GetPendingUpdateCountsPerHostRow struct {
 	SecurityCount int32  `json:"security_count"`
 }
 
-func (q *Queries) GetPendingUpdateCountsPerHost(ctx context.Context) ([]GetPendingUpdateCountsPerHostRow, error) {
-	rows, err := q.db.Query(ctx, getPendingUpdateCountsPerHost)
+// fork: PM_IGNORE_DEFINITION_UPDATES (used only by the update-threshold alert monitor)
+func (q *Queries) GetPendingUpdateCountsPerHost(ctx context.Context, ignoreDefinitionUpdates bool) ([]GetPendingUpdateCountsPerHostRow, error) {
+	rows, err := q.db.Query(ctx, getPendingUpdateCountsPerHost, ignoreDefinitionUpdates)
 	if err != nil {
 		return nil, err
 	}

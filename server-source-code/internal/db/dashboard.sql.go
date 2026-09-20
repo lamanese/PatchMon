@@ -38,6 +38,8 @@ hp_package_counts AS (
         COUNT(DISTINCT package_id) FILTER (WHERE is_security_update)::int AS security_updates
     FROM host_packages
     WHERE needs_update = true
+      -- fork: PM_IGNORE_DEFINITION_UPDATES
+      AND NOT ($3::boolean AND COALESCE(wua_categories @> '["Definition Updates"]'::jsonb, false))
 )
 SELECT
     hc.total_hosts,
@@ -55,8 +57,9 @@ CROSS JOIN hp_package_counts hpc
 `
 
 type GetDashboardStatsParams struct {
-	LastUpdate   pgtype.Timestamp `json:"last_update"`
-	LastUpdate_2 pgtype.Timestamp `json:"last_update_2"`
+	LastUpdate              pgtype.Timestamp `json:"last_update"`
+	LastUpdate_2            pgtype.Timestamp `json:"last_update_2"`
+	IgnoreDefinitionUpdates bool             `json:"ignore_definition_updates"`
 }
 
 type GetDashboardStatsRow struct {
@@ -73,7 +76,7 @@ type GetDashboardStatsRow struct {
 }
 
 func (q *Queries) GetDashboardStats(ctx context.Context, arg GetDashboardStatsParams) (GetDashboardStatsRow, error) {
-	row := q.db.QueryRow(ctx, getDashboardStats, arg.LastUpdate, arg.LastUpdate_2)
+	row := q.db.QueryRow(ctx, getDashboardStats, arg.LastUpdate, arg.LastUpdate_2, arg.IgnoreDefinitionUpdates)
 	var i GetDashboardStatsRow
 	err := row.Scan(
 		&i.TotalHosts,
@@ -102,12 +105,16 @@ hosts_needing_updates AS (
     FROM host_packages hp
     JOIN active_hosts ah ON ah.id = hp.host_id
     WHERE hp.needs_update = true
+      -- fork: PM_IGNORE_DEFINITION_UPDATES
+      AND NOT ($2::boolean AND COALESCE(hp.wua_categories @> '["Definition Updates"]'::jsonb, false))
 ),
 hosts_with_security AS (
     SELECT COUNT(DISTINCT hp.host_id)::int AS cnt
     FROM host_packages hp
     JOIN active_hosts ah ON ah.id = hp.host_id
     WHERE hp.needs_update = true AND hp.is_security_update = true
+      -- fork: PM_IGNORE_DEFINITION_UPDATES
+      AND NOT ($2::boolean AND COALESCE(hp.wua_categories @> '["Definition Updates"]'::jsonb, false))
 ),
 package_counts AS (
     SELECT
@@ -115,6 +122,8 @@ package_counts AS (
         COUNT(DISTINCT package_id) FILTER (WHERE is_security_update)::int AS security_updates
     FROM host_packages
     WHERE needs_update = true
+      -- fork: PM_IGNORE_DEFINITION_UPDATES
+      AND NOT ($2::boolean AND COALESCE(wua_categories @> '["Definition Updates"]'::jsonb, false))
 )
 SELECT
     hc.total_hosts,
@@ -130,6 +139,11 @@ CROSS JOIN hosts_with_security hws
 CROSS JOIN package_counts pc
 `
 
+type GetHomepageStatsParams struct {
+	Since                   pgtype.Timestamp `json:"since"`
+	IgnoreDefinitionUpdates bool             `json:"ignore_definition_updates"`
+}
+
 type GetHomepageStatsRow struct {
 	TotalHosts               int32 `json:"total_hosts"`
 	HostsNeedingUpdates      int32 `json:"hosts_needing_updates"`
@@ -140,8 +154,8 @@ type GetHomepageStatsRow struct {
 	RecentUpdates24h         int32 `json:"recent_updates_24h"`
 }
 
-func (q *Queries) GetHomepageStats(ctx context.Context, since pgtype.Timestamp) (GetHomepageStatsRow, error) {
-	row := q.db.QueryRow(ctx, getHomepageStats, since)
+func (q *Queries) GetHomepageStats(ctx context.Context, arg GetHomepageStatsParams) (GetHomepageStatsRow, error) {
+	row := q.db.QueryRow(ctx, getHomepageStats, arg.Since, arg.IgnoreDefinitionUpdates)
 	var i GetHomepageStatsRow
 	err := row.Scan(
 		&i.TotalHosts,
@@ -156,9 +170,16 @@ func (q *Queries) GetHomepageStats(ctx context.Context, since pgtype.Timestamp) 
 }
 
 const getHostPackageStats = `-- name: GetHostPackageStats :one
-SELECT COUNT(*)::int, COUNT(*) FILTER (WHERE needs_update)::int, COUNT(*) FILTER (WHERE needs_update AND is_security_update)::int
-FROM host_packages WHERE host_id = $1
+SELECT COUNT(*)::int,
+    COUNT(*) FILTER (WHERE needs_update AND NOT ($1::boolean AND COALESCE(wua_categories @> '["Definition Updates"]'::jsonb, false)))::int,
+    COUNT(*) FILTER (WHERE needs_update AND is_security_update AND NOT ($1::boolean AND COALESCE(wua_categories @> '["Definition Updates"]'::jsonb, false)))::int
+FROM host_packages WHERE host_id = $2
 `
+
+type GetHostPackageStatsParams struct {
+	IgnoreDefinitionUpdates bool   `json:"ignore_definition_updates"`
+	HostID                  string `json:"host_id"`
+}
 
 type GetHostPackageStatsRow struct {
 	Column1 int32 `json:"column_1"`
@@ -166,8 +187,9 @@ type GetHostPackageStatsRow struct {
 	Column3 int32 `json:"column_3"`
 }
 
-func (q *Queries) GetHostPackageStats(ctx context.Context, hostID string) (GetHostPackageStatsRow, error) {
-	row := q.db.QueryRow(ctx, getHostPackageStats, hostID)
+// fork: PM_IGNORE_DEFINITION_UPDATES (outdated/security FILTERs exclude Definition Updates when the flag is on; total install count is untouched)
+func (q *Queries) GetHostPackageStats(ctx context.Context, arg GetHostPackageStatsParams) (GetHostPackageStatsRow, error) {
+	row := q.db.QueryRow(ctx, getHostPackageStats, arg.IgnoreDefinitionUpdates, arg.HostID)
 	var i GetHostPackageStatsRow
 	err := row.Scan(&i.Column1, &i.Column2, &i.Column3)
 	return i, err
@@ -232,7 +254,9 @@ func (q *Queries) GetHostPackagesForScopedApi(ctx context.Context, hostID string
 const getHostPackagesWithPackages = `-- name: GetHostPackagesWithPackages :many
 SELECT hp.id, hp.host_id, hp.package_id, hp.current_version, hp.available_version,
     hp.needs_update, hp.is_security_update, hp.last_checked,
-    p.name as pkg_name
+    p.name as pkg_name,
+    -- fork: PM_IGNORE_DEFINITION_UPDATES (list stays complete; this only flags rows for the frontend badge)
+    COALESCE(hp.wua_categories @> '["Definition Updates"]'::jsonb, false)::boolean AS is_definition_update
 FROM host_packages hp
 JOIN packages p ON p.id = hp.package_id
 WHERE hp.host_id = $1
@@ -240,15 +264,16 @@ ORDER BY hp.needs_update DESC
 `
 
 type GetHostPackagesWithPackagesRow struct {
-	ID               string           `json:"id"`
-	HostID           string           `json:"host_id"`
-	PackageID        string           `json:"package_id"`
-	CurrentVersion   string           `json:"current_version"`
-	AvailableVersion *string          `json:"available_version"`
-	NeedsUpdate      bool             `json:"needs_update"`
-	IsSecurityUpdate bool             `json:"is_security_update"`
-	LastChecked      pgtype.Timestamp `json:"last_checked"`
-	PkgName          string           `json:"pkg_name"`
+	ID                 string           `json:"id"`
+	HostID             string           `json:"host_id"`
+	PackageID          string           `json:"package_id"`
+	CurrentVersion     string           `json:"current_version"`
+	AvailableVersion   *string          `json:"available_version"`
+	NeedsUpdate        bool             `json:"needs_update"`
+	IsSecurityUpdate   bool             `json:"is_security_update"`
+	LastChecked        pgtype.Timestamp `json:"last_checked"`
+	PkgName            string           `json:"pkg_name"`
+	IsDefinitionUpdate bool             `json:"is_definition_update"`
 }
 
 func (q *Queries) GetHostPackagesWithPackages(ctx context.Context, hostID string) ([]GetHostPackagesWithPackagesRow, error) {
@@ -270,6 +295,7 @@ func (q *Queries) GetHostPackagesWithPackages(ctx context.Context, hostID string
 			&i.IsSecurityUpdate,
 			&i.LastChecked,
 			&i.PkgName,
+			&i.IsDefinitionUpdate,
 		); err != nil {
 			return nil, err
 		}
@@ -323,27 +349,28 @@ SELECT h.id, h.machine_id, h.friendly_name, h.hostname, h.ip, h.os_type, h.os_ve
     COALESCE(sc.cnt, 0)::int as security_updates_count,
     COALESCE(tc.cnt, 0)::int as total_packages_count
 FROM hosts h
-LEFT JOIN (SELECT host_id, COUNT(*) as cnt FROM host_packages WHERE needs_update = true GROUP BY host_id) uc ON uc.host_id = h.id
-LEFT JOIN (SELECT host_id, COUNT(*) as cnt FROM host_packages WHERE needs_update = true AND is_security_update = true GROUP BY host_id) sc ON sc.host_id = h.id
+LEFT JOIN (SELECT host_id, COUNT(*) as cnt FROM host_packages WHERE needs_update = true AND NOT ($1::boolean AND COALESCE(wua_categories @> '["Definition Updates"]'::jsonb, false)) GROUP BY host_id) uc ON uc.host_id = h.id
+LEFT JOIN (SELECT host_id, COUNT(*) as cnt FROM host_packages WHERE needs_update = true AND is_security_update = true AND NOT ($1::boolean AND COALESCE(wua_categories @> '["Definition Updates"]'::jsonb, false)) GROUP BY host_id) sc ON sc.host_id = h.id
 LEFT JOIN (SELECT host_id, COUNT(*) as cnt FROM host_packages GROUP BY host_id) tc ON tc.host_id = h.id
-WHERE ($1::text IS NULL OR h.friendly_name ILIKE '%' || $1 || '%' OR h.hostname ILIKE '%' || $1 || '%' OR h.ip ILIKE '%' || $1 || '%' OR h.os_type ILIKE '%' || $1 || '%' OR h.notes ILIKE '%' || $1 || '%')
+WHERE ($2::text IS NULL OR h.friendly_name ILIKE '%' || $2 || '%' OR h.hostname ILIKE '%' || $2 || '%' OR h.ip ILIKE '%' || $2 || '%' OR h.os_type ILIKE '%' || $2 || '%' OR h.notes ILIKE '%' || $2 || '%')
 AND (
-    $2::text IS NULL
-    OR ($2 = 'ungrouped' AND NOT EXISTS (SELECT 1 FROM host_group_memberships hgm WHERE hgm.host_id = h.id))
-    OR ($2 != 'ungrouped' AND EXISTS (SELECT 1 FROM host_group_memberships hgm WHERE hgm.host_id = h.id AND hgm.host_group_id = $2))
+    $3::text IS NULL
+    OR ($3 = 'ungrouped' AND NOT EXISTS (SELECT 1 FROM host_group_memberships hgm WHERE hgm.host_id = h.id))
+    OR ($3 != 'ungrouped' AND EXISTS (SELECT 1 FROM host_group_memberships hgm WHERE hgm.host_id = h.id AND hgm.host_group_id = $3))
 )
-AND ($3::text IS NULL OR h.status = $3)
-AND ($4::text IS NULL OR h.os_type ILIKE $4)
-AND ($5::text IS NULL OR h.os_version ILIKE $5)
+AND ($4::text IS NULL OR h.status = $4)
+AND ($5::text IS NULL OR h.os_type ILIKE $5)
+AND ($6::text IS NULL OR h.os_version ILIKE $6)
 ORDER BY h.last_update DESC NULLS LAST
 `
 
 type GetHostsWithCountsParams struct {
-	Search    *string `json:"search"`
-	Group     *string `json:"group"`
-	Status    *string `json:"status"`
-	Os        *string `json:"os"`
-	OsVersion *string `json:"os_version"`
+	IgnoreDefinitionUpdates bool    `json:"ignore_definition_updates"`
+	Search                  *string `json:"search"`
+	Group                   *string `json:"group"`
+	Status                  *string `json:"status"`
+	Os                      *string `json:"os"`
+	OsVersion               *string `json:"os_version"`
 }
 
 type GetHostsWithCountsRow struct {
@@ -373,8 +400,10 @@ type GetHostsWithCountsRow struct {
 	TotalPackagesCount     int32            `json:"total_packages_count"`
 }
 
+// fork: PM_IGNORE_DEFINITION_UPDATES (uc/sc exclude Definition Updates when the flag is on; tc is a total-installed count, left untouched)
 func (q *Queries) GetHostsWithCounts(ctx context.Context, arg GetHostsWithCountsParams) ([]GetHostsWithCountsRow, error) {
 	rows, err := q.db.Query(ctx, getHostsWithCounts,
+		arg.IgnoreDefinitionUpdates,
 		arg.Search,
 		arg.Group,
 		arg.Status,

@@ -644,6 +644,8 @@ func (h *SettingsHandler) GetPublic(w http.ResponseWriter, r *http.Request) {
 			"timezone":        config.ResolveTimezone(nil, h.cfg),
 			"admin_mode":      adminMode,
 			"show_newsletter": h.cfg == nil || (!h.cfg.AdminMode && !h.cfg.HideCommunityLinks),
+			// fork: PM_IGNORE_DEFINITION_UPDATES
+			"ignore_definition_updates": h.cfg != nil && h.cfg.IgnoreDefinitionUpdates,
 		})
 		return
 	}
@@ -663,6 +665,8 @@ func (h *SettingsHandler) GetPublic(w http.ResponseWriter, r *http.Request) {
 		"timezone":        timezone,
 		"admin_mode":      adminMode,
 		"show_newsletter": h.cfg == nil || (!h.cfg.AdminMode && !h.cfg.HideCommunityLinks),
+		// fork: PM_IGNORE_DEFINITION_UPDATES
+		"ignore_definition_updates": h.cfg != nil && h.cfg.IgnoreDefinitionUpdates,
 	})
 }
 

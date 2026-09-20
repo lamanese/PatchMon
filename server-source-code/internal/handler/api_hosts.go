@@ -160,7 +160,7 @@ func (h *ApiHostsHandler) GetHostStats(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusNotFound, "Host not found")
 		return
 	}
-	stats, err := d.Queries.GetHostPackageStats(ctx, id)
+	stats, err := d.Queries.GetHostPackageStats(ctx, db.GetHostPackageStatsParams{HostID: id, IgnoreDefinitionUpdates: d.IgnoreDefinitionUpdates()}) // fork: PM_IGNORE_DEFINITION_UPDATES
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "Failed to fetch host statistics")
 		return
