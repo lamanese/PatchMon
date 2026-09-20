@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 
@@ -91,11 +92,27 @@ func OpenSet(databaseURL string, set Set) (*migrate.Migrate, error) {
 	}
 }
 
-// forkURL points golang-migrate at the fork version table.
+// forkURL points golang-migrate at the fork version table. It always sets (or
+// replaces) x-migrations-table: leaving a caller-supplied value in place
+// would let the fork and upstream migrate.Migrate instances share one
+// version table, and each would then silently skip the other's migrations.
 func forkURL(databaseURL string) string {
-	u := ensureSSLMode(databaseURL) // guarantees a query string
-	if strings.Contains(u, "x-migrations-table=") {
-		return u
+	u, err := url.Parse(databaseURL)
+	if err != nil {
+		// Cannot parse: fall back to the old string-based behaviour rather
+		// than fail startup over a URL shape net/url does not accept.
+		s := ensureSSLMode(databaseURL) // guarantees a query string
+		if strings.Contains(s, "x-migrations-table=") {
+			return s
+		}
+		return s + "&x-migrations-table=" + ForkMigrationsTable
 	}
-	return u + "&x-migrations-table=" + ForkMigrationsTable
+
+	q := u.Query()
+	if q.Get("sslmode") == "" {
+		q.Set("sslmode", "disable")
+	}
+	q.Set("x-migrations-table", ForkMigrationsTable)
+	u.RawQuery = q.Encode()
+	return u.String()
 }

@@ -113,6 +113,23 @@ func dbVersions(t *testing.T, dbURL string) (upstream, fork int64, forkTable boo
 	return upstream, fork, forkTable
 }
 
+// upstreamDirty reads the dirty flag off schema_migrations, for tests that
+// assert the bridge left it untouched when it aborts.
+func upstreamDirty(t *testing.T, dbURL string) bool {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dbURL)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	var dirty bool
+	if err := conn.QueryRow(ctx, "SELECT dirty FROM schema_migrations").Scan(&dirty); err != nil {
+		t.Fatalf("read dirty: %v", err)
+	}
+	return dirty
+}
+
 func execSQL(t *testing.T, dbURL, sql string, args ...any) {
 	t.Helper()
 	ctx := context.Background()
