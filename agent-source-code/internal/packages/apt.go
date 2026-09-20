@@ -53,7 +53,7 @@ func (m *APTManager) GetPackages() []models.Package {
 		(m.cacheRefresh.Mode == "if_stale" && m.isCacheStale(m.cacheRefresh.MaxAge))
 	if shouldRefresh {
 		m.logger.WithField("mode", m.cacheRefresh.Mode).Debug("Refreshing package cache")
-		updateCmd := exec.Command(packageManager, "update", "-qq")
+		updateCmd := exec.Command(packageManager, AptUpdateArgs()...)
 		if err := updateCmd.Run(); err != nil {
 			m.logger.WithError(err).WithField("manager", packageManager).Warn("Failed to update package lists")
 		}

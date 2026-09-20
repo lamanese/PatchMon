@@ -2552,8 +2552,13 @@ func runPatch(patchRunID, patchType string, packageNames []string, dryRun bool) 
 		// Update package cache
 		switch pkgManager {
 		case "apt":
-			if err, abort := runStep(false, "apt-get update", "apt-get update failed: %w", "apt-get", "update", "-qq"); abort {
+			updateStart := fullOutput.Len()
+			if err, abort := runStep(false, "apt-get update", "apt-get update failed: %w", "apt-get", packages.AptUpdateArgs()...); abort {
 				stepErr = err
+				if hint := packages.AptReleaseInfoChangeHint(fullOutput.String()[updateStart:]); hint != "" {
+					sink.WriteString(hint)
+					sink.Flush()
+				}
 			}
 		case "pkg":
 			if err, abort := runStep(false, "pkg update", "pkg update failed: %w", upgradeBin, "update"); abort {
