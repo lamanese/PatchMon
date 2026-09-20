@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
-	"strings"
+	"regexp"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
@@ -92,6 +92,11 @@ func OpenSet(databaseURL string, set Set) (*migrate.Migrate, error) {
 	}
 }
 
+// xMigrationsTableParam matches an existing x-migrations-table=<value> query
+// parameter (value stops at the next '&', or end of string), used only by
+// forkURL's fallback below.
+var xMigrationsTableParam = regexp.MustCompile(`x-migrations-table=[^&]*`)
+
 // forkURL points golang-migrate at the fork version table. It always sets (or
 // replaces) x-migrations-table: leaving a caller-supplied value in place
 // would let the fork and upstream migrate.Migrate instances share one
@@ -99,11 +104,18 @@ func OpenSet(databaseURL string, set Set) (*migrate.Migrate, error) {
 func forkURL(databaseURL string) string {
 	u, err := url.Parse(databaseURL)
 	if err != nil {
-		// Cannot parse: fall back to the old string-based behaviour rather
-		// than fail startup over a URL shape net/url does not accept.
+		// net/url rejected this DSN, and golang-migrate's own postgres
+		// driver parses its DSN with that same net/url.Parse (see Open in
+		// database/postgres/postgres.go), so this DSN would fail there too
+		// — Run never reaches a working migrate.Migrate either way. This
+		// fallback therefore only has to be harmless, not correct: it still
+		// replaces (never merely tolerates) an existing x-migrations-table,
+		// so a DSN shape our stricter net/url pass rejects but some other
+		// parser might accept can't silently make the fork and upstream
+		// sets share one version table.
 		s := ensureSSLMode(databaseURL) // guarantees a query string
-		if strings.Contains(s, "x-migrations-table=") {
-			return s
+		if xMigrationsTableParam.MatchString(s) {
+			return xMigrationsTableParam.ReplaceAllString(s, "x-migrations-table="+ForkMigrationsTable)
 		}
 		return s + "&x-migrations-table=" + ForkMigrationsTable
 	}

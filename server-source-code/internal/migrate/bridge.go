@@ -21,12 +21,16 @@ const bridgeLockKey int64 = 0x504D464B
 
 // bridgeTimeout bounds the entire bridge attempt (connect, lock, marker
 // checks, commit) so a wedged Postgres cannot hang server startup silently.
-// bridgeLockTimeout bounds only the wait for the advisory lock inside that
-// deadline (via "SET LOCAL lock_timeout"), so a lock held by a stale bridge
-// attempt or another session fails fast with a named error instead of
-// exhausting the whole budget in one blocking call. Package-level variables,
-// not exported and not constants, so tests can shorten both and restore them
-// with t.Cleanup rather than waiting out the real durations.
+// bridgeLockTimeout is set as "SET LOCAL lock_timeout" for the rest of that
+// same transaction, inside the bridgeTimeout deadline: it bounds not just the
+// advisory lock below but every lock wait the transaction can hit afterwards
+// (the implicit row lock reading schema_migrations, and the DDL locks taken
+// creating/inserting into the fork version table and updating
+// schema_migrations), so any of those failing to acquire fails fast with a
+// named error instead of exhausting the whole budget in one blocking call.
+// Package-level variables, not exported and not constants, so tests can
+// shorten both and restore them with t.Cleanup rather than waiting out the
+// real durations.
 var (
 	bridgeTimeout     = 60 * time.Second
 	bridgeLockTimeout = 30 * time.Second
@@ -118,8 +122,10 @@ func bridgeLegacyFork(ctx context.Context, databaseURL string, log *slog.Logger)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// lock_timeout bounds only the lock wait below, inside the outer
-	// bridgeTimeout deadline; bridgeLockTimeout is a package variable, never
+	// lock_timeout is scoped SET LOCAL, so it reverts at commit/rollback and
+	// bounds every lock wait for the rest of this transaction (not just the
+	// advisory lock immediately below), inside the outer bridgeTimeout
+	// deadline; bridgeLockTimeout is a package variable, never
 	// request-derived, so interpolating it here is safe.
 	if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL lock_timeout = '%dms'", bridgeLockTimeout.Milliseconds())); err != nil {
 		return fmt.Errorf("set lock timeout: %w", err)

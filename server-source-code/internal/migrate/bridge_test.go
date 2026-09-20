@@ -286,6 +286,9 @@ func TestNeedsBridge(t *testing.T) {
 // and a bounded wait for the lock itself. A session-level pg_advisory_lock
 // and the bridge's transaction-level pg_advisory_xact_lock share the same
 // lock space, so the held session lock blocks the bridge's lock attempt.
+// This test mutates the package-level bridgeTimeout/bridgeLockTimeout vars
+// directly (restored via t.Cleanup); that's only safe because nothing in
+// this package calls t.Parallel().
 func TestBridge_TimesOutWhenLockIsHeld(t *testing.T) {
 	origTimeout, origLockTimeout := bridgeTimeout, bridgeLockTimeout
 	bridgeTimeout = 3 * time.Second
@@ -370,7 +373,12 @@ func TestBridge_SecondRunOnBridgedDatabaseIsNoOp(t *testing.T) {
 // version back to the highest known one with dirty cleared. This test pins
 // that runbook so it does not silently go stale. It never hard-codes the
 // highest upstream version, since the upstream sync described in
-// KIUpstreamSync.md will raise it.
+// KIUpstreamSync.md will raise it. Today, before that sync, highest happens
+// to equal forkBaseVersion (40) — the runbook's example number — because
+// upstream hasn't shipped anything past what the fork already shares with
+// it; the test deliberately resets to whatever highestVersion computes as
+// this database's real upstream level, not to the forkBaseVersion literal,
+// so it keeps pinning the runbook once the sync makes the two diverge.
 func TestBridge_RollbackPastHighestVersionFailsCleanly(t *testing.T) {
 	dbURL := newTestDB(t)
 	makeLegacyForkDB(t, dbURL, len(forkMarkers))
