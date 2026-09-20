@@ -36,10 +36,12 @@ func discardTestLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// newPatchRunCleanupTestDB creates a throwaway, fully migrated database and
-// returns a *database.DB connected to it. The database is dropped and the
-// pool closed via t.Cleanup.
-func newPatchRunCleanupTestDB(t *testing.T) *database.DB {
+// newPatchRunCleanupTestDBURL creates a throwaway, fully migrated database
+// and returns its connection URL. The database is dropped via t.Cleanup.
+// Exposing the bare URL (rather than only a *database.DB) lets a test open a
+// second, independent connection to the same physical database - e.g. one it
+// closes on purpose to simulate a real (non-not-found) lookup error.
+func newPatchRunCleanupTestDBURL(t *testing.T) string {
 	t.Helper()
 	admin := patchRunCleanupAdminURL(t)
 	ctx := context.Background()
@@ -73,8 +75,16 @@ func newPatchRunCleanupTestDB(t *testing.T) *database.DB {
 	if err := migrate.Run(dbURL, discardTestLogger()); err != nil {
 		t.Fatalf("run migrations: %v", err)
 	}
+	return dbURL
+}
 
-	d, err := database.NewFromURL(ctx, dbURL, 0, 0, &config.Config{})
+// newPatchRunCleanupTestDB creates a throwaway, fully migrated database and
+// returns a *database.DB connected to it. The database is dropped and the
+// pool closed via t.Cleanup.
+func newPatchRunCleanupTestDB(t *testing.T) *database.DB {
+	t.Helper()
+	dbURL := newPatchRunCleanupTestDBURL(t)
+	d, err := database.NewFromURL(context.Background(), dbURL, 0, 0, &config.Config{})
 	if err != nil {
 		t.Fatalf("connect test db: %v", err)
 	}
@@ -122,11 +132,11 @@ func insertTestPatchRun(t *testing.T, d *database.DB, hostID string, f patchRunF
 }
 
 // fetchPatchRun reads back the fields the reaper is responsible for.
-func fetchPatchRun(t *testing.T, d *database.DB, id string) (status string, errMsg *string, completedAt *time.Time) {
+func fetchPatchRun(t *testing.T, d *database.DB, id string) (status string, errMsg *string, completedAt, updatedAt *time.Time) {
 	t.Helper()
-	row := d.RawQueryRow(context.Background(), `SELECT status, error_message, completed_at FROM patch_runs WHERE id = $1`, id)
-	if err := row.Scan(&status, &errMsg, &completedAt); err != nil {
+	row := d.RawQueryRow(context.Background(), `SELECT status, error_message, completed_at, updated_at FROM patch_runs WHERE id = $1`, id)
+	if err := row.Scan(&status, &errMsg, &completedAt, &updatedAt); err != nil {
 		t.Fatalf("fetch patch_run %s: %v", id, err)
 	}
-	return status, errMsg, completedAt
+	return status, errMsg, completedAt, updatedAt
 }

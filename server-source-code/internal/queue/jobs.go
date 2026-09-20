@@ -748,9 +748,15 @@ func (h *RunPatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 	}
 
 	// Load the run once, up front, and check its current DB status before
-	// doing anything else - see terminalPatchRunStatuses.
+	// doing anything else - see terminalPatchRunStatuses. A real lookup
+	// failure (DB blip, etc.) must not be treated the same as "not found":
+	// returning the error lets asynq retry the task (MaxRetry is set on
+	// every run_patch task), instead of silently dropping a dispatch.
 	run, runErr := h.patchRuns.GetByID(ctx, p.PatchRunID)
-	if runErr != nil || run == nil {
+	if runErr != nil {
+		return runErr
+	}
+	if run == nil {
 		h.log.Info("run_patch: patch run deleted or not found, dropping task", "api_id", p.ApiID, "patch_run_id", p.PatchRunID)
 		return nil
 	}
@@ -772,7 +778,16 @@ func (h *RunPatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 			return nil
 		}
 
-		_ = h.patchRuns.UpdateStatus(ctx, p.PatchRunID, status)
+		// Only write when the status actually changes. This run is re-checked
+		// every 5 minutes for as long as the host stays offline; if every
+		// pass stamped updated_at = NOW() regardless, the patch-run-cleanup
+		// reaper's 24h "host was not reachable" threshold (GREATEST(updated_at,
+		// scheduled_at) in ForkCancelStaleWaitingPatchRuns) would never see a
+		// row older than ~5 minutes and could never fire for exactly the case
+		// it exists for. updated_at must mean "last real transition".
+		if run.Status != status {
+			_ = h.patchRuns.UpdateStatus(ctx, p.PatchRunID, status)
+		}
 
 		// Use a deterministic retry task ID so only one retry can exist at a time
 		// and the delete handler can cancel it.

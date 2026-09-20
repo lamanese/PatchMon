@@ -2,7 +2,6 @@ package queue
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 )
@@ -137,6 +136,7 @@ func TestPatchRunCleanupHandler_cleanupDB(t *testing.T) {
 		origStatus[c.name] = c.fixture.status
 	}
 
+	beforeCleanup := time.Now()
 	h := NewPatchRunCleanupHandler(d, nil, discardTestLogger())
 	if err := h.cleanupDB(ctx, d); err != nil {
 		t.Fatalf("cleanupDB: %v", err)
@@ -145,16 +145,22 @@ func TestPatchRunCleanupHandler_cleanupDB(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
-			status, errMsg, completedAt := fetchPatchRun(t, d, ids[c.name])
+			status, errMsg, completedAt, updatedAt := fetchPatchRun(t, d, ids[c.name])
 			if c.wantCancelled {
 				if status != "cancelled" {
 					t.Fatalf("status = %q, want cancelled", status)
 				}
-				if errMsg == nil || !strings.Contains(*errMsg, c.wantMsg) {
-					t.Fatalf("error_message = %v, want containing %q", errMsg, c.wantMsg)
+				// Full message, not just a substring: the prefix
+				// ("Automatically cancelled: ") is part of the contract too.
+				wantMsg := "Automatically cancelled: " + c.wantMsg
+				if errMsg == nil || *errMsg != wantMsg {
+					t.Fatalf("error_message = %v, want exactly %q", errMsg, wantMsg)
 				}
 				if completedAt == nil {
 					t.Fatal("completed_at must be set when a run is cancelled")
+				}
+				if updatedAt == nil || updatedAt.Before(beforeCleanup.Add(-2*time.Second)) {
+					t.Fatalf("updated_at = %v, want a fresh timestamp set by this cleanupDB run (>= %v)", updatedAt, beforeCleanup)
 				}
 				return
 			}

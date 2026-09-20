@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/PatchMon/PatchMon/server-source-code/internal/agentregistry"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/store"
@@ -38,7 +39,7 @@ func TestRunPatchHandler_DropsTaskForTerminalStatus(t *testing.T) {
 	for _, status := range []string{"completed", "failed", "cancelled"} {
 		status := status
 		t.Run(status, func(t *testing.T) {
-			runID := insertTestPatchRun(t, d, hostID, patchRunFixture{status: status})
+			runID := insertTestPatchRun(t, d, hostID, patchRunFixture{status: status, updatedAt: time.Now()})
 
 			const apiID = "guard-api-id"
 			reg := agentregistry.New()
@@ -59,7 +60,7 @@ func TestRunPatchHandler_DropsTaskForTerminalStatus(t *testing.T) {
 				t.Fatalf("ProcessTask returned error: %v", err)
 			}
 
-			gotStatus, _, _ := fetchPatchRun(t, d, runID)
+			gotStatus, _, _, _ := fetchPatchRun(t, d, runID)
 			if gotStatus != status {
 				t.Fatalf("status changed from %q to %q; a terminal run must never be touched", status, gotStatus)
 			}
