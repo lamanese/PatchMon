@@ -2552,13 +2552,8 @@ func runPatch(patchRunID, patchType string, packageNames []string, dryRun bool) 
 		// Update package cache
 		switch pkgManager {
 		case "apt":
-			updateStart := fullOutput.Len()
 			if err, abort := runStep(false, "apt-get update", "apt-get update failed: %w", "apt-get", packages.AptUpdateArgs()...); abort {
 				stepErr = err
-				if hint := packages.AptReleaseInfoChangeHint(fullOutput.String()[updateStart:]); hint != "" {
-					sink.WriteString(hint)
-					sink.Flush()
-				}
 			}
 		case "pkg":
 			if err, abort := runStep(false, "pkg update", "pkg update failed: %w", upgradeBin, "update"); abort {
@@ -2701,8 +2696,9 @@ func runPatch(patchRunID, patchType string, packageNames []string, dryRun bool) 
 	// the same text is present whether the frontend is showing the live
 	// buffer or the persisted one.
 	if stepErr != nil && pkgManager == "apt" {
-		// Hint only: the agent never runs "dpkg --configure -a" itself.
-		if hint := packages.AptDpkgInterruptedHint(fullOutput.String()); hint != "" {
+		// Help only: name the known problem and the commands an administrator
+		// has to run on the host. The agent never runs any of them itself.
+		if hint := packages.AptFailureHints(fullOutput.String()); hint != "" {
 			sink.WriteString(hint)
 		}
 	}

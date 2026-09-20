@@ -1274,6 +1274,26 @@ const HostDetail = () => {
 								</Link>
 							)}
 						</div>
+						{host.pkg_broken && (
+							<div className="max-w-2xl rounded-md border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/30 px-3 py-2 text-xs text-red-900 dark:text-red-100">
+								<p className="font-medium">
+									An earlier package installation on this host was interrupted
+									{host.pkg_broken_detail ? ` (${host.pkg_broken_detail})` : ""}
+									. Patch runs will fail until an administrator finishes it in a
+									terminal on the host. PatchMon does not repair this.
+								</p>
+								<pre className="mt-1 select-all whitespace-pre-wrap font-mono">
+									{
+										"sudo dpkg --configure -a\nsudo apt-get -f install\nsudo dpkg --audit"
+									}
+								</pre>
+								<p className="mt-1">
+									If dpkg asks about a modified configuration file, keeping the
+									local version (N, the default) leaves the current settings
+									untouched. The notice disappears with the next agent report.
+								</p>
+							</div>
+						)}
 						{/* Info row with uptime and last updated */}
 						<div className="flex items-center gap-4 text-sm text-secondary-600 dark:text-white">
 							{host.system_uptime && (
