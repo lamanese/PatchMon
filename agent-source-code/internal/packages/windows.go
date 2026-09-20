@@ -282,6 +282,41 @@ func buildAppDescription(publisher, installDate, size string) string {
 	return strings.Join(parts, " | ")
 }
 
+// unknownVersionPlaceholders lists the strings winget (and this agent's own
+// registry collection) use in place of an installed version it could not
+// determine. Comparison via isUnknownVersion is case-insensitive.
+// "Unbekannt" is winget's localized placeholder on German-language Windows.
+var unknownVersionPlaceholders = map[string]bool{
+	"":          true,
+	"unknown":   true,
+	"unbekannt": true,
+}
+
+// isUnknownVersion reports whether v is a placeholder used instead of an
+// actual installed version number (case-insensitive; trims whitespace).
+func isUnknownVersion(v string) bool {
+	return unknownVersionPlaceholders[strings.ToLower(strings.TrimSpace(v))]
+}
+
+// wingetNeedsUpdate decides whether a winget-discovered package should be
+// flagged as NeedsUpdate. winget list --upgrade-available (inUpgradeMap) is
+// authoritative and deliberately excludes packages whose installed version
+// it cannot determine (winget's own "N package(s) have version numbers that
+// cannot be determined" skip), so a hit there always wins. When winget did
+// NOT list the package as upgradable, only flag it if the installed version
+// is actually known and differs from the available one — an unknown
+// installed version must never be treated as outdated just because it
+// doesn't string-match the catalogue's "Available" column.
+func wingetNeedsUpdate(installed, available string, inUpgradeMap bool) bool {
+	if inUpgradeMap {
+		return true
+	}
+	if isUnknownVersion(installed) {
+		return false
+	}
+	return available != "" && available != installed
+}
+
 // getPackagesFromWinget runs winget list and parses the text-table output.
 // Uses PowerShell wrapper for UTF-8 encoding to avoid U+FFFD mojibake.
 // Resolves the actual winget.exe path to work in SYSTEM/Session 0 context
@@ -356,16 +391,12 @@ if ($out) { $out | Out-String }
 			version = "unknown"
 		}
 		avail := strings.TrimSpace(stripEllipsis(e.Available))
-		needsUpdate := false
 		id := strings.TrimSpace(stripEllipsis(e.ID))
-		if up, ok := upgradeMap[id]; ok {
-			needsUpdate = true
-			if avail == "" {
-				avail = up
-			}
-		} else if avail != "" && avail != version {
-			needsUpdate = true
+		up, inUpgradeMap := upgradeMap[id]
+		if inUpgradeMap && avail == "" {
+			avail = up
 		}
+		needsUpdate := wingetNeedsUpdate(version, avail, inUpgradeMap)
 		// Forward WinGet source as SourceRepository
 		source := strings.TrimSpace(e.Source)
 		if source == "" {
