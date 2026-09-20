@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -158,6 +159,26 @@ func NewRunPatchTask(p RunPatchPayload) (*asynq.Task, error) {
 		asynq.TaskID("patch-run-" + p.PatchRunID),
 	}
 	return asynq.NewTask(TypeRunPatch, payload, opts...), nil
+}
+
+// OfflineRetryTaskIDs returns the two deterministic task IDs the offline-retry
+// chain of a patch run alternates between. Anything that cancels a run's
+// queued tasks must delete both.
+func OfflineRetryTaskIDs(patchRunID string) [2]string {
+	base := "patch-run-" + patchRunID + "-retry"
+	return [2]string{base, base + "-b"}
+}
+
+// nextOfflineRetryTaskID picks the ID for the next offline retry. It must never
+// be the ID of the task that is enqueuing it: asynq keeps a task's ID reserved
+// while the task is being processed, so re-using it fails with
+// ErrTaskIDConflict and the chain would end after a single retry.
+func nextOfflineRetryTaskID(patchRunID, currentTaskID string) string {
+	ids := OfflineRetryTaskIDs(patchRunID)
+	if currentTaskID == ids[0] {
+		return ids[1]
+	}
+	return ids[0]
 }
 
 // NewRunPatchRetryTask creates a run_patch task with a custom task ID so that
@@ -790,17 +811,24 @@ func (h *RunPatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		}
 
 		// Use a deterministic retry task ID so only one retry can exist at a time
-		// and the delete handler can cancel it.
-		retryTaskID := "patch-run-" + p.PatchRunID + "-retry"
+		// and the delete handler can cancel it. The ID must differ from the one
+		// this task runs under, see nextOfflineRetryTaskID.
+		currentTaskID, _ := asynq.GetTaskID(ctx)
+		retryTaskID := nextOfflineRetryTaskID(p.PatchRunID, currentTaskID)
 		task, err := NewRunPatchRetryTask(p, retryTaskID)
 		if err != nil {
 			return err
 		}
 		_, err = h.queueClient.Enqueue(task, asynq.ProcessIn(5*time.Minute))
-		if err != nil {
-			// If a task with this ID already exists (pending), that's fine - skip.
-			h.log.Debug("run_patch: re-enqueue skipped or failed", "api_id", p.ApiID, "error", err)
-		} else {
+		switch {
+		case errors.Is(err, asynq.ErrTaskIDConflict):
+			// A retry with this ID is already pending, that's fine - skip.
+			h.log.Debug("run_patch: retry already pending, re-enqueue skipped", "api_id", p.ApiID, "patch_run_id", p.PatchRunID)
+		case err != nil:
+			// The chain ends here: the run stays queued until the patch-run
+			// reaper cancels it. Make that visible instead of hiding it at Debug.
+			h.log.Warn("run_patch: re-enqueue failed, offline retry chain interrupted", "api_id", p.ApiID, "patch_run_id", p.PatchRunID, "error", err)
+		default:
 			h.log.Info("run_patch: agent offline, re-queued in 5m", "api_id", p.ApiID, "patch_run_id", p.PatchRunID)
 		}
 		return nil
