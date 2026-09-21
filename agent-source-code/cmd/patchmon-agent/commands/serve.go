@@ -2869,8 +2869,8 @@ func runPatchWindows(ctx context.Context, httpClient *client.Client, patchRunID,
 			fmt.Fprintf(&fullOutput, "[Windows Update] ERROR: could not fetch approved update list: %v\n", err)
 			wuaFetchFailed = true
 		}
+		fullOutput.WriteString(windowsUpdateStepHeader(len(guids), wuaFetchFailed))
 		if len(guids) > 0 {
-			fmt.Fprintf(&fullOutput, "[Windows Update] Installing %d approved update(s)...\n", len(guids))
 			sendProgress()
 			for _, guid := range guids {
 				// Overall run budget exhausted (or run stopped): leave the
