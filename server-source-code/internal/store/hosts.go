@@ -64,6 +64,7 @@ func (s *HostsStore) ListPaginated(ctx context.Context, limit, offset int) ([]mo
 			CreatedAt:         pgTime(r.CreatedAt),
 			Notes:             r.Notes,
 			SystemUptime:      r.SystemUptime,
+			BootTime:          r.ForkBootTime,
 			NeedsReboot:       r.NeedsReboot,
 			AllowReboot:       r.AllowReboot,
 			DockerEnabled:     r.DockerEnabled,

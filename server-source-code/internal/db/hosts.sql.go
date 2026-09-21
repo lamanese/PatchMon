@@ -135,6 +135,8 @@ const forkUpdateHostBootTime = `-- name: ForkUpdateHostBootTime :exec
 UPDATE hosts
 SET fork_boot_time = $1::timestamptz
 WHERE id = $2
+  AND (fork_boot_time IS NULL
+       OR ABS(EXTRACT(EPOCH FROM (fork_boot_time - $1::timestamptz))) >= 120)
 `
 
 type ForkUpdateHostBootTimeParams struct {
@@ -145,6 +147,11 @@ type ForkUpdateHostBootTimeParams struct {
 // Fork: last boot instant reported by agents 2.0.20+. Kept out of
 // UpdateHostFromReport so that upstream query stays untouched. The caller only
 // invokes it with a plausible value; a missing value never clears the column.
+// Inside a container the agent derives boot time as now-uptime, so hourly
+// reports move it by a few seconds each time even though the container never
+// rebooted; a real reboot moves it by minutes at least. The write is skipped
+// unless the new value differs from the stored one by at least 120s (or none
+// is stored yet), so the displayed value stays stable instead of flapping.
 func (q *Queries) ForkUpdateHostBootTime(ctx context.Context, arg ForkUpdateHostBootTimeParams) error {
 	_, err := q.db.Exec(ctx, forkUpdateHostBootTime, arg.BootTime, arg.ID)
 	return err
@@ -481,7 +488,7 @@ func (q *Queries) ListHostsForComplianceDashboard(ctx context.Context) ([]ListHo
 }
 
 const listHostsPaginated = `-- name: ListHostsPaginated :many
-SELECT id, friendly_name, hostname, ip, os_type, os_version, architecture, last_update, status, api_id, agent_version, auto_update, created_at, notes, system_uptime, needs_reboot, allow_reboot, docker_enabled, compliance_enabled
+SELECT id, friendly_name, hostname, ip, os_type, os_version, architecture, last_update, status, api_id, agent_version, auto_update, created_at, notes, system_uptime, fork_boot_time, needs_reboot, allow_reboot, docker_enabled, compliance_enabled
 FROM hosts
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
@@ -508,6 +515,7 @@ type ListHostsPaginatedRow struct {
 	CreatedAt         pgtype.Timestamp `json:"created_at"`
 	Notes             *string          `json:"notes"`
 	SystemUptime      *string          `json:"system_uptime"`
+	ForkBootTime      *time.Time       `json:"fork_boot_time"`
 	NeedsReboot       *bool            `json:"needs_reboot"`
 	AllowReboot       bool             `json:"allow_reboot"`
 	DockerEnabled     bool             `json:"docker_enabled"`
@@ -539,6 +547,7 @@ func (q *Queries) ListHostsPaginated(ctx context.Context, arg ListHostsPaginated
 			&i.CreatedAt,
 			&i.Notes,
 			&i.SystemUptime,
+			&i.ForkBootTime,
 			&i.NeedsReboot,
 			&i.AllowReboot,
 			&i.DockerEnabled,

@@ -327,6 +327,7 @@ func (h *ApiHostsHandler) GetHostSystem(w http.ResponseWriter, r *http.Request) 
 		"installed_kernel_version": installedKernel,
 		"selinux_status":           selinux,
 		"system_uptime":            uptime,
+		"boot_time":                host.BootTime,
 		"cpu_model":                cpuModel,
 		"cpu_cores":                cpuCores,
 		"ram_installed":            ram,

@@ -21,8 +21,13 @@ func TestPlausibleBootTime(t *testing.T) {
 		{"non-UTC input is normalised", ptr(time.Date(2026, 9, 20, 10, 0, 0, 0, zurich)), time.Date(2026, 9, 20, 8, 0, 0, 0, time.UTC), true},
 		{"clock skew up to 5 min is tolerated", ptr(now.Add(4 * time.Minute)), now.Add(4 * time.Minute), true},
 		{"future beyond tolerance is rejected", ptr(now.Add(6 * time.Minute)), time.Time{}, false},
+		{"exactly the 5 min tolerance is accepted", ptr(now.Add(5 * time.Minute)), now.Add(5 * time.Minute), true},
+		{"5 min tolerance plus one second is rejected", ptr(now.Add(5*time.Minute + time.Second)), time.Time{}, false},
 		{"before year 2000 is rejected", ptr(time.Date(1999, 12, 31, 23, 59, 59, 0, time.UTC)), time.Time{}, false},
 		{"unix epoch sentinel is rejected", ptr(time.Unix(0, 0)), time.Time{}, false},
+		{"exactly the year 2000 floor is accepted", ptr(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)), time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), true},
+		{"one nanosecond before the floor is rejected", ptr(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).Add(-time.Nanosecond)), time.Time{}, false},
+		{"one second before the floor is rejected", ptr(time.Date(1999, 12, 31, 23, 59, 59, 0, time.UTC)), time.Time{}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
