@@ -69,7 +69,8 @@ const SettingsLayout = ({ children }) => {
 			// dedicated "Roles" editor manages custom role CRUD. Locked items
 			// stay visible with a TierBadge for discovery; the route renders
 			// an upgrade screen via <ModuleGate>.
-			{
+			// The /settings/roles route requires can_manage_settings.
+			if (canManageSettings()) {
 				const locked = !hasModule("rbac_custom");
 				userItems.push({
 					name: "Roles",
