@@ -233,11 +233,12 @@ type Querier interface {
 	// Fork: last boot instant reported by agents 2.0.20+. Kept out of
 	// UpdateHostFromReport so that upstream query stays untouched. The caller only
 	// invokes it with a plausible value; a missing value never clears the column.
-	// Inside a container the agent derives boot time as now-uptime, so hourly
-	// reports move it by a few seconds each time even though the container never
-	// rebooted; a real reboot moves it by minutes at least. The write is skipped
-	// unless the new value differs from the stored one by at least 120s (or none
-	// is stored yet), so the displayed value stays stable instead of flapping.
+	// Derived boot times (containers: now-uptime; Windows: now-tick count) jitter
+	// by about a second between reports; differences below 10s are treated as the
+	// same boot so the displayed minute never flaps. Two real boots can never be
+	// less than 10s apart, so no genuine reboot is suppressed. The write is
+	// skipped unless the new value differs from the stored one by at least 10s
+	// (or none is stored yet).
 	ForkUpdateHostBootTime(ctx context.Context, arg ForkUpdateHostBootTimeParams) error
 	// Fork: "package manager is in a broken state" hint reported by agents 2.0.15+.
 	// Kept out of UpdateHostFromReport so that upstream query stays untouched.
