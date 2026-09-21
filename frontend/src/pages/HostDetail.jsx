@@ -1942,7 +1942,7 @@ const HostDetail = () => {
 											</div>
 										)}
 
-										{host.selinux_status && (
+										{host.selinux_status && !isWindowsHost && (
 											<div>
 												<p className="text-xs text-secondary-500 dark:text-white">
 													SELinux Status
@@ -3193,7 +3193,7 @@ const HostDetail = () => {
 												</div>
 											)}
 
-											{host.selinux_status && (
+											{host.selinux_status && !isWindowsHost && (
 												<div>
 													<p className="text-xs text-secondary-500 dark:text-white">
 														SELinux Status
