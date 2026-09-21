@@ -3187,6 +3187,7 @@ Content-Type: application/json
 | `installedKernelVersion` | string | No | Installed (on-disk) kernel version |
 | `selinuxStatus` | string | No | SELinux status (`enabled`, `disabled`, or `permissive`) |
 | `systemUptime` | string | No | System uptime |
+| `bootTime` | string | No | Last boot instant (RFC 3339, UTC). Sent by agents 2.0.20+; inside LXC containers, derived from the container's own uptime. The server ignores values more than 5 minutes in the future or before 2000-01-01 and keeps the stored value instead |
 | `loadAverage` | array | No | Load average values |
 | `machineId` | string | No | Machine ID |
 | `needsReboot` | boolean | No | Whether a reboot is required |
@@ -4156,6 +4157,7 @@ GET /api/v1/api/hosts/:id/system
   "installed_kernel_version": "6.8.0-50-generic",
   "selinux_status": "disabled",
   "system_uptime": "15 days, 3:22:10",
+  "boot_time": "2026-09-06T07:37:52Z",
   "cpu_model": "Intel Xeon E5-2680 v4",
   "cpu_cores": 4,
   "ram_installed": 8192,
