@@ -1315,6 +1315,12 @@ const HostDetail = () => {
 									<span className="text-xs">{host.system_uptime}</span>
 								</div>
 							)}
+							{host.boot_time && (
+								<div className="flex items-center gap-1">
+									<span className="text-xs font-medium">Last boot:</span>
+									<span className="text-xs">{formatDate(host.boot_time)}</span>
+								</div>
+							)}
 							<div className="flex items-center gap-1">
 								<Clock className="h-3.5 w-3.5" />
 								<span className="text-xs font-medium">Last updated:</span>
@@ -1991,6 +1997,11 @@ const HostDetail = () => {
 												<p className="font-medium text-secondary-900 dark:text-white text-sm">
 													{host.system_uptime}
 												</p>
+												{host.boot_time && (
+													<p className="text-xs text-secondary-500 dark:text-white mt-1">
+														Last boot: {formatDate(host.boot_time)}
+													</p>
+												)}
 											</div>
 										)}
 
@@ -3259,6 +3270,11 @@ const HostDetail = () => {
 													<p className="font-medium text-secondary-900 dark:text-white text-sm">
 														{host.system_uptime}
 													</p>
+													{host.boot_time && (
+														<p className="text-xs text-secondary-500 dark:text-white mt-1">
+															Last boot: {formatDate(host.boot_time)}
+														</p>
+													)}
 												</div>
 											)}
 

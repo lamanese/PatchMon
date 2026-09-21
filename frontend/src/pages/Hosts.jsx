@@ -41,6 +41,7 @@ import { useAuth } from "../contexts/AuthContext";
 import {
 	adminHostsAPI,
 	dashboardAPI,
+	formatDate,
 	formatRelativeTime,
 	hostGroupsAPI,
 	settingsAPI,
@@ -1289,7 +1290,14 @@ const Hosts = () => {
 				);
 			case "uptime":
 				return (
-					<div className="text-sm text-secondary-900 dark:text-white">
+					<div
+						className="text-sm text-secondary-900 dark:text-white"
+						title={
+							host.boot_time
+								? `Last boot: ${formatDate(host.boot_time)}`
+								: undefined
+						}
+					>
 						{host.system_uptime || "N/A"}
 					</div>
 				);
