@@ -1,0 +1,5 @@
+# Fork versions, injected at build time by .github/workflows/build-lamanese.yml.
+# Server: <upstream-base>-am.<n>. Agent: numeric and monotonic, never "-am"
+# (patch = upstream patch * 100 + n), bump on EVERY agent code change.
+SERVER_VERSION=2.1.3-am.1
+AGENT_VERSION=2.1.301
