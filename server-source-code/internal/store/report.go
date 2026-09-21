@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/db"
@@ -122,6 +124,8 @@ type ReportPayload struct {
 	// Fork: nil for agents older than 2.0.15, which do not report it.
 	PackageStateBroken *bool  `json:"packageStateBroken,omitempty"`
 	PackageStateDetail string `json:"packageStateDetail,omitempty"`
+	// Fork: nil for agents older than 2.0.20, which do not report it.
+	BootTime *time.Time `json:"bootTime,omitempty"`
 }
 
 // ProcessReportResult is the result of processing a host report.
@@ -351,6 +355,17 @@ func (s *ReportStore) ProcessReport(ctx context.Context, hostID string, payload 
 		}); err != nil {
 			return nil, fmt.Errorf("ForkUpdateHostPackageState: %w", err)
 		}
+	}
+	// Fork: last boot instant. Missing or implausible values leave the stored
+	// one alone, so an old agent or a host with a broken clock cannot erase it.
+	if bootTime, ok := plausibleBootTime(payload.BootTime, time.Now()); ok {
+		if err := q.ForkUpdateHostBootTime(ctx, db.ForkUpdateHostBootTimeParams{
+			ID: hostID, BootTime: bootTime,
+		}); err != nil {
+			return nil, fmt.Errorf("ForkUpdateHostBootTime: %w", err)
+		}
+	} else if payload.BootTime != nil {
+		slog.Warn("ignoring implausible boot time from agent", "host_id", hostID, "boot_time", payload.BootTime.UTC())
 	}
 
 	if err := q.DeleteHostPackagesByHostID(ctx, hostID); err != nil {
