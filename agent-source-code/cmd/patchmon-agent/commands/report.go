@@ -255,6 +255,7 @@ func sendReport(outputJSON bool) error {
 		InstalledKernelVersion: installedKernel,
 		SELinuxStatus:          systemInfo.SELinuxStatus,
 		SystemUptime:           systemInfo.SystemUptime,
+		BootTime:               systemInfo.BootTime,
 		LoadAverage:            systemInfo.LoadAverage,
 		CPUModel:               hardwareInfo.CPUModel,
 		CPUCores:               hardwareInfo.CPUCores,

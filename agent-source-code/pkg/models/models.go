@@ -1,5 +1,7 @@
 package models
 
+import "time"
+
 // Package represents a software package
 type Package struct {
 	Name             string `json:"name"`
@@ -32,10 +34,11 @@ type Repository struct {
 
 // SystemInfo represents system information
 type SystemInfo struct {
-	KernelVersion string    `json:"kernelVersion"`
-	SELinuxStatus string    `json:"selinuxStatus"`
-	SystemUptime  string    `json:"systemUptime"`
-	LoadAverage   []float64 `json:"loadAverage"`
+	KernelVersion string     `json:"kernelVersion"`
+	SELinuxStatus string     `json:"selinuxStatus"`
+	SystemUptime  string     `json:"systemUptime"`
+	BootTime      *time.Time `json:"bootTime,omitempty"`
+	LoadAverage   []float64  `json:"loadAverage"`
 }
 
 // HardwareInfo represents hardware information
@@ -96,6 +99,7 @@ type ReportPayload struct {
 	InstalledKernelVersion string             `json:"installedKernelVersion,omitempty"`
 	SELinuxStatus          string             `json:"selinuxStatus"`
 	SystemUptime           string             `json:"systemUptime"`
+	BootTime               *time.Time         `json:"bootTime,omitempty"`
 	LoadAverage            []float64          `json:"loadAverage"`
 	CPUModel               string             `json:"cpuModel"`
 	CPUCores               int                `json:"cpuCores"`
