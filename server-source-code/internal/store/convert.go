@@ -486,6 +486,7 @@ func dbHostToModel(h db.Host) *models.Host {
 		AllowReboot:                  h.AllowReboot,
 		PkgBroken:                    h.ForkPkgBroken,
 		PkgBrokenDetail:              h.ForkPkgBrokenDetail,
+		BootTime:                     h.ForkBootTime,
 		DockerEnabled:                h.DockerEnabled,
 		ComplianceEnabled:            h.ComplianceEnabled,
 		ComplianceOnDemandOnly:       h.ComplianceOnDemandOnly,

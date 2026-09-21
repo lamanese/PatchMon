@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -342,7 +343,7 @@ func (q *Queries) GetHostsForPackageTrends(ctx context.Context) ([]GetHostsForPa
 const getHostsWithCounts = `-- name: GetHostsWithCounts :many
 SELECT h.id, h.machine_id, h.friendly_name, h.hostname, h.ip, h.os_type, h.os_version,
     h.status, h.agent_version, h.auto_update, h.notes, h.api_id,
-    h.needs_reboot, h.reboot_reason, h.allow_reboot, h.fork_pkg_broken, h.fork_pkg_broken_detail, h.system_uptime, h.docker_enabled, h.compliance_enabled, h.compliance_on_demand_only,
+    h.needs_reboot, h.reboot_reason, h.allow_reboot, h.fork_pkg_broken, h.fork_pkg_broken_detail, h.fork_boot_time, h.system_uptime, h.docker_enabled, h.compliance_enabled, h.compliance_on_demand_only,
     h.last_update,
     h.compliance_scanner_status->'scanner_info'->>'ssg_version' as ssg_version,
     COALESCE(uc.cnt, 0)::int as updates_count,
@@ -391,6 +392,7 @@ type GetHostsWithCountsRow struct {
 	AllowReboot            bool             `json:"allow_reboot"`
 	ForkPkgBroken          bool             `json:"fork_pkg_broken"`
 	ForkPkgBrokenDetail    *string          `json:"fork_pkg_broken_detail"`
+	ForkBootTime           *time.Time       `json:"fork_boot_time"`
 	SystemUptime           *string          `json:"system_uptime"`
 	DockerEnabled          bool             `json:"docker_enabled"`
 	ComplianceEnabled      bool             `json:"compliance_enabled"`
@@ -437,6 +439,7 @@ func (q *Queries) GetHostsWithCounts(ctx context.Context, arg GetHostsWithCounts
 			&i.AllowReboot,
 			&i.ForkPkgBroken,
 			&i.ForkPkgBrokenDetail,
+			&i.ForkBootTime,
 			&i.SystemUptime,
 			&i.DockerEnabled,
 			&i.ComplianceEnabled,

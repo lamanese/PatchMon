@@ -39,6 +39,7 @@ type Host struct {
 	AllowReboot                  bool       `db:"allow_reboot"`
 	PkgBroken                    bool       `db:"fork_pkg_broken"`
 	PkgBrokenDetail              *string    `db:"fork_pkg_broken_detail"`
+	BootTime                     *time.Time `db:"fork_boot_time"`
 	DockerEnabled                bool       `db:"docker_enabled"`
 	ComplianceEnabled            bool       `db:"compliance_enabled"`
 	ComplianceOnDemandOnly       bool       `db:"compliance_on_demand_only"`
