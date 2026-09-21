@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -130,6 +131,25 @@ func (q *Queries) DeleteHostsByIDs(ctx context.Context, dollar_1 []string) error
 	return err
 }
 
+const forkUpdateHostBootTime = `-- name: ForkUpdateHostBootTime :exec
+UPDATE hosts
+SET fork_boot_time = $1::timestamptz
+WHERE id = $2
+`
+
+type ForkUpdateHostBootTimeParams struct {
+	BootTime time.Time `json:"boot_time"`
+	ID       string    `json:"id"`
+}
+
+// Fork: last boot instant reported by agents 2.0.20+. Kept out of
+// UpdateHostFromReport so that upstream query stays untouched. The caller only
+// invokes it with a plausible value; a missing value never clears the column.
+func (q *Queries) ForkUpdateHostBootTime(ctx context.Context, arg ForkUpdateHostBootTimeParams) error {
+	_, err := q.db.Exec(ctx, forkUpdateHostBootTime, arg.BootTime, arg.ID)
+	return err
+}
+
 const forkUpdateHostPackageState = `-- name: ForkUpdateHostPackageState :exec
 UPDATE hosts
 SET fork_pkg_broken = $1, fork_pkg_broken_detail = $2
@@ -150,7 +170,7 @@ func (q *Queries) ForkUpdateHostPackageState(ctx context.Context, arg ForkUpdate
 }
 
 const getHostByApiID = `-- name: GetHostByApiID :one
-SELECT id, machine_id, friendly_name, ip, os_type, os_version, architecture, last_update, status, created_at, updated_at, api_id, api_key, agent_version, auto_update, cpu_cores, cpu_model, disk_details, dns_servers, gateway_ip, hostname, kernel_version, installed_kernel_version, load_average, network_interfaces, ram_installed, selinux_status, swap_size, system_uptime, notes, needs_reboot, reboot_reason, allow_reboot, fork_pkg_broken, fork_pkg_broken_detail, docker_enabled, compliance_enabled, compliance_on_demand_only, compliance_openscap_enabled, compliance_docker_bench_enabled, compliance_scanner_status, compliance_scanner_updated_at, compliance_default_profile_id, host_down_alerts_enabled, expected_platform, package_manager, primary_interface, awaiting_post_patch_report_run_id FROM hosts WHERE api_id = $1
+SELECT id, machine_id, friendly_name, ip, os_type, os_version, architecture, last_update, status, created_at, updated_at, api_id, api_key, agent_version, auto_update, cpu_cores, cpu_model, disk_details, dns_servers, gateway_ip, hostname, kernel_version, installed_kernel_version, load_average, network_interfaces, ram_installed, selinux_status, swap_size, system_uptime, notes, needs_reboot, reboot_reason, allow_reboot, fork_pkg_broken, fork_pkg_broken_detail, fork_boot_time, docker_enabled, compliance_enabled, compliance_on_demand_only, compliance_openscap_enabled, compliance_docker_bench_enabled, compliance_scanner_status, compliance_scanner_updated_at, compliance_default_profile_id, host_down_alerts_enabled, expected_platform, package_manager, primary_interface, awaiting_post_patch_report_run_id FROM hosts WHERE api_id = $1
 `
 
 func (q *Queries) GetHostByApiID(ctx context.Context, apiID string) (Host, error) {
@@ -192,6 +212,7 @@ func (q *Queries) GetHostByApiID(ctx context.Context, apiID string) (Host, error
 		&i.AllowReboot,
 		&i.ForkPkgBroken,
 		&i.ForkPkgBrokenDetail,
+		&i.ForkBootTime,
 		&i.DockerEnabled,
 		&i.ComplianceEnabled,
 		&i.ComplianceOnDemandOnly,
@@ -210,7 +231,7 @@ func (q *Queries) GetHostByApiID(ctx context.Context, apiID string) (Host, error
 }
 
 const getHostByID = `-- name: GetHostByID :one
-SELECT id, machine_id, friendly_name, ip, os_type, os_version, architecture, last_update, status, created_at, updated_at, api_id, api_key, agent_version, auto_update, cpu_cores, cpu_model, disk_details, dns_servers, gateway_ip, hostname, kernel_version, installed_kernel_version, load_average, network_interfaces, ram_installed, selinux_status, swap_size, system_uptime, notes, needs_reboot, reboot_reason, allow_reboot, fork_pkg_broken, fork_pkg_broken_detail, docker_enabled, compliance_enabled, compliance_on_demand_only, compliance_openscap_enabled, compliance_docker_bench_enabled, compliance_scanner_status, compliance_scanner_updated_at, compliance_default_profile_id, host_down_alerts_enabled, expected_platform, package_manager, primary_interface, awaiting_post_patch_report_run_id FROM hosts WHERE id = $1
+SELECT id, machine_id, friendly_name, ip, os_type, os_version, architecture, last_update, status, created_at, updated_at, api_id, api_key, agent_version, auto_update, cpu_cores, cpu_model, disk_details, dns_servers, gateway_ip, hostname, kernel_version, installed_kernel_version, load_average, network_interfaces, ram_installed, selinux_status, swap_size, system_uptime, notes, needs_reboot, reboot_reason, allow_reboot, fork_pkg_broken, fork_pkg_broken_detail, fork_boot_time, docker_enabled, compliance_enabled, compliance_on_demand_only, compliance_openscap_enabled, compliance_docker_bench_enabled, compliance_scanner_status, compliance_scanner_updated_at, compliance_default_profile_id, host_down_alerts_enabled, expected_platform, package_manager, primary_interface, awaiting_post_patch_report_run_id FROM hosts WHERE id = $1
 `
 
 func (q *Queries) GetHostByID(ctx context.Context, id string) (Host, error) {
@@ -252,6 +273,7 @@ func (q *Queries) GetHostByID(ctx context.Context, id string) (Host, error) {
 		&i.AllowReboot,
 		&i.ForkPkgBroken,
 		&i.ForkPkgBrokenDetail,
+		&i.ForkBootTime,
 		&i.DockerEnabled,
 		&i.ComplianceEnabled,
 		&i.ComplianceOnDemandOnly,
@@ -270,7 +292,7 @@ func (q *Queries) GetHostByID(ctx context.Context, id string) (Host, error) {
 }
 
 const getHostsByIDs = `-- name: GetHostsByIDs :many
-SELECT id, machine_id, friendly_name, ip, os_type, os_version, architecture, last_update, status, created_at, updated_at, api_id, api_key, agent_version, auto_update, cpu_cores, cpu_model, disk_details, dns_servers, gateway_ip, hostname, kernel_version, installed_kernel_version, load_average, network_interfaces, ram_installed, selinux_status, swap_size, system_uptime, notes, needs_reboot, reboot_reason, allow_reboot, fork_pkg_broken, fork_pkg_broken_detail, docker_enabled, compliance_enabled, compliance_on_demand_only, compliance_openscap_enabled, compliance_docker_bench_enabled, compliance_scanner_status, compliance_scanner_updated_at, compliance_default_profile_id, host_down_alerts_enabled, expected_platform, package_manager, primary_interface, awaiting_post_patch_report_run_id FROM hosts WHERE id = ANY($1::text[])
+SELECT id, machine_id, friendly_name, ip, os_type, os_version, architecture, last_update, status, created_at, updated_at, api_id, api_key, agent_version, auto_update, cpu_cores, cpu_model, disk_details, dns_servers, gateway_ip, hostname, kernel_version, installed_kernel_version, load_average, network_interfaces, ram_installed, selinux_status, swap_size, system_uptime, notes, needs_reboot, reboot_reason, allow_reboot, fork_pkg_broken, fork_pkg_broken_detail, fork_boot_time, docker_enabled, compliance_enabled, compliance_on_demand_only, compliance_openscap_enabled, compliance_docker_bench_enabled, compliance_scanner_status, compliance_scanner_updated_at, compliance_default_profile_id, host_down_alerts_enabled, expected_platform, package_manager, primary_interface, awaiting_post_patch_report_run_id FROM hosts WHERE id = ANY($1::text[])
 `
 
 func (q *Queries) GetHostsByIDs(ctx context.Context, dollar_1 []string) ([]Host, error) {
@@ -318,6 +340,7 @@ func (q *Queries) GetHostsByIDs(ctx context.Context, dollar_1 []string) ([]Host,
 			&i.AllowReboot,
 			&i.ForkPkgBroken,
 			&i.ForkPkgBrokenDetail,
+			&i.ForkBootTime,
 			&i.DockerEnabled,
 			&i.ComplianceEnabled,
 			&i.ComplianceOnDemandOnly,
@@ -343,7 +366,7 @@ func (q *Queries) GetHostsByIDs(ctx context.Context, dollar_1 []string) ([]Host,
 }
 
 const listHosts = `-- name: ListHosts :many
-SELECT id, machine_id, friendly_name, ip, os_type, os_version, architecture, last_update, status, created_at, updated_at, api_id, api_key, agent_version, auto_update, cpu_cores, cpu_model, disk_details, dns_servers, gateway_ip, hostname, kernel_version, installed_kernel_version, load_average, network_interfaces, ram_installed, selinux_status, swap_size, system_uptime, notes, needs_reboot, reboot_reason, allow_reboot, fork_pkg_broken, fork_pkg_broken_detail, docker_enabled, compliance_enabled, compliance_on_demand_only, compliance_openscap_enabled, compliance_docker_bench_enabled, compliance_scanner_status, compliance_scanner_updated_at, compliance_default_profile_id, host_down_alerts_enabled, expected_platform, package_manager, primary_interface, awaiting_post_patch_report_run_id FROM hosts ORDER BY friendly_name
+SELECT id, machine_id, friendly_name, ip, os_type, os_version, architecture, last_update, status, created_at, updated_at, api_id, api_key, agent_version, auto_update, cpu_cores, cpu_model, disk_details, dns_servers, gateway_ip, hostname, kernel_version, installed_kernel_version, load_average, network_interfaces, ram_installed, selinux_status, swap_size, system_uptime, notes, needs_reboot, reboot_reason, allow_reboot, fork_pkg_broken, fork_pkg_broken_detail, fork_boot_time, docker_enabled, compliance_enabled, compliance_on_demand_only, compliance_openscap_enabled, compliance_docker_bench_enabled, compliance_scanner_status, compliance_scanner_updated_at, compliance_default_profile_id, host_down_alerts_enabled, expected_platform, package_manager, primary_interface, awaiting_post_patch_report_run_id FROM hosts ORDER BY friendly_name
 `
 
 func (q *Queries) ListHosts(ctx context.Context) ([]Host, error) {
@@ -391,6 +414,7 @@ func (q *Queries) ListHosts(ctx context.Context) ([]Host, error) {
 			&i.AllowReboot,
 			&i.ForkPkgBroken,
 			&i.ForkPkgBrokenDetail,
+			&i.ForkBootTime,
 			&i.DockerEnabled,
 			&i.ComplianceEnabled,
 			&i.ComplianceOnDemandOnly,

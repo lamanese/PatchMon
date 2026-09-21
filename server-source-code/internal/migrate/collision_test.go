@@ -22,6 +22,7 @@ var forkOwnedIdentifiers = []string{
 	"license_package",
 	"fork_is_definition_update",
 	"fork_pkg_broken",
+	"fork_boot_time",
 }
 
 func TestUpstreamMigrationsDoNotTouchForkObjects(t *testing.T) {

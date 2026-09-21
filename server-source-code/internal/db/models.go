@@ -5,6 +5,8 @@
 package db
 
 import (
+	"time"
+
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -290,6 +292,7 @@ type Host struct {
 	AllowReboot                  bool             `json:"allow_reboot"`
 	ForkPkgBroken                bool             `json:"fork_pkg_broken"`
 	ForkPkgBrokenDetail          *string          `json:"fork_pkg_broken_detail"`
+	ForkBootTime                 *time.Time       `json:"fork_boot_time"`
 	DockerEnabled                bool             `json:"docker_enabled"`
 	ComplianceEnabled            bool             `json:"compliance_enabled"`
 	ComplianceOnDemandOnly       bool             `json:"compliance_on_demand_only"`

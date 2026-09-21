@@ -230,6 +230,10 @@ type Querier interface {
 	// query above sets it), so GREATEST(updated_at, scheduled_at) never reaps a
 	// run before its own scheduled_at plus the caller's threshold has elapsed.
 	ForkCancelStaleWaitingPatchRuns(ctx context.Context, arg ForkCancelStaleWaitingPatchRunsParams) (int64, error)
+	// Fork: last boot instant reported by agents 2.0.20+. Kept out of
+	// UpdateHostFromReport so that upstream query stays untouched. The caller only
+	// invokes it with a plausible value; a missing value never clears the column.
+	ForkUpdateHostBootTime(ctx context.Context, arg ForkUpdateHostBootTimeParams) error
 	// Fork: "package manager is in a broken state" hint reported by agents 2.0.15+.
 	// Kept out of UpdateHostFromReport so that upstream query stays untouched.
 	ForkUpdateHostPackageState(ctx context.Context, arg ForkUpdateHostPackageStateParams) error

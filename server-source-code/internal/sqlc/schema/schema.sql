@@ -235,6 +235,7 @@ CREATE TABLE IF NOT EXISTS hosts (
     allow_reboot BOOLEAN NOT NULL DEFAULT false,
     fork_pkg_broken BOOLEAN NOT NULL DEFAULT false,
     fork_pkg_broken_detail TEXT,
+    fork_boot_time TIMESTAMPTZ,
     docker_enabled BOOLEAN NOT NULL DEFAULT false,
     compliance_enabled BOOLEAN NOT NULL DEFAULT false,
     compliance_on_demand_only BOOLEAN NOT NULL DEFAULT true,

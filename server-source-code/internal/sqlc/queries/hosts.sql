@@ -107,3 +107,11 @@ UPDATE hosts SET awaiting_post_patch_report_run_id = $1, updated_at = NOW() WHER
 UPDATE hosts
 SET fork_pkg_broken = sqlc.arg('broken'), fork_pkg_broken_detail = sqlc.narg('detail')
 WHERE id = sqlc.arg('id');
+
+-- name: ForkUpdateHostBootTime :exec
+-- Fork: last boot instant reported by agents 2.0.20+. Kept out of
+-- UpdateHostFromReport so that upstream query stays untouched. The caller only
+-- invokes it with a plausible value; a missing value never clears the column.
+UPDATE hosts
+SET fork_boot_time = sqlc.arg('boot_time')::timestamptz
+WHERE id = sqlc.arg('id');
