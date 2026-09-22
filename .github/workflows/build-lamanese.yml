@@ -53,8 +53,28 @@ jobs:
   # The collision-guard tests in internal/migrate assert that upstream migrations
   # never touch fork-owned objects; this job must be able to break the fork
   # build, especially at upstream-sync time.
+  #
+  # The database-backed tests (migration up/down, legacy bridge, rollback, and
+  # the *_testdb_test.go files in store/ and queue/) skip themselves without
+  # PM_TEST_DATABASE_URL, so the job runs a throwaway Postgres and points them
+  # at it. The account must be allowed to CREATE DATABASE: the tests create one
+  # scratch database per test.
   test-migrate:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: patchmon_test
+          POSTGRES_PASSWORD: patchmon_test
+          POSTGRES_DB: patchmon_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U patchmon_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -65,9 +85,17 @@ jobs:
           go-version-file: server-source-code/go.mod
           cache-dependency-path: server-source-code/go.sum
 
-      - name: Run migrate package tests
+      - name: Run migrate package tests (with database)
         working-directory: server-source-code
-        run: go test ./internal/migrate/...
+        env:
+          PM_TEST_DATABASE_URL: postgresql://patchmon_test:patchmon_test@localhost:5432/patchmon_test?sslmode=disable
+        run: go test -count=1 ./internal/migrate/...
+
+      - name: Run the other database-backed tests
+        working-directory: server-source-code
+        env:
+          PM_TEST_DATABASE_URL: postgresql://patchmon_test:patchmon_test@localhost:5432/patchmon_test?sslmode=disable
+        run: go test -count=1 ./internal/store/... ./internal/queue/...
 
   build-server:
     needs: [build-agents, test-migrate]
