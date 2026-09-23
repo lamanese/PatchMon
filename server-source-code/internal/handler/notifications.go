@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/PatchMon/PatchMon/server-source-code/internal/notifications"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/pgtime"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/queue"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/reports"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/store"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/util"
 	"github.com/go-chi/chi/v5"
@@ -497,6 +499,27 @@ func (h *NotificationsHandler) scheduledReportToMap(row db.ScheduledReport) map[
 	}
 }
 
+// validatedDefinition parses a submitted report definition strictly, checks
+// that every host group exists, and returns the normalised JSON (version 2).
+func (h *NotificationsHandler) validatedDefinition(ctx context.Context, raw map[string]interface{}) ([]byte, error) {
+	in, _ := json.Marshal(raw)
+	if raw == nil {
+		in = []byte("{}")
+	}
+	def, err := reports.ParseDefinition(in)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := reports.ValidateGroupIDs(ctx, h.q(ctx), def.HostGroupIDs); err != nil {
+		return nil, err
+	}
+	out, err := json.Marshal(def)
+	if err != nil {
+		return nil, fmt.Errorf("definition: %w", err)
+	}
+	return out, nil
+}
+
 // ListScheduledReports GET /notifications/scheduled-reports
 func (h *NotificationsHandler) ListScheduledReports(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.q(r.Context()).ListScheduledReports(r.Context())
@@ -529,9 +552,10 @@ func (h *NotificationsHandler) CreateScheduledReport(w http.ResponseWriter, r *h
 		cron = "0 8 * * *"
 	}
 	tz := h.timezoneForRequest(r.Context())
-	def, _ := json.Marshal(req.Definition)
-	if len(def) == 0 || string(def) == "null" {
-		def = []byte("{}")
+	def, err := h.validatedDefinition(r.Context(), req.Definition)
+	if err != nil {
+		Error(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	dest, _ := json.Marshal(req.DestinationIDs)
 	en := true
@@ -605,7 +629,12 @@ func (h *NotificationsHandler) UpdateScheduledReport(w http.ResponseWriter, r *h
 	}
 	def := ex.Definition
 	if req.Definition != nil {
-		def, _ = json.Marshal(req.Definition)
+		var derr error
+		def, derr = h.validatedDefinition(r.Context(), req.Definition)
+		if derr != nil {
+			Error(w, http.StatusBadRequest, derr.Error())
+			return
+		}
 	}
 	dest := ex.DestinationIds
 	if req.DestinationIDs != nil {

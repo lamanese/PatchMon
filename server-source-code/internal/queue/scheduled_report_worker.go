@@ -22,6 +22,7 @@ import (
 	"github.com/PatchMon/PatchMon/server-source-code/internal/db"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/notifications"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/pgtime"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/reports"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/util"
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
@@ -40,18 +41,37 @@ func NewScheduledReportsDispatchHandler(defaultDB *database.DB, poolCache *hostc
 	return &ScheduledReportsDispatchHandler{defaultDB: defaultDB, poolCache: poolCache, qc: qc, log: log}
 }
 
-func (h *ScheduledReportsDispatchHandler) resolveDB(ctx context.Context, payload []byte) *database.DB {
-	db := h.defaultDB
-	if len(payload) == 0 || h.poolCache == nil {
-		return db
+// resolveDB fails closed: a payload that names a tenant host must resolve
+// to that tenant's database, never to the default one.
+func (h *ScheduledReportsDispatchHandler) resolveDB(ctx context.Context, payload []byte) (*database.DB, error) {
+	if len(payload) == 0 {
+		return h.defaultDB, nil
 	}
 	var p AutomationPayload
-	if err := json.Unmarshal(payload, &p); err == nil && strings.TrimSpace(p.Host) != "" {
-		if resolved, err := h.poolCache.GetOrCreate(ctx, p.Host); err == nil && resolved != nil {
-			db = resolved
-		}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return nil, fmt.Errorf("scheduled_reports_dispatch: invalid payload: %w", err)
 	}
-	return db
+	return resolveTenantDB(ctx, h.defaultDB, h.poolCache, p.Host)
+}
+
+// resolveTenantDB returns the default DB for an empty host and the tenant DB
+// otherwise. Missing pool cache or a failed lookup is an error (fail-closed).
+func resolveTenantDB(ctx context.Context, defaultDB *database.DB, poolCache *hostctx.PoolCache, host string) (*database.DB, error) {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return defaultDB, nil
+	}
+	if poolCache == nil {
+		return nil, fmt.Errorf("tenant %q: no pool cache configured", host)
+	}
+	resolved, err := poolCache.GetOrCreate(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("tenant %q: %w", host, err)
+	}
+	if resolved == nil {
+		return nil, fmt.Errorf("tenant %q: no database", host)
+	}
+	return resolved, nil
 }
 
 func (h *ScheduledReportsDispatchHandler) processDB(ctx context.Context, d *database.DB, tenantHost string) {
@@ -78,7 +98,13 @@ func (h *ScheduledReportsDispatchHandler) processDB(ctx context.Context, d *data
 func (h *ScheduledReportsDispatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error {
 	payload := t.Payload()
 	if len(payload) > 0 {
-		d := h.resolveDB(ctx, payload)
+		d, err := h.resolveDB(ctx, payload)
+		if err != nil {
+			if h.log != nil {
+				h.log.Error("scheduled_reports_dispatch: tenant resolution failed", "error", err)
+			}
+			return err
+		}
 		h.processDB(ctx, d, tenantHostFromPayload(payload))
 		return nil
 	}
@@ -152,18 +178,13 @@ func NewScheduledReportRunHandler(defaultDB *database.DB, poolCache *hostctx.Poo
 	return &ScheduledReportRunHandler{defaultDB: defaultDB, poolCache: poolCache, qc: qc, enc: enc, log: log}
 }
 
-func (h *ScheduledReportRunHandler) resolveDB(ctx context.Context, payload []byte) *database.DB {
-	db := h.defaultDB
-	if len(payload) == 0 || h.poolCache == nil {
-		return db
-	}
+// resolveDB fails closed (see resolveTenantDB).
+func (h *ScheduledReportRunHandler) resolveDB(ctx context.Context, payload []byte) (*database.DB, error) {
 	var p ScheduledReportRunPayload
-	if err := json.Unmarshal(payload, &p); err == nil && strings.TrimSpace(p.Host) != "" {
-		if resolved, err := h.poolCache.GetOrCreate(ctx, p.Host); err == nil && resolved != nil {
-			db = resolved
-		}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return nil, fmt.Errorf("scheduled_report: invalid payload: %w", err)
 	}
-	return db
+	return resolveTenantDB(ctx, h.defaultDB, h.poolCache, p.Host)
 }
 
 // ProcessTask implements asynq.Handler.
@@ -172,7 +193,13 @@ func (h *ScheduledReportRunHandler) ProcessTask(ctx context.Context, t *asynq.Ta
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		return err
 	}
-	d := h.resolveDB(ctx, t.Payload())
+	d, err := h.resolveDB(ctx, t.Payload())
+	if err != nil {
+		if h.log != nil {
+			h.log.Error("scheduled_report: tenant resolution failed", "report_id", p.ReportID, "error", err)
+		}
+		return err
+	}
 	rep, err := d.Queries.GetScheduledReportByID(ctx, p.ReportID)
 	if err != nil {
 		return nil
@@ -181,24 +208,34 @@ func (h *ScheduledReportRunHandler) ProcessTask(ctx context.Context, t *asynq.Ta
 		return nil
 	}
 
-	// Build branding from settings for email template.
-	branding := notifications.ReportBranding{}
+	// Branding and the stale threshold come from the tenant's settings.
+	branding := reports.Branding{}
+	var staleAfter time.Duration
 	if settings, sErr := d.Queries.GetFirstSettings(ctx); sErr == nil {
 		baseURL := strings.TrimRight(settings.ServerUrl, "/")
 		branding.ServerURL = baseURL
 		if settings.LogoLight != nil && *settings.LogoLight != "" {
-			branding.LogoLightURL = baseURL + *settings.LogoLight
+			branding.LogoURL = baseURL + *settings.LogoLight
 		}
-		if settings.LogoDark != nil && *settings.LogoDark != "" {
-			branding.LogoDarkURL = baseURL + *settings.LogoDark
+		if settings.UpdateInterval > 0 {
+			staleAfter = 2 * time.Duration(settings.UpdateInterval) * time.Minute
 		}
 	}
 
-	subject, htmlBody, csvBody, err := notifications.BuildScheduledReport(ctx, d, rep.Name, rep.Definition, branding)
+	out, err := reports.Build(ctx, d, reports.BuildInput{
+		ReportName: rep.Name,
+		Definition: rep.Definition,
+		Timezone:   rep.Timezone,
+		Now:        time.Now(),
+		StaleAfter: staleAfter,
+		Branding:   branding,
+		// CustomerMode arrives with increment D (recipients column).
+	})
 	if err != nil {
 		h.insertRun(ctx, d, p.ReportID, "failed", err.Error(), "")
 		return err
 	}
+	subject, htmlBody, csvBody := out.Subject, out.HTML, out.CSV
 	sum := sha256.Sum256([]byte(htmlBody + csvBody))
 	sumHex := hex.EncodeToString(sum[:])
 
