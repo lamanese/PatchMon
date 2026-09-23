@@ -175,3 +175,5 @@ favicon.svg
 
 # Auto-generated session handoff (claude-handoff hook)
 HANDOFF.md
+.codex/
+AGENTS.md
