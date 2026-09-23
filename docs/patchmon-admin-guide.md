@@ -3846,8 +3846,10 @@ To include host-group scoping, the user must also have `can_view_hosts` (so the 
 | **Schedule** | Frequency + time of day. See [Schedule options](#schedule-options). |
 | **Sections** | Which blocks to include in the rendered report. See [Report sections](#report-sections). |
 | **Deliver to** | Tick every destination that should receive this report. You can send the same report to multiple destinations. |
-| **Scope to host groups** | Optional. Limit the report's per-host sections to the selected host groups. Leave empty for fleet-wide. |
-| **Top rows per section** | Numeric cap on per-host lists, defaults to **20**. |
+| **Scope to host groups** | Optional. Limits **every** section (KPIs, lists, alerts, packages) to the hosts of the selected groups. Leave empty for fleet-wide. Groups are the current selection, not a history: a host moved from group A to group B brings its activity of the period into B's next report. |
+| **Language** | `English` (default) or `Deutsch`. Raw data (package names, update titles, error text) stays as reported. |
+| **Activity period** | 7, 30 or 90 days (default 30). Window for the patching KPIs, patch activity and reboots; independent of the delivery schedule. |
+| **Top rows per section** | Numeric cap on per-host lists, defaults to **20**, at most 200. |
 | **Enabled** | On by default. Disable to keep the report saved but paused. |
 
 4. Click **Create**.
@@ -3881,7 +3883,14 @@ Each report is a composition of **sections**, ticked independently:
 | **Hosts / status** | Host status rollup: offline, stale, active. |
 | **Open alerts** | Currently active alerts grouped by severity. |
 | **Hosts by outstanding updates** | Top hosts sorted by pending updates (respects the **Top rows per section** cap). |
-| **Top outdated security packages** | Packages with the most hosts needing a security update. |
+| **Top outdated security packages** | Packages with the most hosts needing a security update; the available version comes from the hosts in scope, never from the shared package catalog. |
+| **Host overview** | One row per host: OS, status, open updates, security updates, reboot pending, last boot (agents 2.0.20+; older agents show the last reported uptime), last patch run, agent version. |
+| **Security updates by host** | Open security updates per host with installed and available version, capped at 15 per host. |
+| **Disks** | Every reported disk with size and usage; marked from 85 % and 95 %. |
+| **Patch activity (period)** | Patch runs started inside the activity period with type, result and package count. Dry runs are labelled and do not count in the KPIs. |
+| **Reboots (period)** | Reboot commands inside the period. The report shows whether the command was delivered to the agent, not whether the host actually restarted. |
+
+The **Executive summary** counts patch runs inside the activity period. Windows definition updates are excluded from all counts when `PM_IGNORE_DEFINITION_UPDATES=true`.
 
 New reports default to **Executive summary + Compliance summary + Recent patch runs** unless you customise the selection.
 
@@ -3926,15 +3935,16 @@ When the task executes, the worker:
 
 1. Re-reads the report row.
 2. Aborts if it has been disabled since enqueue.
-3. Renders HTML + CSV via the server's report renderer (see `internal/notifications/report_render.go`).
-4. Fans out to each destination with the same fingerprint + rate-limit + retry semantics as regular notifications.
+3. Validates the definition, resolves the host scope and renders HTML + CSV from a typed model (`internal/reports`). Every section reads only the hosts in scope; a report never falls back to the whole fleet. Unknown host groups, groups without hosts, or more than 500 hosts fail the run with a clear message in `scheduled_report_runs`.
+4. Sends the rendered report to each destination. Delivery errors are logged per destination; there is no per-destination retry yet.
 5. Updates `last_run_at` and queues the next occurrence.
 
 Because the schedule is stored as a cron string plus a timezone, daylight-saving transitions are handled by the cron library. Jobs that would fall in a skipped hour are pushed to the next valid slot; jobs repeated in a duplicate hour fire once.
 
 ### Known limits
 
-- The scheduled-report pipeline does **not** attempt full re-delivery of a whole report's fan-out on transient failure. A delivery that fails retries per-destination (up to 5 times via asynq), but the render is not re-done. In practice this means a report either reached each destination successfully (with retries covering transient issues) or ended up in the delivery log as `failed` for that destination.
+- Delivery failures are logged, not retried: a destination that rejects the report does not receive it again until the next scheduled run. Archive, per-recipient status and retries are planned.
+- A report is capped at 500 hosts in scope and lists at most 500 rows of activity or reboots per period.
 - There is no "skip next run" option. To skip a single run, disable the report before its scheduled time, then re-enable it afterwards.
 - Report templates are not customisable from the UI in 2.0. The rendered HTML layout is fixed; customise by choosing sections and host-group scope. Custom templates are a candidate for a future release.
 
