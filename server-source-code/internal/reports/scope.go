@@ -31,6 +31,16 @@ var (
 	ErrTooManyHosts = errors.New("too_many_hosts")
 )
 
+// IsConfigError reports whether err is caused by the report's configuration
+// (definition, groups, scope size) rather than by a transient failure. Config
+// errors are deterministic: retrying the same slot cannot succeed.
+func IsConfigError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, ErrDefinition) || errors.Is(err, ErrScopeInvalid) || errors.Is(err, ErrNoHosts) || errors.Is(err, ErrTooManyHosts)
+}
+
 // ValidateGroupIDs checks that every id names an existing host group and
 // returns the groups sorted by name. Unknown ids are an ErrScopeInvalid that
 // lists them, so the API can answer 400 and the worker can fail the run.

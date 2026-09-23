@@ -233,6 +233,16 @@ func (h *ScheduledReportRunHandler) ProcessTask(ctx context.Context, t *asynq.Ta
 	})
 	if err != nil {
 		h.insertRun(ctx, d, p.ReportID, "failed", err.Error(), "")
+		if reports.IsConfigError(err) {
+			// Deterministic: the same definition fails on every retry and the
+			// hourly fallback would re-fire it forever. Record the failure once
+			// per slot and move on to the next slot.
+			if h.log != nil {
+				h.log.Warn("scheduled_report: configuration error, skipping slot", "report_id", p.ReportID, "error", err)
+			}
+			h.advanceSchedule(ctx, d, rep, p.Host, time.Now())
+			return nil
+		}
 		return err
 	}
 	subject, htmlBody, csvBody := out.Subject, out.HTML, out.CSV
@@ -275,7 +285,14 @@ func (h *ScheduledReportRunHandler) ProcessTask(ctx context.Context, t *asynq.Ta
 		}
 	}
 
-	now := time.Now()
+	h.insertRun(ctx, d, p.ReportID, "completed", "", sumHex)
+	h.advanceSchedule(ctx, d, rep, p.Host, time.Now())
+	return nil
+}
+
+// advanceSchedule stamps last_run_at, computes the next slot from the cron
+// expression and self-enqueues it (event-driven chain).
+func (h *ScheduledReportRunHandler) advanceSchedule(ctx context.Context, d *database.DB, rep db.ScheduledReport, host string, now time.Time) {
 	tz := rep.Timezone
 	if tz == "" {
 		tz = "UTC"
@@ -289,13 +306,9 @@ func (h *ScheduledReportRunHandler) ProcessTask(ctx context.Context, t *asynq.Ta
 		LastRunAt: pgtime.From(now),
 		NextRunAt: pgtime.From(next),
 	})
-	h.insertRun(ctx, d, p.ReportID, "completed", "", sumHex)
-
-	// Self-enqueue the next run at the computed time (event-driven chain).
-	if err := EnqueueScheduledReportAt(h.qc, p.ReportID, p.Host, next); err != nil && h.log != nil {
-		h.log.Error("scheduled_report: failed to enqueue next run", "report_id", p.ReportID, "next", next, "error", err)
+	if err := EnqueueScheduledReportAt(h.qc, rep.ID, host, next); err != nil && h.log != nil {
+		h.log.Error("scheduled_report: failed to enqueue next run", "report_id", rep.ID, "next", next, "error", err)
 	}
-	return nil
 }
 
 func (h *ScheduledReportRunHandler) insertRun(ctx context.Context, d *database.DB, reportID, status, errMsg, hash string) {

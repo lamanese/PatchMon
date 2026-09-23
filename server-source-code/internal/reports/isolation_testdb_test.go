@@ -347,3 +347,45 @@ func TestCollectMovedHostBringsItsActivity(t *testing.T) {
 		t.Fatal("a1's run from before the move must appear in B's report")
 	}
 }
+
+func TestCollectLimitsApplyAfterTheGroupFilter(t *testing.T) {
+	d := newReportsTestDB(t)
+	f := buildFixture(t, d)
+	// b1 gets the newest run of the whole fleet; with top_hosts=1 the A
+	// report must still show an A run, never nothing.
+	insertRun(t, d, f.b1, "completed", false, f.now.Add(-time.Hour), nil)
+	def := allSectionsDef(f.gA)
+	def.Limits.TopHosts = 1
+	m := collectFor(t, d, f, def, true)
+	if len(m.RecentPatchRuns.Rows) != 1 || m.RecentPatchRuns.Rows[0].HostID != f.a1 {
+		t.Fatalf("recent runs %+v", m.RecentPatchRuns.Rows)
+	}
+	if len(m.HostStatus.Rows) != 1 || len(m.HostsByUpdates.Rows) != 1 || m.HostsByUpdates.Rows[0].HostID != f.a2 {
+		t.Fatalf("host lists must be capped after filtering: status %d, by updates %+v", len(m.HostStatus.Rows), m.HostsByUpdates.Rows)
+	}
+	if len(m.HostOverview.Rows) != 2 || len(m.SecurityUpdatesByHost.Hosts) != 2 {
+		t.Fatalf("customer sections are never capped by top_hosts")
+	}
+	if len(m.OpenAlerts.Rows) != 1 || m.OpenAlerts.Rows[0].HostID != f.a1 {
+		t.Fatalf("alerts %+v", m.OpenAlerts.Rows)
+	}
+}
+
+func TestCollectPatchActivityTruncationKeepsExactCounters(t *testing.T) {
+	d := newReportsTestDB(t)
+	f := buildFixture(t, d)
+	mustExec(t, d, `INSERT INTO patch_runs (id, host_id, job_id, patch_type, status, dry_run, created_at, updated_at)
+		SELECT gen_random_uuid()::text, $1, 'job-' || g, 'patch_all', 'completed', false, $2::timestamp - (g || ' minutes')::interval, $2::timestamp
+		FROM generate_series(1, 600) g`, f.a1, f.now.Add(-3*24*time.Hour))
+	m := collectFor(t, d, f, allSectionsDef(f.gA), true)
+	pa := m.PatchActivity
+	if !pa.Truncated || len(pa.Rows) != MaxActivityRows {
+		t.Fatalf("expected truncation at %d rows, got %d truncated=%v", MaxActivityRows, len(pa.Rows), pa.Truncated)
+	}
+	if pa.Completed != 601 || pa.Failed != 0 {
+		t.Fatalf("counters must cover the whole period, got completed=%d failed=%d", pa.Completed, pa.Failed)
+	}
+	if m.ExecutiveSummary.RunsCompleted != 601 {
+		t.Fatalf("executive summary %+v", m.ExecutiveSummary)
+	}
+}

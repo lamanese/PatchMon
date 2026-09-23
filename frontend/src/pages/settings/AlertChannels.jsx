@@ -971,6 +971,13 @@ const ReportModal = ({
 			form.days,
 			form.monthDay,
 		);
+		// Drop ids of groups that no longer exist: the server rejects unknown
+		// groups, and the modal cannot show a checkbox for a deleted group.
+		const knownGroupIds = new Set(hostGroups.map((g) => g.id));
+		const groupIds =
+			hostGroups.length > 0
+				? form.host_group_ids.filter((id) => knownGroupIds.has(id))
+				: form.host_group_ids;
 		onSave({
 			name: form.name.trim(),
 			cron_expr: cronExpr,
@@ -978,7 +985,7 @@ const ReportModal = ({
 			definition: {
 				version: 2,
 				sections: form.sections,
-				host_group_ids: form.host_group_ids,
+				host_group_ids: groupIds,
 				language: form.language,
 				period_days: Number(form.period_days) || 30,
 				limits: { top_hosts: Number(form.top_hosts) || 20 },

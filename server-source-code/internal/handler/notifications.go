@@ -520,6 +520,22 @@ func (h *NotificationsHandler) validatedDefinition(ctx context.Context, raw map[
 	return out, nil
 }
 
+// definitionErrorStatus maps validation errors to 400 and everything else
+// (database failures while checking groups) to 500.
+func definitionErrorStatus(err error) int {
+	if reports.IsConfigError(err) {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
+}
+
+func definitionErrorText(err error) string {
+	if reports.IsConfigError(err) {
+		return err.Error()
+	}
+	return "Failed to validate report definition"
+}
+
 // ListScheduledReports GET /notifications/scheduled-reports
 func (h *NotificationsHandler) ListScheduledReports(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.q(r.Context()).ListScheduledReports(r.Context())
@@ -554,7 +570,7 @@ func (h *NotificationsHandler) CreateScheduledReport(w http.ResponseWriter, r *h
 	tz := h.timezoneForRequest(r.Context())
 	def, err := h.validatedDefinition(r.Context(), req.Definition)
 	if err != nil {
-		Error(w, http.StatusBadRequest, err.Error())
+		Error(w, definitionErrorStatus(err), definitionErrorText(err))
 		return
 	}
 	dest, _ := json.Marshal(req.DestinationIDs)
@@ -632,7 +648,7 @@ func (h *NotificationsHandler) UpdateScheduledReport(w http.ResponseWriter, r *h
 		var derr error
 		def, derr = h.validatedDefinition(r.Context(), req.Definition)
 		if derr != nil {
-			Error(w, http.StatusBadRequest, derr.Error())
+			Error(w, definitionErrorStatus(derr), definitionErrorText(derr))
 			return
 		}
 	}

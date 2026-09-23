@@ -1,6 +1,8 @@
 package reports
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -61,8 +63,6 @@ func TestParseDefinitionRejects(t *testing.T) {
 		"unknown section": `{"sections":["executive_summary","pdf_magic"]}`,
 		"language fr":     `{"language":"fr"}`,
 		"period 14":       `{"period_days":14}`,
-		"top hosts 500":   `{"limits":{"top_hosts":500}}`,
-		"top hosts -1":    `{"limits":{"top_hosts":-1}}`,
 	}
 	for name, raw := range cases {
 		if _, err := ParseDefinition([]byte(raw)); err == nil {
@@ -92,5 +92,35 @@ func TestKnownSectionsCoverEveryConstant(t *testing.T) {
 		if KnownSections[i] != s {
 			t.Fatalf("KnownSections[%d] = %q, want %q", i, KnownSections[i], s)
 		}
+	}
+}
+
+// Old UIs allowed any top_hosts value; stored rows must keep working.
+func TestParseDefinitionClampsTopHosts(t *testing.T) {
+	cases := map[string]int{
+		`{"limits":{"top_hosts":500}}`: MaxTopHosts,
+		`{"limits":{"top_hosts":-1}}`:  1,
+		`{"limits":{"top_hosts":0}}`:   DefaultTopHosts,
+		`{"limits":{"top_hosts":7}}`:   7,
+	}
+	for raw, want := range cases {
+		def, err := ParseDefinition([]byte(raw))
+		if err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if def.Limits.TopHosts != want {
+			t.Errorf("%s: top_hosts %d, want %d", raw, def.Limits.TopHosts, want)
+		}
+	}
+}
+
+func TestIsConfigError(t *testing.T) {
+	for _, e := range []error{ErrDefinition, ErrScopeInvalid, ErrNoHosts, ErrTooManyHosts} {
+		if !IsConfigError(fmt.Errorf("wrapped: %w", e)) {
+			t.Errorf("%v should be a config error", e)
+		}
+	}
+	if IsConfigError(errors.New("connection refused")) || IsConfigError(nil) {
+		t.Error("transient or nil errors are not config errors")
 	}
 }

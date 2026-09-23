@@ -131,6 +131,8 @@ type collector struct {
 
 	compliance   []db.ForkReportComplianceLatestRow
 	complianceOK bool
+	stats        []db.ForkReportPatchRunStatsRow
+	statsOK      bool
 	securityRows []db.ForkReportSecurityUpdatesRow
 	securityOK   bool
 }
@@ -146,6 +148,21 @@ func (c *collector) complianceRows() ([]db.ForkReportComplianceLatestRow, error)
 		return nil, fmt.Errorf("compliance: %w", err)
 	}
 	c.compliance, c.complianceOK = rows, true
+	return rows, nil
+}
+
+// patchRunStats counts non-dry-run patch runs of the period by status.
+func (c *collector) patchRunStats() ([]db.ForkReportPatchRunStatsRow, error) {
+	if c.statsOK {
+		return c.stats, nil
+	}
+	rows, err := c.q.ForkReportPatchRunStats(c.ctx, db.ForkReportPatchRunStatsParams{
+		HostIds: c.ids, PeriodFrom: pgtime.From(c.m.PeriodFrom), PeriodTo: pgtime.From(c.m.PeriodTo),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("patch run stats: %w", err)
+	}
+	c.stats, c.statsOK = rows, true
 	return rows, nil
 }
 
@@ -226,11 +243,9 @@ func (c *collector) executiveSummary() error {
 		return err
 	}
 	k := complianceStats(rows)
-	stats, err := c.q.ForkReportPatchRunStats(c.ctx, db.ForkReportPatchRunStatsParams{
-		HostIds: c.ids, PeriodFrom: pgtime.From(c.m.PeriodFrom), PeriodTo: pgtime.From(c.m.PeriodTo),
-	})
+	stats, err := c.patchRunStats()
 	if err != nil {
-		return fmt.Errorf("patch run stats: %w", err)
+		return err
 	}
 	es := &ExecutiveSummary{HostCount: c.m.HostCount, ScannedHosts: k.scanned, AverageScore: k.average, HostsCritical: k.critical, HostsCompliant: k.compliant}
 	for _, s := range stats {
@@ -293,6 +308,9 @@ func (c *collector) recentPatchRuns() error {
 func (c *collector) hostStatus() {
 	list := &HostStatusList{}
 	for _, h := range c.hosts {
+		if len(list.Rows) >= c.top {
+			break
+		}
 		list.Rows = append(list.Rows, HostStatusRow{HostID: h.ID, HostName: c.hostName(h), Status: c.effectiveStatus(h), LastSeen: tsPtr(h.LastUpdate)})
 	}
 	c.m.HostStatus = list
@@ -497,7 +515,23 @@ func (c *collector) patchActivity() error {
 	if err != nil {
 		return fmt.Errorf("patch activity: %w", err)
 	}
+	// Counters come from the uncapped, windowed stats query so they stay
+	// exact when the list is truncated.
+	stats, err := c.patchRunStats()
+	if err != nil {
+		return err
+	}
 	pa := &PatchActivity{}
+	for _, s := range stats {
+		switch s.Status {
+		case "completed":
+			pa.Completed += int(s.Cnt)
+		case "failed":
+			pa.Failed += int(s.Cnt)
+		default:
+			pa.Other += int(s.Cnt)
+		}
+	}
 	if len(rows) > MaxActivityRows {
 		rows = rows[:MaxActivityRows]
 		pa.Truncated = true
@@ -510,16 +544,6 @@ func (c *collector) patchActivity() error {
 			if err := json.Unmarshal(r.PackagesAffected, &names); err == nil {
 				n := len(names)
 				row.PackageCount = &n
-			}
-		}
-		if !r.DryRun {
-			switch r.Status {
-			case "completed":
-				pa.Completed++
-			case "failed":
-				pa.Failed++
-			default:
-				pa.Other++
 			}
 		}
 		pa.Rows = append(pa.Rows, row)

@@ -138,11 +138,15 @@ func ParseDefinition(raw []byte) (Definition, error) {
 		return Definition{}, fmt.Errorf("%w: period_days must be 7, 30 or 90", ErrDefinition)
 	}
 
+	// top_hosts is clamped, not rejected: older UIs accepted any number and
+	// stored rows must keep rendering.
 	switch {
 	case def.Limits.TopHosts == 0:
 		def.Limits.TopHosts = DefaultTopHosts
-	case def.Limits.TopHosts < 0 || def.Limits.TopHosts > MaxTopHosts:
-		return Definition{}, fmt.Errorf("%w: top_hosts must be between 1 and %d", ErrDefinition, MaxTopHosts)
+	case def.Limits.TopHosts < 1:
+		def.Limits.TopHosts = 1
+	case def.Limits.TopHosts > MaxTopHosts:
+		def.Limits.TopHosts = MaxTopHosts
 	}
 	return def, nil
 }
