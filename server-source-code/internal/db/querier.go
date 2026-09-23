@@ -230,6 +230,26 @@ type Querier interface {
 	// query above sets it), so GREATEST(updated_at, scheduled_at) never reaps a
 	// run before its own scheduled_at plus the caller's threshold has elapsed.
 	ForkCancelStaleWaitingPatchRuns(ctx context.Context, arg ForkCancelStaleWaitingPatchRunsParams) (int64, error)
+	// Fork: queries for host-group-scoped scheduled reports (internal/reports).
+	// Every query filters by host_ids FIRST and only then aggregates, sorts or
+	// limits, so a report for one group can never see another group's data.
+	// Security/update counts use the same definition-update exclusion as the
+	// dashboard (fork_is_definition_update + PM_IGNORE_DEFINITION_UPDATES).
+	ForkReportAllHostIDs(ctx context.Context) ([]string, error)
+	// Latest completed scan per host AND profile inside the scope.
+	ForkReportComplianceLatest(ctx context.Context, hostIds []string) ([]ForkReportComplianceLatestRow, error)
+	ForkReportGroupsByIDs(ctx context.Context, groupIds []string) ([]ForkReportGroupsByIDsRow, error)
+	// One row per scope host with update counters and the latest real patch run.
+	ForkReportHosts(ctx context.Context, arg ForkReportHostsParams) ([]ForkReportHostsRow, error)
+	// Host alerts carry the host only in metadata.host_id; global alerts have none.
+	ForkReportOpenAlerts(ctx context.Context, arg ForkReportOpenAlertsParams) ([]ForkReportOpenAlertsRow, error)
+	ForkReportPatchActivity(ctx context.Context, arg ForkReportPatchActivityParams) ([]ForkReportPatchActivityRow, error)
+	ForkReportPatchRunStats(ctx context.Context, arg ForkReportPatchRunStatsParams) ([]ForkReportPatchRunStatsRow, error)
+	ForkReportReboots(ctx context.Context, arg ForkReportRebootsParams) ([]ForkReportRebootsRow, error)
+	ForkReportRecentPatchRuns(ctx context.Context, arg ForkReportRecentPatchRunsParams) ([]ForkReportRecentPatchRunsRow, error)
+	// Available version ONLY from host_packages; packages.latest_version is a
+	// shared catalog that any host may overwrite.
+	ForkReportSecurityUpdates(ctx context.Context, arg ForkReportSecurityUpdatesParams) ([]ForkReportSecurityUpdatesRow, error)
 	// Fork: last boot instant reported by agents 2.0.20+. Kept out of
 	// UpdateHostFromReport so that upstream query stays untouched. The caller only
 	// invokes it with a plausible value; a missing value never clears the column.
