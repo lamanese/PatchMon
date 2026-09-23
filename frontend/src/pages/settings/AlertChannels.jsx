@@ -85,7 +85,19 @@ const REPORT_SECTIONS = [
 	{ id: "open_alerts", label: "Open alerts" },
 	{ id: "hosts_by_updates", label: "Hosts by outstanding updates" },
 	{ id: "top_security_packages", label: "Top outdated security packages" },
+	{ id: "host_overview", label: "Host overview" },
+	{ id: "security_updates_by_host", label: "Security updates by host" },
+	{ id: "disks", label: "Disks" },
+	{ id: "patch_activity", label: "Patch activity (period)" },
+	{ id: "reboots", label: "Reboots (period)" },
 ];
+
+const REPORT_LANGUAGES = [
+	{ id: "en", label: "English" },
+	{ id: "de", label: "Deutsch" },
+];
+
+const REPORT_PERIODS = [7, 30, 90];
 
 const CHANNEL_TYPES = [
 	{
@@ -920,6 +932,10 @@ const ReportModal = ({
 			? defRow.host_group_ids
 			: [],
 		top_hosts: defRow.limits?.top_hosts ?? 20,
+		language: defRow.language === "de" ? "de" : "en",
+		period_days: REPORT_PERIODS.includes(Number(defRow.period_days))
+			? Number(defRow.period_days)
+			: 30,
 	});
 	const toast = useToast();
 
@@ -960,9 +976,11 @@ const ReportModal = ({
 			cron_expr: cronExpr,
 			enabled: form.enabled,
 			definition: {
-				version: 1,
+				version: 2,
 				sections: form.sections,
 				host_group_ids: form.host_group_ids,
+				language: form.language,
+				period_days: Number(form.period_days) || 30,
 				limits: { top_hosts: Number(form.top_hosts) || 20 },
 			},
 			destination_ids: form.destination_ids,
@@ -1166,6 +1184,45 @@ const ReportModal = ({
 							</div>
 						</div>
 					)}
+
+					<div className="grid grid-cols-2 gap-4">
+						<div>
+							<label className="block text-sm font-medium text-secondary-700 dark:text-white mb-1">
+								Language
+							</label>
+							<select
+								className={INPUT}
+								value={form.language}
+								onChange={(e) => upd("language", e.target.value)}
+							>
+								{REPORT_LANGUAGES.map((l) => (
+									<option key={l.id} value={l.id}>
+										{l.label}
+									</option>
+								))}
+							</select>
+						</div>
+						<div>
+							<label className="block text-sm font-medium text-secondary-700 dark:text-white mb-1">
+								Activity period
+							</label>
+							<select
+								className={INPUT}
+								value={form.period_days}
+								onChange={(e) => upd("period_days", Number(e.target.value))}
+							>
+								{REPORT_PERIODS.map((d) => (
+									<option key={d} value={d}>
+										Last {d} days
+									</option>
+								))}
+							</select>
+							<p className="mt-1 text-xs text-secondary-500">
+								Window for patch activity, reboots and the patching KPIs;
+								independent of the delivery schedule.
+							</p>
+						</div>
+					</div>
 
 					<div className="grid grid-cols-2 gap-4">
 						<div>
