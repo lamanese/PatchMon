@@ -43,3 +43,29 @@ func TestScheduledReportRunConfigErrorAdvancesScheduleWithoutRetry(t *testing.T)
 		t.Fatalf("next_run_at must move to the next slot, got %v", next)
 	}
 }
+
+// A report without destinations is just as deterministic: one failed run per
+// slot, schedule advanced, no retry storm.
+func TestScheduledReportRunNoDestinationsAdvancesSchedule(t *testing.T) {
+	d := newPatchRunCleanupTestDB(t)
+	ctx := context.Background()
+	insertTestHost(t, d, "h1") // the report itself renders; only the delivery list is empty
+	id := uuid.NewString()
+	past := time.Now().Add(-time.Hour)
+	if _, err := d.Exec(ctx, `INSERT INTO scheduled_reports (id, name, cron_expr, enabled, definition, destination_ids, timezone, next_run_at)
+		VALUES ($1, 'nodest', '0 8 * * *', true, '{}'::jsonb, '[]'::jsonb, 'UTC', $2)`, id, pgtime.From(past)); err != nil {
+		t.Fatal(err)
+	}
+	h := NewScheduledReportRunHandler(d, nil, nil, nil, discardTestLogger())
+	if err := h.ProcessTask(ctx, asynq.NewTask(TypeScheduledReportRun, []byte(`{"report_id":"`+id+`"}`))); err != nil {
+		t.Fatalf("missing destinations must not be retried, got %v", err)
+	}
+	var status string
+	var next time.Time
+	if err := d.RawQueryRow(ctx, `SELECT r.status, s.next_run_at FROM scheduled_report_runs r JOIN scheduled_reports s ON s.id = r.scheduled_report_id WHERE s.id = $1`, id).Scan(&status, &next); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || !next.After(time.Now()) {
+		t.Fatalf("run %q next %v", status, next)
+	}
+}

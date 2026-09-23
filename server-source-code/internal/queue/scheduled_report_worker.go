@@ -254,8 +254,14 @@ func (h *ScheduledReportRunHandler) ProcessTask(ctx context.Context, t *asynq.Ta
 		_ = json.Unmarshal(rep.DestinationIds, &destIDs)
 	}
 	if len(destIDs) == 0 {
+		// Deterministic like a config error: fail this slot once and move on
+		// instead of retrying and re-firing every hour.
 		h.insertRun(ctx, d, p.ReportID, "failed", "no destinations configured", sumHex)
-		return fmt.Errorf("no destinations")
+		if h.log != nil {
+			h.log.Warn("scheduled_report: no destinations configured, skipping slot", "report_id", p.ReportID)
+		}
+		h.advanceSchedule(ctx, d, rep, p.Host, time.Now())
+		return nil
 	}
 
 	for _, did := range destIDs {
