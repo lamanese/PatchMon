@@ -17,7 +17,7 @@ func TestParseDefinitionDefaults(t *testing.T) {
 		if strings.Join(def.Sections, ",") != strings.Join(DefaultSections, ",") {
 			t.Fatalf("%q: sections %v", raw, def.Sections)
 		}
-		if def.HostGroupIDs != nil && len(def.HostGroupIDs) != 0 {
+		if len(def.HostGroupIDs) != 0 {
 			t.Fatalf("%q: groups %v", raw, def.HostGroupIDs)
 		}
 	}

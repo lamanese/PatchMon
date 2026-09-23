@@ -129,12 +129,10 @@ type collector struct {
 	top         int
 	staleBefore time.Time
 
-	compliance    []db.ForkReportComplianceLatestRow
-	complianceOK  bool
-	securityRows  []db.ForkReportSecurityUpdatesRow
-	securityOK    bool
-	hostNameByID  map[string]string
-	hostNameReady bool
+	compliance   []db.ForkReportComplianceLatestRow
+	complianceOK bool
+	securityRows []db.ForkReportSecurityUpdatesRow
+	securityOK   bool
 }
 
 // --- shared loaders (each query runs at most once per report) ---
