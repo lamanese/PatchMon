@@ -17,6 +17,25 @@ func newTestCanvas(t *testing.T) *fpdfCanvas {
 	return c
 }
 
+// assertRowsDrawnAsMeasured fails when any logged table row was drawn taller
+// than measured or continued on another page (a mid-row auto page break), or
+// crosses the bottom margin.
+func assertRowsDrawnAsMeasured(t *testing.T, c *fpdfCanvas) {
+	t.Helper()
+	_, pageH := c.pdf.GetPageSize()
+	for i, r := range c.rowLog {
+		if r.endPage != r.page {
+			t.Fatalf("row %d starts on page %d but drawing ended on page %d", i, r.page, r.endPage)
+		}
+		if d := r.drawnBottom - (r.y + r.h); d > 0.01 || d < -0.01 {
+			t.Fatalf("row %d on page %d: measured bottom %.2f, drawn bottom %.2f", i, r.page, r.y+r.h, r.drawnBottom)
+		}
+		if r.y+r.h > pageH-pdfBottom+0.01 {
+			t.Fatalf("row %d on page %d starts at %.1f with height %.1f: crosses the bottom margin", i, r.page, r.y, r.h)
+		}
+	}
+}
+
 func TestHexRGB(t *testing.T) {
 	if got := hexRGB("#dc2626"); got != (pdfColor{220, 38, 38}) {
 		t.Fatalf("got %+v", got)
@@ -69,6 +88,66 @@ func TestTableRepeatsHeaderAndKeepsRowsWhole(t *testing.T) {
 	if c.headerDraws < c.pdf.PageCount() {
 		t.Fatalf("table header drawn %d times on %d pages", c.headerDraws, c.pdf.PageCount())
 	}
+	assertRowsDrawnAsMeasured(t, c)
+}
+
+func TestTableRowsWithMissingGlyphsNeverOverlap(t *testing.T) {
+	c := newTestCanvas(t)
+	// Noto Sans has neither CJK nor Hebrew glyphs: fpdf's SplitText counted
+	// them 0 wide (1 line measured) while MultiCell drew ~3 lines.
+	cjk := strings.Repeat("セキュリティ 更新プログラム ", 12)
+	hebrew := strings.Repeat("עדכון אבטחה חשוב ", 12)
+	cols := []pdfCol{{Title: "Host", W: 0.3}, {Title: "Text", W: 0.7}} // 0.7 × 180 = 126 mm, inner 123 mm
+	var rows [][]cell
+	for i := 0; i < 90; i++ {
+		text := cjk
+		if i%2 == 1 {
+			text = hebrew
+		}
+		rows = append(rows, []cell{{Text: "host-" + strings.Repeat("ה", i%5)}, {Text: text}})
+	}
+	c.table(cols, rows)
+	if c.err() != nil {
+		t.Fatal(c.err())
+	}
+	if len(c.rowLog) != len(rows) {
+		t.Fatalf("logged %d rows, want %d", len(c.rowLog), len(rows))
+	}
+	if c.rowLog[0].h <= pdfLineH+2*pdfCellPad {
+		t.Fatalf("CJK row measured as a single line (h=%.1f)", c.rowLog[0].h)
+	}
+	if c.pdf.PageCount() < 2 {
+		t.Fatalf("expected the rows to span pages, got %d", c.pdf.PageCount())
+	}
+	assertRowsDrawnAsMeasured(t, c)
+	// consecutive rows on one page must not overlap
+	for i := 1; i < len(c.rowLog); i++ {
+		p, r := c.rowLog[i-1], c.rowLog[i]
+		if p.page == r.page && r.y < p.y+p.h-0.01 {
+			t.Fatalf("row %d (y=%.2f) overlaps row %d (ends %.2f)", i, r.y, i-1, p.y+p.h)
+		}
+	}
+	if _, err := c.output(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWrapLinesNeverExceedsWidth(t *testing.T) {
+	c := newTestCanvas(t)
+	c.font(false, 8, colText)
+	in := "prefix " + strings.Repeat("abcdefghij", 30) + " " + strings.Repeat("セキュリティ 更新 ", 20) + "\nzweite Zeile\n\n"
+	lines := wrapLines(c.pdf, in, 40)
+	for _, l := range lines {
+		if w := c.pdf.GetStringWidth(l); w > 40 {
+			t.Fatalf("line wider than 40 mm (%.1f): %q", w, l)
+		}
+	}
+	if lines[len(lines)-1] != "zweite Zeile" {
+		t.Fatalf("trailing newlines must be dropped, last line %q", lines[len(lines)-1])
+	}
+	if got := wrapLines(c.pdf, "", 40); len(got) != 1 || got[0] != "" {
+		t.Fatalf("empty text: %q", got)
+	}
 }
 
 // fillNearBottom draws short rows until the cursor is below y=200 mm, so the
@@ -104,6 +183,7 @@ func TestTableRowNeverOverflowsPage(t *testing.T) {
 	if c.truncatedCells != 0 {
 		t.Fatalf("row fitting a page must not be truncated")
 	}
+	assertRowsDrawnAsMeasured(t, c)
 }
 
 func TestTableRowTallerThanAPageIsTruncated(t *testing.T) {
@@ -129,6 +209,7 @@ func TestTableRowTallerThanAPageIsTruncated(t *testing.T) {
 	if r.y+r.h > pageH-20+0.01 {
 		t.Fatalf("truncated row still crosses the bottom margin (y=%.1f h=%.1f)", r.y, r.h)
 	}
+	assertRowsDrawnAsMeasured(t, c)
 	if _, err := c.output(); err != nil {
 		t.Fatal(err)
 	}

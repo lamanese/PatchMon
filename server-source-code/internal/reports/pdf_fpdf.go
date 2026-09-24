@@ -47,9 +47,15 @@ type fpdfCanvas struct {
 // fpdfCanvas must satisfy canvas (compile-time check).
 var _ canvas = (*fpdfCanvas)(nil)
 
+// rowLogEntry records one table row: where it was placed and measured
+// (page, y, h) and where drawing really ended (endPage, drawnBottom = the
+// lowest text line of any cell plus the bottom padding). Tests assert that
+// measured and drawn agree.
 type rowLogEntry struct {
-	page int
-	y, h float64
+	page        int
+	y, h        float64
+	endPage     int
+	drawnBottom float64
 }
 
 // newFpdfCanvas sets up the document (fonts, metadata, logo, header/footer)
@@ -177,8 +183,7 @@ func (c *fpdfCanvas) title(name string, meta [][2]string) {
 	}
 	pdf := c.pdf
 	c.font(true, 16, colHead)
-	pdf.SetX(pdfLeft)
-	pdf.MultiCell(pdfUsable, 7.5, hardWrap(pdf, name, pdfUsable-2*pdf.GetCellMargin()), "", "L", false)
+	c.textBlock(pdfLeft, pdfUsable, 7.5, name)
 	pdf.Ln(1)
 	for _, row := range meta {
 		y := pdf.GetY()
@@ -187,7 +192,7 @@ func (c *fpdfCanvas) title(name string, meta [][2]string) {
 		pdf.CellFormat(35, pdfLineH, fitText(pdf, row[0], 35-2*pdf.GetCellMargin()), "", 0, "L", false, 0, "")
 		c.font(false, 8, colText)
 		pdf.SetXY(pdfLeft+35, y)
-		pdf.MultiCell(pdfUsable-35, pdfLineH, hardWrap(pdf, row[1], pdfUsable-35-2*pdf.GetCellMargin()), "", "L", false)
+		c.textBlock(pdfLeft+35, pdfUsable-35, pdfLineH, row[1])
 	}
 	pdf.Ln(4)
 }
@@ -199,8 +204,7 @@ func (c *fpdfCanvas) heading(text string) {
 	pdf := c.pdf
 	c.keepTogether(pdfKeepTogether)
 	c.font(true, 12, colHead)
-	pdf.SetX(pdfLeft)
-	pdf.MultiCell(pdfUsable, 6, hardWrap(pdf, text, pdfUsable-2*pdf.GetCellMargin()), "", "L", false)
+	c.textBlock(pdfLeft, pdfUsable, 6, text)
 	pdf.Ln(2)
 	c.rule(pdf.GetY())
 	pdf.Ln(3)
@@ -213,8 +217,7 @@ func (c *fpdfCanvas) subheading(text string) {
 	pdf := c.pdf
 	c.keepTogether(pdfKeepTogether)
 	c.font(true, 10, colHead)
-	pdf.SetX(pdfLeft)
-	pdf.MultiCell(pdfUsable, 5, hardWrap(pdf, text, pdfUsable-2*pdf.GetCellMargin()), "", "L", false)
+	c.textBlock(pdfLeft, pdfUsable, 5, text)
 	pdf.Ln(1.5)
 }
 
@@ -294,7 +297,7 @@ func (c *fpdfCanvas) table(cols []pdfCol, rows [][]cell) {
 			}
 			inner := cw[i] - 2*pdfCellPad
 			c.font(row[i].Bold, 8, colText)
-			ls := pdf.SplitText(hardWrap(pdf, row[i].Text, inner-2*pdf.GetCellMargin()), inner)
+			ls := wrapLines(pdf, row[i].Text, inner-2*pdf.GetCellMargin())
 			if len(ls) > maxLines {
 				ls = ls[:maxLines]
 				c.truncatedCells++
@@ -310,7 +313,7 @@ func (c *fpdfCanvas) table(cols []pdfCol, rows [][]cell) {
 			drawHeader()
 			y = pdf.GetY()
 		}
-		c.rowLog = append(c.rowLog, rowLogEntry{page: pdf.PageNo(), y: y, h: rowH})
+		entry := rowLogEntry{page: pdf.PageNo(), y: y, h: rowH, drawnBottom: y + pdfCellPad}
 		if r%2 == 1 {
 			pdf.SetFillColor(colStripe.R, colStripe.G, colStripe.B)
 			pdf.Rect(pdfLeft, y, pdfUsable, rowH, "F")
@@ -320,10 +323,13 @@ func (c *fpdfCanvas) table(cols []pdfCol, rows [][]cell) {
 			if i < len(row) && len(lines[i]) > 0 {
 				c.font(row[i].Bold, 8, orText(row[i].Color))
 				pdf.SetXY(x+pdfCellPad, y+pdfCellPad)
-				pdf.MultiCell(cw[i]-2*pdfCellPad, pdfLineH, strings.Join(lines[i], "\n"), "", alignOf(col.Align), false)
+				c.drawLines(x+pdfCellPad, cw[i]-2*pdfCellPad, pdfLineH, lines[i], alignOf(col.Align))
+				entry.drawnBottom = max(entry.drawnBottom, pdf.GetY()+pdfCellPad)
 			}
 			x += cw[i]
 		}
+		entry.endPage = pdf.PageNo()
+		c.rowLog = append(c.rowLog, entry)
 		c.rule(y + rowH)
 		pdf.SetXY(pdfLeft, y+rowH)
 	}
@@ -337,8 +343,7 @@ func (c *fpdfCanvas) note(text string) {
 	}
 	pdf := c.pdf
 	c.font(false, 7.5, colMuted)
-	pdf.SetX(pdfLeft)
-	pdf.MultiCell(pdfUsable, 3.8, hardWrap(pdf, text, pdfUsable-2*pdf.GetCellMargin()), "", "L", false)
+	c.textBlock(pdfLeft, pdfUsable, 3.8, text)
 	pdf.Ln(1)
 	c.font(false, 9, colText)
 }
@@ -349,8 +354,7 @@ func (c *fpdfCanvas) nodata(text string) {
 	}
 	pdf := c.pdf
 	c.font(false, 9, colMuted)
-	pdf.SetX(pdfLeft)
-	pdf.MultiCell(pdfUsable, pdfLineH, hardWrap(pdf, text, pdfUsable-2*pdf.GetCellMargin()), "", "L", false)
+	c.textBlock(pdfLeft, pdfUsable, pdfLineH, text)
 	pdf.Ln(2)
 	c.font(false, 9, colText)
 }
@@ -368,6 +372,52 @@ func (c *fpdfCanvas) output() ([]byte, error) {
 		return nil, c.pdf.Error()
 	}
 	return buf.Bytes(), nil
+}
+
+// wrapLines splits s into lines at most w wide in the current font. Width is
+// measured with pdf.GetStringWidth, the same metric (including the font's
+// MissingWidth for glyphs the font lacks) that CellFormat draws with, and the
+// lines are drawn one CellFormat each without re-wrapping (drawLines). So the
+// measured row height equals the drawn one by construction; fpdf's SplitText
+// counts missing glyphs as 0 wide while MultiCell does not, which let rows
+// overlap. Greedy word wrap on spaces; tokens wider than w are broken by
+// hardWrap first. Trailing newlines are dropped; the result has at least one
+// (possibly empty) line.
+func wrapLines(pdf *fpdf.Fpdf, s string, w float64) []string {
+	s = strings.TrimRight(hardWrap(pdf, s, w), "\n")
+	var out []string
+	for _, para := range strings.Split(s, "\n") {
+		words := strings.Split(para, " ")
+		cur := words[0]
+		for _, word := range words[1:] {
+			if cand := cur + " " + word; pdf.GetStringWidth(cand) <= w {
+				cur = cand
+				continue
+			}
+			out = append(out, cur)
+			cur = word
+		}
+		out = append(out, cur)
+	}
+	return out
+}
+
+// drawLines draws pre-split lines (wrapLines) as one CellFormat per line of
+// width cellW at x, moving down lineH per line. CellFormat never wraps, so
+// the drawn line count is exactly len(lines).
+func (c *fpdfCanvas) drawLines(x, cellW, lineH float64, lines []string, align string) {
+	for _, l := range lines {
+		c.pdf.SetX(x)
+		c.pdf.CellFormat(cellW, lineH, l, "", 2, align, false, 0, "")
+	}
+}
+
+// textBlock wraps text into a cellW wide block at x (left-aligned) starting
+// at the current y and leaves the cursor at the left margin below it, like
+// MultiCell did.
+func (c *fpdfCanvas) textBlock(x, cellW, lineH float64, text string) {
+	c.drawLines(x, cellW, lineH, wrapLines(c.pdf, text, cellW-2*c.pdf.GetCellMargin()), "L")
+	c.pdf.SetX(pdfLeft)
 }
 
 // pdfReplacement stands in for runes fpdf cannot encode.
