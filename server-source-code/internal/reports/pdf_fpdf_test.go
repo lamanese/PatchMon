@@ -71,19 +71,90 @@ func TestTableRepeatsHeaderAndKeepsRowsWhole(t *testing.T) {
 	}
 }
 
+// fillNearBottom draws short rows until the cursor is below y=200 mm, so the
+// next tall row cannot fit on the current page.
+func fillNearBottom(t *testing.T, c *fpdfCanvas) {
+	t.Helper()
+	for c.pdf.GetY() <= 200 {
+		c.table([]pdfCol{{Title: "Fill", W: 1}}, [][]cell{{{Text: "x"}}, {{Text: "y"}}})
+	}
+	if c.pdf.PageCount() != 1 {
+		t.Fatalf("filler spilled onto page %d", c.pdf.PageCount())
+	}
+}
+
 func TestTableRowNeverOverflowsPage(t *testing.T) {
 	c := newTestCanvas(t)
+	fillNearBottom(t, c)
+	before := len(c.rowLog)
 	cols := []pdfCol{{Title: "A", W: 1}}
-	rows := [][]cell{{{Text: strings.Repeat("word ", 400)}}} // taller than half a page
+	rows := [][]cell{{{Text: strings.Repeat("word ", 400)}}} // ~18 lines, ~80 mm
 	c.table(cols, rows)
 	if c.err() != nil {
 		t.Fatal(c.err())
 	}
-	for _, r := range c.rowLog {
-		_, pageH := c.pdf.GetPageSize()
-		if r.y+r.h > pageH-20+0.01 {
-			t.Fatalf("oversized row not moved to a fresh page (y=%.1f h=%.1f)", r.y, r.h)
-		}
+	_, pageH := c.pdf.GetPageSize()
+	r := c.rowLog[before]
+	if r.page != 2 || r.y > pdfTop+pdfTableHeadH+0.01 {
+		t.Fatalf("tall row not moved to the top of a fresh page (page=%d y=%.1f)", r.page, r.y)
+	}
+	if r.y+r.h > pageH-20+0.01 {
+		t.Fatalf("row crosses the bottom margin (y=%.1f h=%.1f)", r.y, r.h)
+	}
+	if c.truncatedCells != 0 {
+		t.Fatalf("row fitting a page must not be truncated")
+	}
+}
+
+func TestTableRowTallerThanAPageIsTruncated(t *testing.T) {
+	c := newTestCanvas(t)
+	fillNearBottom(t, c)
+	before := len(c.rowLog)
+	var sb strings.Builder
+	for i := 0; i < 80; i++ { // 80 lines, more than a page holds (~57)
+		sb.WriteString("line\n")
+	}
+	c.table([]pdfCol{{Title: "A", W: 1}}, [][]cell{{{Text: sb.String()}}})
+	if c.err() != nil {
+		t.Fatal(c.err())
+	}
+	if c.truncatedCells != 1 {
+		t.Fatalf("want one truncated cell, got %d", c.truncatedCells)
+	}
+	_, pageH := c.pdf.GetPageSize()
+	r := c.rowLog[before]
+	if r.page != 2 {
+		t.Fatalf("oversized row not moved to a fresh page (page=%d)", r.page)
+	}
+	if r.y+r.h > pageH-20+0.01 {
+		t.Fatalf("truncated row still crosses the bottom margin (y=%.1f h=%.1f)", r.y, r.h)
+	}
+	if _, err := c.output(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCanvasReplacesRunesOutsideBMP(t *testing.T) {
+	m := sampleModel("de", false)
+	m.ReportName = "Kunde \U0001F680 X"
+	c := newFpdfCanvas(context.Background(), m, Branding{})
+	c.title(m.ReportName, [][2]string{{"Zeitraum \U0001F600", "30 Tage \U0001F600"}})
+	c.heading("Abschnitt \U0001F4C8")
+	c.subheading("Teil \U0001F4C8")
+	c.kpis([]kpiItem{{Value: "5\U0001F525", Label: "Hosts \U0001F525"}})
+	c.table([]pdfCol{{Title: "Host \U0001F5A5", W: 0.4}, {Title: "Text", W: 0.6}},
+		[][]cell{{{Text: "web01 \U0001F525"}, {Text: strings.Repeat("\U0001F680", 200)}}})
+	c.note("Hinweis \U0001F44D")
+	c.nodata("Keine Daten \U0001F44D")
+	out, err := c.output()
+	if err != nil {
+		t.Fatalf("emoji must not fail the PDF: %v", err)
+	}
+	if !bytes.HasPrefix(out, []byte("%PDF-1.")) {
+		t.Fatal("not a PDF")
+	}
+	if got := pdfText("a\U0001F680b\u00e4"); got != "a?b\u00e4" {
+		t.Fatalf("pdfText: %q", got)
 	}
 }
 

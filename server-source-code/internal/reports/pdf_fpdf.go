@@ -39,8 +39,9 @@ type fpdfCanvas struct {
 	logoOK   bool
 
 	// test-visible bookkeeping
-	rowLog      []rowLogEntry
-	headerDraws int
+	rowLog         []rowLogEntry
+	headerDraws    int
+	truncatedCells int // table cells cut to fit one page
 }
 
 // fpdfCanvas must satisfy canvas (compile-time check).
@@ -116,9 +117,9 @@ func (c *fpdfCanvas) drawPageFooter() {
 	y := pdf.GetY()
 	c.font(false, 8, colMuted)
 	pdf.SetX(pdfLeft)
-	pdf.CellFormat(pdfUsable/2, 5, BrandName, "", 0, "L", false, 0, "")
+	pdf.CellFormat(pdfUsable/2, 5, pdfText(BrandName), "", 0, "L", false, 0, "")
 	pdf.SetXY(pdfLeft+pdfUsable/2, y)
-	pdf.CellFormat(pdfUsable/2, 5, c.tx.F("pdf.page_of", pdf.PageNo(), "{nb}"), "", 0, "R", false, 0, "")
+	pdf.CellFormat(pdfUsable/2, 5, pdfText(c.tx.F("pdf.page_of", pdf.PageNo(), "{nb}")), "", 0, "R", false, 0, "")
 }
 
 // font selects Noto Sans (bold or regular) at size pt in colour col.
@@ -177,13 +178,13 @@ func (c *fpdfCanvas) title(name string, meta [][2]string) {
 	pdf := c.pdf
 	c.font(true, 16, colHead)
 	pdf.SetX(pdfLeft)
-	pdf.MultiCell(pdfUsable, 7.5, name, "", "L", false)
+	pdf.MultiCell(pdfUsable, 7.5, hardWrap(pdf, name, pdfUsable-2*pdf.GetCellMargin()), "", "L", false)
 	pdf.Ln(1)
 	for _, row := range meta {
 		y := pdf.GetY()
 		c.font(true, 8, colText)
 		pdf.SetXY(pdfLeft, y)
-		pdf.CellFormat(35, pdfLineH, row[0], "", 0, "L", false, 0, "")
+		pdf.CellFormat(35, pdfLineH, fitText(pdf, row[0], 35-2*pdf.GetCellMargin()), "", 0, "L", false, 0, "")
 		c.font(false, 8, colText)
 		pdf.SetXY(pdfLeft+35, y)
 		pdf.MultiCell(pdfUsable-35, pdfLineH, hardWrap(pdf, row[1], pdfUsable-35-2*pdf.GetCellMargin()), "", "L", false)
@@ -199,7 +200,7 @@ func (c *fpdfCanvas) heading(text string) {
 	c.keepTogether(pdfKeepTogether)
 	c.font(true, 12, colHead)
 	pdf.SetX(pdfLeft)
-	pdf.MultiCell(pdfUsable, 6, text, "", "L", false)
+	pdf.MultiCell(pdfUsable, 6, hardWrap(pdf, text, pdfUsable-2*pdf.GetCellMargin()), "", "L", false)
 	pdf.Ln(2)
 	c.rule(pdf.GetY())
 	pdf.Ln(3)
@@ -213,7 +214,7 @@ func (c *fpdfCanvas) subheading(text string) {
 	c.keepTogether(pdfKeepTogether)
 	c.font(true, 10, colHead)
 	pdf.SetX(pdfLeft)
-	pdf.MultiCell(pdfUsable, 5, text, "", "L", false)
+	pdf.MultiCell(pdfUsable, 5, hardWrap(pdf, text, pdfUsable-2*pdf.GetCellMargin()), "", "L", false)
 	pdf.Ln(1.5)
 }
 
@@ -296,6 +297,7 @@ func (c *fpdfCanvas) table(cols []pdfCol, rows [][]cell) {
 			ls := pdf.SplitText(hardWrap(pdf, row[i].Text, inner-2*pdf.GetCellMargin()), inner)
 			if len(ls) > maxLines {
 				ls = ls[:maxLines]
+				c.truncatedCells++
 				ls[maxLines-1] = fitText(pdf, ls[maxLines-1]+pdfEllipsis, inner-2*pdf.GetCellMargin())
 			}
 			lines[i] = ls
@@ -368,10 +370,33 @@ func (c *fpdfCanvas) output() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// pdfReplacement stands in for runes fpdf cannot encode.
+const pdfReplacement = '?'
+
+// pdfText makes s safe for fpdf's UTF-8 fonts: their width table covers the
+// Basic Multilingual Plane only, and fpdf fails the whole document on any rune
+// above U+FFFF (emoji and the like). Such runes become '?'. Every string that
+// reaches fpdf passes through here (directly or via hardWrap/fitText).
+func pdfText(s string) string {
+	for _, r := range s {
+		if r > 0xFFFF {
+			return strings.Map(func(r rune) rune {
+				if r > 0xFFFF {
+					return pdfReplacement
+				}
+				return r
+			}, s)
+		}
+	}
+	return s
+}
+
 // hardWrap inserts '\n' into tokens wider than w (in the current font) so
 // that no single token overflows a cell. '\r' is dropped, '\t' becomes a
-// space; short text is returned unchanged.
+// space, runes above U+FFFF become '?' (pdfText); short text is returned
+// unchanged.
 func hardWrap(pdf *fpdf.Fpdf, s string, w float64) string {
+	s = pdfText(s)
 	s = strings.ReplaceAll(s, "\r", "")
 	s = strings.ReplaceAll(s, "\t", " ")
 	lines := strings.Split(s, "\n")
@@ -404,6 +429,7 @@ func hardWrap(pdf *fpdf.Fpdf, s string, w float64) string {
 
 // fitText truncates s with "…" so that it is at most w wide.
 func fitText(pdf *fpdf.Fpdf, s string, w float64) string {
+	s = pdfText(s)
 	if pdf.GetStringWidth(s) <= w {
 		return s
 	}
