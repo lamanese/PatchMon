@@ -17,8 +17,10 @@ var templateFS embed.FS
 // logo the header shows the vendor wordmark; the logos endpoint answers 404
 // in that case and mail clients would render a broken image.
 type Branding struct {
-	ServerURL string
-	LogoURL   string
+	ServerURL       string
+	LogoURL         string
+	LogoData        []byte // uploaded light logo bytes (settings.logo_light_data), may be nil
+	LogoContentType string // settings.logo_light_content_type, e.g. "image/png"
 }
 
 // Vendor identity shown in every report footer (fork operator).
