@@ -6,6 +6,7 @@ import {
 	ChevronRight,
 	Clock,
 	Edit2,
+	FileText,
 	Globe,
 	Loader2,
 	Mail,
@@ -1300,6 +1301,7 @@ export const NotificationPanel = ({ panel }) => {
 	});
 	const [logPage, setLogPage] = useState(0);
 	const logPageSize = 50;
+	const [previewingId, setPreviewingId] = useState(null);
 
 	// Queries
 	const { data: destinations = [], isLoading: destLoading } = useQuery({
@@ -1456,6 +1458,45 @@ export const NotificationPanel = ({ panel }) => {
 		},
 		onError: (err) => toast.error(err.response?.data?.error || "Failed to run"),
 	});
+
+	const previewReport = async (r) => {
+		setPreviewingId(r.id);
+		try {
+			const res = await notificationsAPI.previewScheduledReport(r.id);
+			const blob = new Blob([res.data], { type: "application/pdf" });
+			const disposition = res.headers?.["content-disposition"] || "";
+			const match = /filename="?([^";]+)"?/.exec(disposition);
+			const filename = match ? match[1] : `report-${r.id}.pdf`;
+			const url = window.URL.createObjectURL(blob);
+			const a = document.createElement("a");
+			a.href = url;
+			a.download = filename;
+			document.body.appendChild(a);
+			a.click();
+			a.remove();
+			window.URL.revokeObjectURL(url);
+			if (res.headers?.["x-report-logo"] === "default") {
+				toast.info(
+					"The PDF uses the default logo. Upload a PNG or JPEG under Settings → Branding for your own logo.",
+				);
+			}
+		} catch (err) {
+			let message = "Preview failed";
+			const data = err.response?.data;
+			if (data instanceof Blob) {
+				try {
+					message = JSON.parse(await data.text()).error || message;
+				} catch {
+					/* not JSON */
+				}
+			} else if (data?.error) {
+				message = data.error;
+			}
+			toast.error(message);
+		} finally {
+			setPreviewingId(null);
+		}
+	};
 
 	const sendTest = (id) => {
 		testNotify.mutate(id, {
@@ -1889,6 +1930,16 @@ export const NotificationPanel = ({ panel }) => {
 													}
 												>
 													<Edit2 className="h-3.5 w-3.5" /> Edit
+												</button>
+												<button
+													type="button"
+													className="text-primary-600 hover:text-primary-700 inline-flex items-center gap-1 text-xs disabled:opacity-40"
+													onClick={() => previewReport(r)}
+													disabled={previewingId === r.id}
+													title="Download this report as PDF (nothing is sent)"
+												>
+													<FileText className="h-3.5 w-3.5" />{" "}
+													{previewingId === r.id ? "Rendering…" : "Preview"}
 												</button>
 												<button
 													type="button"

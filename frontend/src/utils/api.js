@@ -704,6 +704,11 @@ export const notificationsAPI = {
 		api.delete(`/notifications/scheduled-reports/${id}`),
 	runScheduledReportNow: (id) =>
 		api.post(`/notifications/scheduled-reports/${id}/run-now`),
+	previewScheduledReport: (id) =>
+		api.post(`/notifications/scheduled-reports/${id}/preview`, null, {
+			responseType: "blob",
+			timeout: 40000,
+		}),
 };
 
 export default api;
