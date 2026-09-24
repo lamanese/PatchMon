@@ -68,3 +68,20 @@ func TestPDFFileName(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderPDFRecoversFromPanic(t *testing.T) {
+	old := newCanvas
+	defer func() { newCanvas = old }()
+	// a canvas without an fpdf document: the first drawing call dereferences
+	// the nil *fpdf.Fpdf inside the library and panics
+	newCanvas = func(ctx context.Context, m *Model, _ Branding) *fpdfCanvas {
+		return &fpdfCanvas{ctx: ctx, m: m, tx: T(m.Language), loc: m.Location}
+	}
+	out, src, err := RenderPDF(context.Background(), sampleModel("de", false), Branding{})
+	if err == nil || !strings.Contains(err.Error(), "render pdf: panic:") {
+		t.Fatalf("want recovered panic error, got %v", err)
+	}
+	if out != nil || src != "" {
+		t.Fatalf("no output on panic: len=%d src=%q", len(out), src)
+	}
+}

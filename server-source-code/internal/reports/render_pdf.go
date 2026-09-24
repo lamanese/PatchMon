@@ -18,16 +18,27 @@ var maxPDFBytes = MaxPDFBytes
 // ErrPDFTooLarge is returned instead of a truncated document.
 var ErrPDFTooLarge = errors.New("pdf exceeds 10 MB")
 
+// newCanvas builds the drawing surface; a variable so a test can inject a
+// broken canvas and prove that RenderPDF recovers from a library panic.
+var newCanvas = newFpdfCanvas
+
 // RenderPDF draws the model as an A4 document. It is deterministic for equal
-// input, stops when ctx ends and never embeds a server URL.
-func RenderPDF(ctx context.Context, m *Model, b Branding) ([]byte, string, error) {
+// input, stops when ctx ends and never embeds a server URL. A panic inside
+// the PDF library is turned into an error (defence in depth: the inputs are
+// sanitised, but one bad document must never take the server down).
+func RenderPDF(ctx context.Context, m *Model, b Branding) (pdf []byte, logoSrc string, err error) {
 	if m == nil {
 		return nil, "", fmt.Errorf("render pdf: nil model")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
 	}
-	c := newFpdfCanvas(ctx, m, b)
+	defer func() {
+		if r := recover(); r != nil {
+			pdf, logoSrc, err = nil, "", fmt.Errorf("render pdf: panic: %v", r)
+		}
+	}()
+	c := newCanvas(ctx, m, b)
 	renderSections(c, m)
 	out, err := c.output()
 	if err != nil {
