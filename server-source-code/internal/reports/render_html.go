@@ -12,20 +12,30 @@ import (
 //go:embed templates/*.html
 var templateFS embed.FS
 
-// Branding carries the server URL (links, internal reports only) and the
-// logo URL for the HTML mail. Customer reports never emit either.
+// Branding carries the server URL (links, internal reports only) and the URL
+// of an UPLOADED logo. Customer reports never emit either. Without an uploaded
+// logo the header shows the vendor wordmark; the logos endpoint answers 404
+// in that case and mail clients would render a broken image.
 type Branding struct {
 	ServerURL string
 	LogoURL   string
 }
 
+// Vendor identity shown in every report footer (fork operator).
+const (
+	BrandName = "amanIT GmbH"
+	BrandURL  = "https://amanit.swiss"
+)
+
 type htmlData struct {
-	M       *Model
-	T       Texts
-	Links   bool
-	BaseURL string
-	LogoURL string
-	TD      template.CSS // trusted cell style; a plain string would be sanitised
+	M         *Model
+	T         Texts
+	Links     bool
+	BaseURL   string
+	LogoURL   string
+	BrandName string
+	BrandURL  string
+	TD        template.CSS // trusted cell style; a plain string would be sanitised
 }
 
 const cellStyle template.CSS = "padding:8px 10px;font-size:13px;color:#334155;border-bottom:1px solid #f1f5f9;"
@@ -133,14 +143,11 @@ func RenderHTML(m *Model, b Branding) (string, error) {
 	if m == nil {
 		return "", fmt.Errorf("render: nil model")
 	}
-	data := htmlData{M: m, T: T(m.Language), TD: cellStyle}
+	data := htmlData{M: m, T: T(m.Language), TD: cellStyle, BrandName: BrandName, BrandURL: BrandURL}
 	if !m.CustomerMode {
 		data.BaseURL = strings.TrimRight(b.ServerURL, "/")
 		data.Links = data.BaseURL != ""
 		data.LogoURL = b.LogoURL
-		if data.LogoURL == "" && data.BaseURL != "" {
-			data.LogoURL = data.BaseURL + "/api/v1/settings/logos/light"
-		}
 	}
 	var buf bytes.Buffer
 	if err := reportTemplate.Execute(&buf, data); err != nil {

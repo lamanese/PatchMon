@@ -6,7 +6,7 @@
 <table width="720" cellpadding="0" cellspacing="0" style="max-width:720px;width:100%;background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
 <tr><td style="background-color:#0f172a;padding:20px 32px;">
   <table width="100%" cellpadding="0" cellspacing="0"><tr>
-  <td style="vertical-align:middle;">{{if .LogoURL}}<img src="{{.LogoURL}}" alt="" width="140" height="32" style="height:32px;width:auto;max-width:180px;display:block;border:0;" />{{else}}<span style="color:#ffffff;font-size:20px;font-weight:700;">{{t $T "title"}}</span>{{end}}</td>
+  <td style="vertical-align:middle;">{{if .LogoURL}}<img src="{{.LogoURL}}" alt="" width="140" height="32" style="height:32px;width:auto;max-width:180px;display:block;border:0;" />{{else}}<span style="color:#ffffff;font-size:20px;font-weight:700;">{{.BrandName}}</span>{{end}}</td>
   <td style="vertical-align:middle;text-align:right;color:#cbd5e1;font-size:12px;">{{t $T "generated_at"}}: {{dt $T $L .M.GeneratedAt}}</td>
   </tr></table>
 </td></tr>
@@ -141,7 +141,7 @@
 {{end}}{{end -}}
 {{- end}}
 </td></tr>
-<tr><td style="background-color:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:12px;">{{t $T "footer"}}{{if $links}} · <a href="{{$base}}/reporting" style="color:#2563eb;text-decoration:none;">PatchMon</a>{{end}}</td></tr>
+<tr><td style="background-color:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:12px;">{{t $T "footer"}} · <a href="{{.BrandURL}}" style="color:#2563eb;text-decoration:none;">{{.BrandName}}</a></td></tr>
 </table>
 </td></tr></table>
 </body></html>

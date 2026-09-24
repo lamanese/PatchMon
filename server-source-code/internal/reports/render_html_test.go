@@ -67,8 +67,49 @@ func TestRenderHTMLCustomerModeHasNoLinksAndNoServerURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out, "href=") || strings.Contains(out, "pm.example.com") {
-		t.Error("customer report must not contain links or the server URL")
+	if strings.Contains(out, "pm.example.com") {
+		t.Error("customer report must not contain the server URL")
+	}
+	// The only link a customer report may carry is the vendor link in the footer.
+	if strings.Count(out, "href=") != 1 || !strings.Contains(out, `href="`+BrandURL+`"`) {
+		t.Errorf("customer report must contain exactly the vendor link, got %d href(s)", strings.Count(out, "href="))
+	}
+}
+
+func TestRenderHTMLFooterNamesTheVendorNotTheUI(t *testing.T) {
+	for _, lang := range []string{"de", "en"} {
+		out, err := RenderHTML(sampleModel(lang, false), Branding{ServerURL: "https://pm.example.com"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out, `<a href="`+BrandURL+`"`) || !strings.Contains(out, BrandName) {
+			t.Errorf("%s: footer must link %s as %s", lang, BrandURL, BrandName)
+		}
+		if strings.Contains(out, "/reporting") {
+			t.Errorf("%s: footer must not link the PatchMon UI", lang)
+		}
+	}
+}
+
+func TestRenderHTMLLogoOnlyWhenUploaded(t *testing.T) {
+	// No uploaded logo: never point at the logos endpoint (it answers 404
+	// and mail clients show a broken image); show the wordmark instead.
+	out, err := RenderHTML(sampleModel("de", false), Branding{ServerURL: "https://pm.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "/api/v1/settings/logos") || strings.Contains(out, "<img") {
+		t.Error("no image without an uploaded logo")
+	}
+	if !strings.Contains(out, ">"+BrandName+"<") {
+		t.Error("wordmark expected in the header")
+	}
+	out, err = RenderHTML(sampleModel("de", false), Branding{ServerURL: "https://pm.example.com", LogoURL: "https://pm.example.com/api/v1/settings/logos/light"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `<img src="https://pm.example.com/api/v1/settings/logos/light"`) {
+		t.Error("uploaded logo must be referenced")
 	}
 }
 
