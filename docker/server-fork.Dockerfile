@@ -50,6 +50,11 @@ WORKDIR /app
 # Server binary (DB migrations and frontend are embedded in the binary)
 COPY --from=server-builder /app/patchmon-server ./
 
+# Licence of the Noto Sans fonts embedded in the binary for report PDFs
+# (SIL OFL 1.1 requires it to travel with the font). The builder stage copies
+# server-source-code/ to /app/server/.
+COPY --from=server-builder /app/server/internal/reports/assets/fonts/OFL.txt ./licenses/NotoSans-OFL.txt
+
 # Agent scripts (install/remove/enroll) and prebuilt agent binaries -> /app/agents
 COPY agents ./agents/
 COPY --chmod=755 agents-prebuilt/patchmon-agent-* ./agents/

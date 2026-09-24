@@ -3911,7 +3911,7 @@ For each channel type the payload adapts:
 | **ntfy** | Short push notification with a link back to the latest report in the UI. The full HTML does not fit ntfy, so it is summarised. |
 | **Internal Alerts** | A system record under the **Alerts** tab, useful when you want a run history inside PatchMon without email. |
 
-PDF attachments to e-mails arrive with the report archive (next release).
+PDF attachments to e-mails arrive together with the report archive in increment D (same release, 2.0.2-am.11).
 
 A report's appearance in the **Delivery Log** uses `event_type: scheduled_report`. Filter the log by the report's destinations to audit deliveries.
 
@@ -3927,11 +3927,13 @@ Disabled reports show the play button greyed out. Enable the report (or edit and
 
 Click **Preview** next to **Edit** in the report's row to render it as a PDF and download it immediately. Preview does not send anything, does not write to the Delivery Log, and does not touch the report's schedule (`next_run_at`/`last_run_at`) — it just renders the current definition on demand. Unlike **Play**, it works even for a **disabled** report, so you can check a report before turning it on.
 
-PatchMon renders one PDF at a time per server process. If another preview is already rendering, the request waits up to 10 seconds for the slot to free up and then answers `503 Renderer busy, try again in a few seconds` — click **Preview** again. Once rendering starts it has a 25-second budget; a report over an unusually large fleet can hit this and fail with `503 Rendering took too long`.
+PatchMon renders one PDF at a time per server process. If another preview is already rendering, the request waits up to 10 seconds for the slot to free up and then answers `503 Renderer busy, try again in a few seconds` — click **Preview** again. The whole request, including that wait, has a 25-second budget; a report over an unusually large fleet can hit this and fail with `503 Rendering took too long`.
 
-The header logo has one fixed rule, no manual override: an uploaded logo is used only if it is a PNG or JPEG that decodes to at most 4 megapixels, and is scaled down to 600 px wide if larger. Anything else — an SVG, an oversized or corrupt file, or no logo at all — falls back to the vendor default; a preview never fails because of the logo. If the default was used instead of your upload, a toast tells you and points at **Settings → Branding**.
+The header logo has one fixed rule, no manual override: an uploaded logo is used only if it is a PNG or JPEG that decodes to at most 4 megapixels; it is always re-encoded as PNG and scaled down to 600 px wide if larger. Anything else — an SVG, an oversized, truncated or otherwise corrupt file, or no logo at all — falls back to the vendor default; a preview never fails because of the logo. If the default was used instead of your upload, a toast tells you and points at **Settings → Branding**.
 
-The downloaded file is named `report-<slug>-<yyyymmdd>.pdf` (the report name, lower-cased and hyphenated, plus the render date), and a single PDF is capped at 10 MB; a report that would exceed it fails with an error instead of a truncated download.
+The downloaded file is named `report-<slug>-<yyyymmdd>.pdf` (the report name, lower-cased and hyphenated, plus the render date in the report's timezone), and a single PDF is capped at 10 MB; a report that would exceed it fails with an error instead of a truncated download.
+
+The PDF uses the embedded Noto Sans font, which covers Latin, Greek and Cyrillic. Characters from scripts it does not cover (for example CJK or Hebrew) appear as empty boxes, and characters outside the Unicode Basic Multilingual Plane (such as emoji) as `?`; the layout stays intact either way.
 
 Preview requires `can_manage_notifications`, the same permission as creating, editing and running reports.
 
@@ -3955,7 +3957,7 @@ When the task executes, the worker:
 
 Because the schedule is stored as a cron string plus a timezone, daylight-saving transitions are handled by the cron library. Jobs that would fall in a skipped hour are pushed to the next valid slot; jobs repeated in a duplicate hour fire once.
 
-The **Preview** action (see above) uses the same typed model but draws it onto an A4 canvas with `internal/reports.RenderPDF` instead of the HTML template, serialised through a process-wide render gate (`internal/reports.RenderGate`) so that at most one PDF renders at a time; a busy gate answers `503` after a 10-second wait rather than queueing indefinitely. The worker above does not render PDFs — that arrives with e-mail PDF attachments in a future release.
+The **Preview** action (see above) uses the same typed model but draws it onto an A4 canvas with `internal/reports.RenderPDF` instead of the HTML template, serialised through a process-wide render gate (`internal/reports.RenderGate`) so that at most one PDF renders at a time; a busy gate answers `503` after a 10-second wait rather than queueing indefinitely. The worker above does not render PDFs yet — that arrives with e-mail PDF attachments and the report archive in increment D (same release, 2.0.2-am.11).
 
 ### Known limits
 
