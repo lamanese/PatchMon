@@ -1,6 +1,7 @@
 package reports
 
 import (
+	"context"
 	"os"
 	"testing"
 )
@@ -17,6 +18,22 @@ func TestWriteSampleHTML(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(out, []byte(html), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestWriteSamplePDF writes a rendered PDF sample to PM_REPORT_SAMPLE_PDF_OUT
+// for a visual check; it is a no-op unless the variable is set.
+func TestWriteSamplePDF(t *testing.T) {
+	out := os.Getenv("PM_REPORT_SAMPLE_PDF_OUT")
+	if out == "" {
+		t.Skip("PM_REPORT_SAMPLE_PDF_OUT not set")
+	}
+	pdf, _, err := RenderPDF(context.Background(), sampleModel("de", false), Branding{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(out, pdf, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

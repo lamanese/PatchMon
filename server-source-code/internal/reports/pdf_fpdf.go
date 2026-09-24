@@ -64,7 +64,7 @@ func newFpdfCanvas(ctx context.Context, m *Model, b Branding) *fpdfCanvas {
 	pdf.SetCatalogSort(true) // deterministic object order
 	pdf.AddUTF8FontFromBytes(pdfFont, "", fontRegular)
 	pdf.AddUTF8FontFromBytes(pdfFont, "B", fontBold)
-	pdf.SetTitle(Subject(m.Language, m.ReportName), true)
+	pdf.SetTitle(pdfText(Subject(m.Language, m.ReportName)), true)
 	pdf.SetAuthor(BrandName, true)
 	// Producer and creator are plain ASCII: written as Latin-1 so the info
 	// dictionary reads "(PatchMon)" instead of a UTF-16 byte string.
