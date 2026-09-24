@@ -3911,6 +3911,8 @@ For each channel type the payload adapts:
 | **ntfy** | Short push notification with a link back to the latest report in the UI. The full HTML does not fit ntfy, so it is summarised. |
 | **Internal Alerts** | A system record under the **Alerts** tab, useful when you want a run history inside PatchMon without email. |
 
+PDF attachments to e-mails arrive with the report archive (next release).
+
 A report's appearance in the **Delivery Log** uses `event_type: scheduled_report`. Filter the log by the report's destinations to audit deliveries.
 
 ### Running a report manually
@@ -3920,6 +3922,18 @@ Click the green **Play** button in the report's row to run it immediately. The r
 Manual runs respect the same destination state: disabled destinations are skipped, and rate limits still apply.
 
 Disabled reports show the play button greyed out. Enable the report (or edit and tick **Enabled**) before running. The button tooltip tells you why it is unavailable.
+
+### Previewing a report as PDF
+
+Click **Preview** next to **Edit** in the report's row to render it as a PDF and download it immediately. Preview does not send anything, does not write to the Delivery Log, and does not touch the report's schedule (`next_run_at`/`last_run_at`) — it just renders the current definition on demand. Unlike **Play**, it works even for a **disabled** report, so you can check a report before turning it on.
+
+PatchMon renders one PDF at a time per server process. If another preview is already rendering, the request waits up to 10 seconds for the slot to free up and then answers `503 Renderer busy, try again in a few seconds` — click **Preview** again. Once rendering starts it has a 25-second budget; a report over an unusually large fleet can hit this and fail with `503 Rendering took too long`.
+
+The header logo has one fixed rule, no manual override: an uploaded logo is used only if it is a PNG or JPEG that decodes to at most 4 megapixels, and is scaled down to 600 px wide if larger. Anything else — an SVG, an oversized or corrupt file, or no logo at all — falls back to the vendor default; a preview never fails because of the logo. If the default was used instead of your upload, a toast tells you and points at **Settings → Branding**.
+
+The downloaded file is named `report-<slug>-<yyyymmdd>.pdf` (the report name, lower-cased and hyphenated, plus the render date), and a single PDF is capped at 10 MB; a report that would exceed it fails with an error instead of a truncated download.
+
+Preview requires `can_manage_notifications`, the same permission as creating, editing and running reports.
 
 ### Editing and deleting
 
@@ -3940,6 +3954,8 @@ When the task executes, the worker:
 5. Updates `last_run_at` and queues the next occurrence.
 
 Because the schedule is stored as a cron string plus a timezone, daylight-saving transitions are handled by the cron library. Jobs that would fall in a skipped hour are pushed to the next valid slot; jobs repeated in a duplicate hour fire once.
+
+The **Preview** action (see above) uses the same typed model but draws it onto an A4 canvas with `internal/reports.RenderPDF` instead of the HTML template, serialised through a process-wide render gate (`internal/reports.RenderGate`) so that at most one PDF renders at a time; a busy gate answers `503` after a 10-second wait rather than queueing indefinitely. The worker above does not render PDFs — that arrives with e-mail PDF attachments in a future release.
 
 ### Known limits
 
