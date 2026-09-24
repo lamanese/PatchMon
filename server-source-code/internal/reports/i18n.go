@@ -182,6 +182,9 @@ var texts = map[string]map[string]string{
 		"status.critical":           "Critical",
 		"status.patch_all":          "All packages",
 		"status.patch_package":      "Selected packages",
+		"pdf.page_of":               "Page %d of %s",
+		"pdf.generated":             "Generated",
+		"pdf.default_logo_hint":     "The PDF uses the default logo. Upload a PNG or JPEG under Settings → Branding for your own logo.",
 	},
 	"de": {
 		"title":          "Bericht",
@@ -294,5 +297,8 @@ var texts = map[string]map[string]string{
 		"status.critical":           "Kritisch",
 		"status.patch_all":          "Alle Pakete",
 		"status.patch_package":      "Ausgewählte Pakete",
+		"pdf.page_of":               "Seite %d von %s",
+		"pdf.generated":             "Erstellt",
+		"pdf.default_logo_hint":     "Das PDF verwendet das Standardlogo. Für ein eigenes Logo unter Einstellungen → Branding ein PNG oder JPEG hochladen.",
 	},
 }
