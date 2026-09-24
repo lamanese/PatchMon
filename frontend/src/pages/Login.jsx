@@ -415,12 +415,12 @@ const Login = () => {
 						<div className="max-w-xl mx-auto w-full">
 							<div className="border-t border-white/10 pt-6">
 								<a
-									href="https://amanit.ch"
+									href="https://amanit.swiss"
 									target="_blank"
 									rel="noopener noreferrer"
 									className="text-sm text-gray-400 hover:text-gray-200 transition-colors"
 								>
-									amanit.ch
+									amanit.swiss
 								</a>
 							</div>
 						</div>
