@@ -67,6 +67,15 @@ func TestPDFFileName(t *testing.T) {
 			t.Errorf("%q: want %q got %q", in, want, got)
 		}
 	}
+	// the date follows the location of the time passed in (report timezone)
+	zurich, err := time.LoadLocation("Europe/Zurich")
+	if err != nil {
+		t.Skip("tzdata missing:", err)
+	}
+	late := time.Date(2026, 9, 24, 22, 30, 0, 0, time.UTC) // 00:30 on the 25th in Zurich
+	if got := PDFFileName("x", late.In(zurich)); got != "report-x-20260925.pdf" {
+		t.Errorf("zurich date: got %q", got)
+	}
 }
 
 func TestRenderPDFRecoversFromPanic(t *testing.T) {

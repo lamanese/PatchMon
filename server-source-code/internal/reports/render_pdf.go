@@ -52,7 +52,9 @@ func RenderPDF(ctx context.Context, m *Model, b Branding) (pdf []byte, logoSrc s
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
-// PDFFileName builds the download name: report-<slug>-<yyyymmdd>.pdf.
+// PDFFileName builds the download name: report-<slug>-<yyyymmdd>.pdf. The
+// date is taken in generatedAt's own location; callers pass the time in the
+// report timezone so the name matches the date printed in the document.
 func PDFFileName(reportName string, generatedAt time.Time) string {
 	slug := strings.Trim(slugRe.ReplaceAllString(strings.ToLower(reportName), "-"), "-")
 	if len(slug) > 40 {
@@ -61,7 +63,7 @@ func PDFFileName(reportName string, generatedAt time.Time) string {
 	if slug == "" {
 		slug = "report"
 	}
-	return "report-" + slug + "-" + generatedAt.UTC().Format("20060102") + ".pdf"
+	return "report-" + slug + "-" + generatedAt.Format("20060102") + ".pdf"
 }
 
 // PDF palette, identical to the HTML FuncMap colours.
