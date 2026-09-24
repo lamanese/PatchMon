@@ -3,6 +3,7 @@ module github.com/PatchMon/PatchMon/server-source-code
 go 1.26.6
 
 require (
+	codeberg.org/go-pdf/fpdf v0.12.0
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/go-chi/chi/v5 v5.2.5
