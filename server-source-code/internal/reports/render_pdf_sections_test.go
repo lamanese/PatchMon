@@ -199,3 +199,46 @@ func TestRenderSectionsEnglishAndEmptySections(t *testing.T) {
 		}
 	}
 }
+
+// colCanvas records the column sets of every table.
+type colCanvas struct {
+	recordingCanvas
+	tables [][]pdfCol
+}
+
+func (c *colCanvas) table(cols []pdfCol, rows [][]cell) {
+	c.tables = append(c.tables, cols)
+	c.recordingCanvas.table(cols, rows)
+}
+
+func TestPDFTableWidthsSumToOneAndHostStatusFitsOneLine(t *testing.T) {
+	for _, lang := range []string{"de", "en"} {
+		tx := T(lang)
+		cc := &colCanvas{}
+		renderSections(cc, sampleModel(lang, false))
+		var statusW float64
+		for _, cols := range cc.tables {
+			sum := 0.0
+			for _, c := range cols {
+				sum += c.W
+			}
+			if sum < 0.999 || sum > 1.001 {
+				t.Errorf("%s: table %q widths sum to %.3f", lang, cols[0].Title, sum)
+			}
+			if len(cols) == 10 && cols[1].Title == tx.S("col.os") {
+				statusW = cols[2].W
+			}
+		}
+		if statusW == 0 {
+			t.Fatalf("%s: host_overview table not found", lang)
+		}
+		c := newTestCanvas(t)
+		c.font(true, 8, colText) // badges are bold 8 pt
+		inner := pdfUsable*statusW - 2*pdfCellPad - 2*c.pdf.GetCellMargin()
+		for _, st := range []string{"active", "inactive", "pending"} {
+			if lines := wrapLines(c.pdf, tx.Status(st), inner); len(lines) != 1 {
+				t.Errorf("%s: host status %q wraps in host_overview: %q", lang, tx.Status(st), lines)
+			}
+		}
+	}
+}

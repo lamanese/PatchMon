@@ -385,12 +385,14 @@ func pdfHostOverview(c canvas, tx Texts, m *Model) {
 		})
 	}
 	c.table([]pdfCol{
-		// ten columns on A4 portrait: widths are balanced so that dates and
-		// "Abgeschlossen" never break mid-word (the brief's split did)
-		col(tx, "host", 0.14, "L"), col(tx, "os", 0.13, "L"), col(tx, "status", 0.08, "L"),
+		// ten columns on A4 portrait: widths are balanced so that dates,
+		// "Abgeschlossen", "2.0.20" and every host status badge (the widest
+		// is "Ausstehend", bold 8 pt, needs 0.121) stay on one line; sum 1.0
+		// (TestPDFTableWidthsSumToOneAndHostStatusFitsOneLine)
+		col(tx, "host", 0.13, "L"), col(tx, "os", 0.11, "L"), col(tx, "status", 0.125, "L"),
 		col(tx, "updates", 0.06, "R"), col(tx, "security_updates", 0.06, "R"), col(tx, "reboot_pending", 0.07, "L"),
 		col(tx, "last_boot", 0.115, "L"), col(tx, "last_patch_run", 0.14, "L"), col(tx, "last_seen", 0.115, "L"),
-		col(tx, "agent", 0.09, "L"),
+		col(tx, "agent", 0.075, "L"),
 	}, rows)
 	c.note(tx.S("note.windows_boot"))
 }
