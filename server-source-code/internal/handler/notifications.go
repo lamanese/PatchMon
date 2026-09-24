@@ -708,6 +708,63 @@ func (h *NotificationsHandler) RunScheduledReportNow(w http.ResponseWriter, r *h
 	JSON(w, http.StatusOK, map[string]string{"status": "scheduled"})
 }
 
+var (
+	previewGate = reports.DefaultGate
+	previewWait = reports.PreviewWait
+)
+
+func previewErrorStatus(err error) (int, string) {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return http.StatusServiceUnavailable, "Rendering took too long"
+	case reports.IsConfigError(err):
+		return http.StatusBadRequest, err.Error()
+	}
+	return http.StatusInternalServerError, "Failed to render report"
+}
+
+// PreviewScheduledReport POST /notifications/scheduled-reports/{id}/preview
+// Renders the report as PDF for download. Nothing is sent, stored or
+// rescheduled. One renderer at a time; a busy renderer answers 503.
+func (h *NotificationsHandler) PreviewScheduledReport(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		Error(w, http.StatusBadRequest, "id required")
+		return
+	}
+	release, err := previewGate.Acquire(r.Context(), previewWait)
+	if err != nil {
+		Error(w, http.StatusServiceUnavailable, "Renderer busy, try again in a few seconds")
+		return
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(r.Context(), reports.RenderDeadline)
+	defer cancel()
+	d := h.db.DB(ctx)
+	rep, err := d.Queries.GetScheduledReportByID(ctx, id)
+	if err != nil {
+		Error(w, http.StatusNotFound, "Not found")
+		return
+	}
+	in := reports.BuildInput{ReportName: rep.Name, Definition: rep.Definition, Timezone: rep.Timezone, Now: time.Now(), PDF: true}
+	if s, sErr := d.Queries.GetFirstSettings(ctx); sErr == nil {
+		in.Branding, in.StaleAfter = reports.BrandingFromSettings(s)
+	}
+	out, err := reports.Build(ctx, d, in)
+	if err != nil {
+		code, msg := previewErrorStatus(err)
+		Error(w, code, msg)
+		return
+	}
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+reports.PDFFileName(rep.Name, out.Model.GeneratedAt)+`"`)
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("X-Report-Logo", out.LogoSource)
+	w.Header().Set("Content-Length", strconv.Itoa(len(out.PDF)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(out.PDF)
+}
+
 // DeleteScheduledReport DELETE /notifications/scheduled-reports/{id}
 func (h *NotificationsHandler) DeleteScheduledReport(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")

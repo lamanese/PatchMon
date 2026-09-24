@@ -690,6 +690,7 @@ func NewRouter(ctx context.Context, cfg *config.Config, db *database.DB, rdb *re
 			r.With(middleware.RequirePermission("can_manage_notifications", permissionsStore)).Get("/notifications/scheduled-reports", notificationsHandler.ListScheduledReports)
 			r.With(middleware.RequirePermission("can_manage_notifications", permissionsStore)).Post("/notifications/scheduled-reports", notificationsHandler.CreateScheduledReport)
 			r.With(middleware.RequirePermission("can_manage_notifications", permissionsStore)).Post("/notifications/scheduled-reports/{id}/run-now", notificationsHandler.RunScheduledReportNow)
+			r.With(middleware.RequirePermission("can_manage_notifications", permissionsStore)).Post("/notifications/scheduled-reports/{id}/preview", notificationsHandler.PreviewScheduledReport)
 			r.With(middleware.RequirePermission("can_manage_notifications", permissionsStore)).Put("/notifications/scheduled-reports/{id}", notificationsHandler.UpdateScheduledReport)
 			r.With(middleware.RequirePermission("can_manage_notifications", permissionsStore)).Delete("/notifications/scheduled-reports/{id}", notificationsHandler.DeleteScheduledReport)
 
