@@ -211,14 +211,7 @@ func (h *ScheduledReportRunHandler) ProcessTask(ctx context.Context, t *asynq.Ta
 	branding := reports.Branding{}
 	var staleAfter time.Duration
 	if settings, sErr := d.Queries.GetFirstSettings(ctx); sErr == nil {
-		baseURL := strings.TrimRight(settings.ServerUrl, "/")
-		branding.ServerURL = baseURL
-		if settings.LogoLight != nil && *settings.LogoLight != "" {
-			branding.LogoURL = baseURL + *settings.LogoLight
-		}
-		if settings.UpdateInterval > 0 {
-			staleAfter = 2 * time.Duration(settings.UpdateInterval) * time.Minute
-		}
+		branding, staleAfter = reports.BrandingFromSettings(settings)
 	}
 
 	out, err := reports.Build(ctx, d, reports.BuildInput{

@@ -3,9 +3,11 @@ package reports
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/db"
 )
 
 // BuildInput is everything the worker knows about a scheduled report row.
@@ -17,14 +19,17 @@ type BuildInput struct {
 	CustomerMode bool
 	StaleAfter   time.Duration
 	Branding     Branding
+	PDF          bool // true renders Output.PDF (and LogoSource) under the caller's ctx
 }
 
 // Output is what the delivery code sends.
 type Output struct {
-	Subject string
-	HTML    string
-	CSV     string
-	Model   *Model
+	Subject    string
+	HTML       string
+	CSV        string
+	Model      *Model
+	PDF        []byte
+	LogoSource string
 }
 
 // Build parses, scopes, collects and renders one report. It fails closed:
@@ -58,7 +63,34 @@ func Build(ctx context.Context, d *database.DB, in BuildInput) (*Output, error) 
 	if err != nil {
 		return nil, err
 	}
-	return &Output{Subject: Subject(def.Language, in.ReportName), HTML: html, CSV: RenderCSV(m), Model: m}, nil
+	out := &Output{Subject: Subject(def.Language, in.ReportName), HTML: html, CSV: RenderCSV(m), Model: m}
+	if in.PDF {
+		pdf, src, err := RenderPDF(ctx, m, in.Branding)
+		if err != nil {
+			return nil, err
+		}
+		out.PDF, out.LogoSource = pdf, src
+	}
+	return out, nil
+}
+
+// BrandingFromSettings maps a settings row to Branding and the stale
+// threshold (2 × update_interval minutes, 0 when unset). Shared by the
+// scheduled-report worker and the preview API so both stay in sync.
+func BrandingFromSettings(s db.Setting) (Branding, time.Duration) {
+	b := Branding{ServerURL: strings.TrimRight(s.ServerUrl, "/")}
+	if s.LogoLight != nil && *s.LogoLight != "" {
+		b.LogoURL = b.ServerURL + *s.LogoLight
+	}
+	b.LogoData = s.LogoLightData
+	if s.LogoLightContentType != nil {
+		b.LogoContentType = *s.LogoLightContentType
+	}
+	var stale time.Duration
+	if s.UpdateInterval > 0 {
+		stale = 2 * time.Duration(s.UpdateInterval) * time.Minute
+	}
+	return b, stale
 }
 
 // Subject is the mail subject for a report.
