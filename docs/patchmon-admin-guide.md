@@ -3906,7 +3906,7 @@ For each channel type the payload adapts:
 
 | Destination | What the recipient sees |
 |-------------|------------------------|
-| **Email** | HTML email rendered inline; CSV attached. Subject contains the report name and timestamp. |
+| **Email** | HTML email rendered inline; CSV attached. Subject contains the report name and timestamp. The dark header shows the dark-mode logo from *Settings → Branding* (the light-mode logo only when no dark one is uploaded; PNG or JPEG, most mail clients do not render SVG). |
 | **Webhook** | JSON POST with report metadata, a summary, and the HTML body in a field. Use this to fan reports into a downstream system (data warehouse, Google Sheets ingester, etc.). |
 | **ntfy** | Short push notification with a link back to the latest report in the UI. The full HTML does not fit ntfy, so it is summarised. |
 | **Internal Alerts** | A system record under the **Alerts** tab, useful when you want a run history inside PatchMon without email. |
