@@ -10,7 +10,7 @@ dark variants use white/#c9d3e0 text and lightened facets for dark backgrounds.
 |---|---|
 | `logo_full_light.svg` / `logo_full_dark.svg` | wordmark + claim "Security und Consulting" |
 | `logo_wordmark_light.svg` / `logo_wordmark_dark.svg` | wordmark without claim: source of `frontend/public/assets/logo_light_default.png` / `logo_dark_default.png` (500x150, transparent) and of `server-source-code/internal/reports/assets/logo_default.png` (PDF/report header, light) |
-| `logo_icon_square.svg` | diamond in a square viewBox: `frontend/public/assets/logo_square_default.svg` and `favicon.svg` |
+| `logo_icon_square.svg` / `logo_icon_square_dark.svg` | diamond in a square viewBox: `frontend/public/assets/logo_square_default.svg` + `favicon.svg`, and `logo_square_default_dark.svg` (login page, dark background) |
 
 Regenerating the PNGs: render the SVG with headless Chrome on a transparent
 canvas at 2x (`--default-background-color=00000000 --screenshot`), then

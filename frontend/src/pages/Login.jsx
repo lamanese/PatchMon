@@ -14,7 +14,7 @@ import DiscordIcon from "../components/DiscordIcon";
 import { PRODUCT_NAME, SOURCE_CODE_URL } from "../constants/branding";
 import { useAuth } from "../contexts/AuthContext";
 import { authAPI, isCorsError } from "../utils/api";
-import { resolveLogoPath } from "../utils/logoPaths";
+import { loginIconPath } from "../utils/logoPaths";
 
 const Login = () => {
 	const usernameId = useId();
@@ -394,7 +394,7 @@ const Login = () => {
 							<div className="space-y-6">
 								<div>
 									<img
-										src={`${resolveLogoPath(settings?.favicon, "favicon")}?v=${
+										src={`${loginIconPath(settings?.favicon)}?v=${
 											settings?.updated_at
 												? new Date(settings.updated_at).getTime()
 												: Date.now()
@@ -402,7 +402,7 @@ const Login = () => {
 										alt="Logo"
 										className="h-16 mb-4"
 										onError={(e) => {
-											e.target.src = `/assets/logo_square_default.svg?v=${Date.now()}`;
+											e.target.src = `/assets/logo_square_default_dark.svg?v=${Date.now()}`;
 										}}
 									/>
 									<p className="text-2xl text-white font-semibold tracking-tight">
@@ -440,7 +440,7 @@ const Login = () => {
 					<div>
 						<div className="mx-auto h-16 w-16 flex items-center justify-center">
 							<img
-								src={`${resolveLogoPath(settings?.favicon, "favicon")}?v=${
+								src={`${loginIconPath(settings?.favicon)}?v=${
 									settings?.updated_at
 										? new Date(settings.updated_at).getTime()
 										: Date.now()
@@ -448,7 +448,7 @@ const Login = () => {
 								alt="Logo"
 								className="h-16 w-16"
 								onError={(e) => {
-									e.target.src = `/assets/logo_square_default.svg?v=${Date.now()}`;
+									e.target.src = `/assets/logo_square_default_dark.svg?v=${Date.now()}`;
 								}}
 							/>
 						</div>
@@ -712,7 +712,7 @@ const Login = () => {
 							<div className="text-center">
 								<div className="mx-auto h-16 w-16 flex items-center justify-center">
 									<img
-										src={`${resolveLogoPath(settings?.favicon, "favicon")}?v=${
+										src={`${loginIconPath(settings?.favicon)}?v=${
 											settings?.updated_at
 												? new Date(settings.updated_at).getTime()
 												: Date.now()
@@ -720,7 +720,7 @@ const Login = () => {
 										alt="Logo"
 										className="h-16 w-16"
 										onError={(e) => {
-											e.target.src = `/assets/logo_square_default.svg?v=${Date.now()}`;
+											e.target.src = `/assets/logo_square_default_dark.svg?v=${Date.now()}`;
 										}}
 									/>
 								</div>
