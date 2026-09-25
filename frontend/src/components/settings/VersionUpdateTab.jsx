@@ -8,6 +8,7 @@ import {
 	ExternalLink,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { sourceUrlForVersion } from "../../constants/branding";
 import { formatDate, settingsAPI, versionAPI } from "../../utils/api";
 
 const VersionUpdateTab = () => {
@@ -226,12 +227,12 @@ const VersionUpdateTab = () => {
 						</span>
 						<div className="flex items-center gap-2">
 							<a
-								href="https://github.com/lamanese/PatchMon"
+								href={sourceUrlForVersion(versionInfo.currentVersion)}
 								target="_blank"
 								rel="noopener noreferrer"
 								className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 text-sm font-mono"
 							>
-								lamanese/PatchMon{" "}
+								lamanese/PatchMon @ v{versionInfo.currentVersion}{" "}
 								<ExternalLink className="h-3 w-3 inline ml-1" />
 							</a>
 						</div>

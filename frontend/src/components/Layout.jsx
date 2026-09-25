@@ -5,6 +5,7 @@ import {
 	CalendarClock,
 	ChevronDown,
 	Clock,
+	Code,
 	Container,
 	CreditCard,
 	GitBranch,
@@ -27,6 +28,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { FaLinkedin, FaYoutube } from "react-icons/fa";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { SOURCE_CODE_URL } from "../constants/branding";
 import { getRequiredTier } from "../constants/tiers";
 import { useAuth } from "../contexts/AuthContext";
 import { useColorTheme } from "../contexts/ColorThemeContext";
@@ -979,6 +981,15 @@ const Layout = ({ children }) => {
 											)}
 										</span>
 									</Link>
+									<a
+										href={SOURCE_CODE_URL}
+										target="_blank"
+										rel="noopener noreferrer"
+										className="group flex items-center px-2 py-2 text-sm font-medium rounded-md text-secondary-600 dark:text-white hover:bg-secondary-50 dark:hover:bg-secondary-700 hover:text-secondary-900 dark:hover:text-white"
+									>
+										<Code className="mr-3 h-5 w-5" />
+										Source code (AGPL v3)
+									</a>
 									<button
 										type="button"
 										onClick={() => {
@@ -1512,6 +1523,14 @@ const Layout = ({ children }) => {
 											<LogOut className="h-4 w-4" />
 										</button>
 									</div>
+									<a
+										href={SOURCE_CODE_URL}
+										target="_blank"
+										rel="noopener noreferrer"
+										className="block px-2 pb-1 text-xs text-secondary-400 dark:text-secondary-400 hover:text-secondary-700 dark:hover:text-white"
+									>
+										Source code (AGPL v3)
+									</a>
 									{stats && (
 										<div className="px-2">
 											<div className="flex items-center gap-x-1 text-[11px] text-secondary-400 dark:text-white/50">

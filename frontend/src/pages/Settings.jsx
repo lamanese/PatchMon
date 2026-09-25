@@ -42,7 +42,7 @@ const Settings = () => {
 		serverPort: 3001,
 		updateInterval: 60,
 		autoUpdate: false,
-		githubRepoUrl: "git@github.com:9technologygroup/patchmon.net.git",
+		githubRepoUrl: "https://github.com/lamanese/PatchMon.git",
 		repositoryType: "public",
 		sshKeyPath: "",
 		useCustomSshKey: false,

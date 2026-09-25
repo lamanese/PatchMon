@@ -1,0 +1,42 @@
+amanIT Patch Management
+=======================
+
+This software is a modified version of PatchMon
+(https://github.com/PatchMon/PatchMon), Copyright (c) PatchMon Ltd
+(formerly 9 Technology Group LTD), licensed under the GNU Affero General
+Public License, version 3 (see LICENSE).
+
+Modifications Copyright (c) 2026 amanIT GmbH, https://amanit.swiss
+Licensed under the same GNU Affero General Public License, version 3.
+
+Notice of changes (AGPL v3, section 5a)
+---------------------------------------
+This version has been modified by amanIT GmbH, starting June 2026 and
+continuing. The modified files, the nature of each change and its date are
+recorded in the Git history of the fork repository:
+
+    https://github.com/lamanese/PatchMon
+
+Every release of the fork is tagged (v<upstream-base>-am.<n>, for example
+v2.0.2-am.11). The tag matching the running version is shown in the
+application under Settings -> Server Version, and a link to the source is
+available on the login page.
+
+Trademarks
+----------
+"PatchMon" and the PatchMon logo are trademarks of PatchMon Ltd. This fork
+is an independent project and is not affiliated with, endorsed by or
+supported by PatchMon Ltd. The AGPL license does not grant any rights to
+these marks; the fork is therefore distributed and operated under its own
+name.
+
+Third-party components
+----------------------
+Noto Sans (server-source-code/internal/reports/assets/fonts) - SIL Open
+Font License 1.1, Copyright 2022 The Noto Project Authors.
+Inter (frontend/public/fonts/inter-final) - SIL Open Font License 1.1,
+Copyright 2016 The Inter Project Authors.
+JetBrains Mono (frontend/public/fonts/jetbrains-final) - SIL Open Font
+License 1.1, Copyright 2020 The JetBrains Mono Project Authors.
+Go module and npm dependencies carry their own licenses; see go.mod and
+package.json in the respective directories.

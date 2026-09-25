@@ -197,7 +197,7 @@ const SettingsMetrics = () => {
 				{/* More Information Button */}
 				<div className="mt-4 pt-4 border-t border-blue-200 dark:border-blue-700">
 					<a
-						href="https://patchmon.net/docs/patchmon-admin-guide#metrics-and-telemetry"
+						href="https://github.com/lamanese/PatchMon/blob/feat/remote-reboot/docs/patchmon-admin-guide.md#metrics-and-telemetry"
 						target="_blank"
 						rel="noopener noreferrer"
 						className="inline-flex items-center px-4 py-2 text-sm font-medium text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-900/50 rounded-md hover:bg-blue-200 dark:hover:bg-blue-900/70 transition-colors"
@@ -403,17 +403,6 @@ const SettingsMetrics = () => {
 							</li>
 							<li>The anonymous UUID prevents duplicate counting</li>
 							<li>You can regenerate your ID or opt-out at any time</li>
-							<li>
-								All collected data is displayed publicly on{" "}
-								<a
-									href="https://patchmon.net"
-									target="_blank"
-									rel="noopener noreferrer"
-									className="text-primary-600 dark:text-primary-400 hover:underline"
-								>
-									patchmon.net
-								</a>
-							</li>
 						</ul>
 					</div>
 				</div>

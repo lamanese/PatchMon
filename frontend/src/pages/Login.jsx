@@ -11,6 +11,7 @@ import { useEffect, useId, useState } from "react";
 
 import { useNavigate } from "react-router-dom";
 import DiscordIcon from "../components/DiscordIcon";
+import { SOURCE_CODE_URL } from "../constants/branding";
 import { useAuth } from "../contexts/AuthContext";
 import { authAPI, isCorsError } from "../utils/api";
 import { resolveLogoPath } from "../utils/logoPaths";
@@ -430,7 +431,7 @@ const Login = () => {
 
 			{/* Right side - Login Form */}
 			<div
-				className={`${showGithubVersionOnLogin ? "flex-1" : "w-full"} flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 relative z-10`}
+				className={`${showGithubVersionOnLogin ? "flex-1" : "w-full"} flex flex-col items-center justify-center py-12 px-4 sm:px-6 lg:px-8 relative z-10`}
 			>
 				<div className="max-w-md w-full space-y-8 bg-white dark:bg-secondary-900 rounded-2xl shadow-2xl p-8 lg:p-10">
 					<div>
@@ -815,6 +816,17 @@ const Login = () => {
 						</form>
 					)}
 				</div>
+				{/* AGPL v3 section 13: every user of this instance gets an offer of the running source */}
+				<p className="mt-4 text-xs text-gray-300 text-center">
+					<a
+						href={SOURCE_CODE_URL}
+						target="_blank"
+						rel="noopener noreferrer"
+						className="hover:text-white transition-colors"
+					>
+						Source code (AGPL v3)
+					</a>
+				</p>
 			</div>
 		</div>
 	);
