@@ -256,6 +256,50 @@ type DockerVolume struct {
 	LastChecked pgtype.Timestamp `json:"last_checked"`
 }
 
+type ForkReportArchive struct {
+	ID                string     `json:"id"`
+	ScheduledReportID string     `json:"scheduled_report_id"`
+	RunKey            string     `json:"run_key"`
+	TriggerKind       string     `json:"trigger_kind"`
+	SlotAt            *time.Time `json:"slot_at"`
+	CreatedAt         time.Time  `json:"created_at"`
+	FinishedAt        *time.Time `json:"finished_at"`
+	Status            string     `json:"status"`
+	ErrorCode         *string    `json:"error_code"`
+	ErrorMessage      *string    `json:"error_message"`
+	ReportName        string     `json:"report_name"`
+	Language          string     `json:"language"`
+	PeriodFrom        *time.Time `json:"period_from"`
+	PeriodTo          *time.Time `json:"period_to"`
+	GroupIds          []string   `json:"group_ids"`
+	GroupNames        []string   `json:"group_names"`
+	HostCount         int32      `json:"host_count"`
+	CustomerMode      bool       `json:"customer_mode"`
+	SmtpDestinationID *string    `json:"smtp_destination_id"`
+	MailFrom          *string    `json:"mail_from"`
+	Recipients        []string   `json:"recipients"`
+	Subject           string     `json:"subject"`
+	Html              *string    `json:"html"`
+	Csv               *string    `json:"csv"`
+	Pdf               []byte     `json:"pdf"`
+	PdfSize           int32      `json:"pdf_size"`
+	PdfSha256         *string    `json:"pdf_sha256"`
+}
+
+type ForkReportDelivery struct {
+	ID              string     `json:"id"`
+	ArchiveID       string     `json:"archive_id"`
+	DestinationID   string     `json:"destination_id"`
+	DestinationName string     `json:"destination_name"`
+	Channel         string     `json:"channel"`
+	Recipient       string     `json:"recipient"`
+	Status          string     `json:"status"`
+	ErrorCode       *string    `json:"error_code"`
+	ErrorMessage    *string    `json:"error_message"`
+	Attempts        int32      `json:"attempts"`
+	SentAt          *time.Time `json:"sent_at"`
+}
+
 type Host struct {
 	ID                           string           `json:"id"`
 	MachineID                    *string          `json:"machine_id"`
@@ -568,17 +612,18 @@ type RolePermission struct {
 }
 
 type ScheduledReport struct {
-	ID             string           `json:"id"`
-	Name           string           `json:"name"`
-	CronExpr       string           `json:"cron_expr"`
-	Enabled        bool             `json:"enabled"`
-	Definition     []byte           `json:"definition"`
-	DestinationIds []byte           `json:"destination_ids"`
-	Timezone       string           `json:"timezone"`
-	NextRunAt      pgtype.Timestamp `json:"next_run_at"`
-	LastRunAt      pgtype.Timestamp `json:"last_run_at"`
-	CreatedAt      pgtype.Timestamp `json:"created_at"`
-	UpdatedAt      pgtype.Timestamp `json:"updated_at"`
+	ID                  string           `json:"id"`
+	Name                string           `json:"name"`
+	CronExpr            string           `json:"cron_expr"`
+	Enabled             bool             `json:"enabled"`
+	Definition          []byte           `json:"definition"`
+	DestinationIds      []byte           `json:"destination_ids"`
+	Timezone            string           `json:"timezone"`
+	NextRunAt           pgtype.Timestamp `json:"next_run_at"`
+	LastRunAt           pgtype.Timestamp `json:"last_run_at"`
+	CreatedAt           pgtype.Timestamp `json:"created_at"`
+	UpdatedAt           pgtype.Timestamp `json:"updated_at"`
+	ForkEmailRecipients []string         `json:"fork_email_recipients"`
 }
 
 type ScheduledReportRun struct {

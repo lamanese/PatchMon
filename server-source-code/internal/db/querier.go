@@ -211,6 +211,7 @@ type Querier interface {
 	FindSessionByUserAndDeviceID(ctx context.Context, arg FindSessionByUserAndDeviceIDParams) (UserSession, error)
 	FindSessionWithTfaBypass(ctx context.Context, arg FindSessionWithTfaBypassParams) (FindSessionWithTfaBypassRow, error)
 	FindValidTrustedDevice(ctx context.Context, arg FindValidTrustedDeviceParams) (UserTrustedDevice, error)
+	ForkAbandonStaleReportArchive(ctx context.Context, scheduledReportID string) (int64, error)
 	// Fork additions below - do not edit CancelStalledPatchRuns above so an
 	// upstream sync never conflicts on it; the fork's patch-run-cleanup job
 	// (internal/queue/workers.go) uses the two queries below instead, which
@@ -230,6 +231,26 @@ type Querier interface {
 	// query above sets it), so GREATEST(updated_at, scheduled_at) never reaps a
 	// run before its own scheduled_at plus the caller's threshold has elapsed.
 	ForkCancelStaleWaitingPatchRuns(ctx context.Context, arg ForkCancelStaleWaitingPatchRunsParams) (int64, error)
+	// Fork: customer reports (increment D). Slot claim on scheduled_reports,
+	// recipients, run archive and per-delivery status. List queries never read
+	// pdf/html/csv. All timestamps on the fork tables are TIMESTAMPTZ (Go
+	// time.Time / *time.Time via the sqlc override); scheduled_reports keeps the
+	// upstream TIMESTAMP(3) columns (pgtype.Timestamp via pgtime.From).
+	// Atomic slot claim: succeeds only while next_run_at still points at the slot
+	// the task was enqueued for. Compared at second precision because
+	// notifications.NextCronRun yields whole seconds and legacy rows may carry ms.
+	ForkClaimScheduledReportSlot(ctx context.Context, arg ForkClaimScheduledReportSlotParams) (int64, error)
+	ForkFinishReportArchive(ctx context.Context, arg ForkFinishReportArchiveParams) error
+	ForkGetReportArchiveByRunKey(ctx context.Context, runKey string) (ForkGetReportArchiveByRunKeyRow, error)
+	ForkGetReportArchiveContent(ctx context.Context, id string) (ForkGetReportArchiveContentRow, error)
+	ForkGetReportArchivePDF(ctx context.Context, id string) (ForkGetReportArchivePDFRow, error)
+	ForkInsertReportArchive(ctx context.Context, arg ForkInsertReportArchiveParams) error
+	ForkInsertReportDelivery(ctx context.Context, arg ForkInsertReportDeliveryParams) error
+	ForkListReportArchive(ctx context.Context, arg ForkListReportArchiveParams) ([]ForkListReportArchiveRow, error)
+	ForkListReportDeliveries(ctx context.Context, archiveID string) ([]ForkReportDelivery, error)
+	ForkListReportDeliveriesForReport(ctx context.Context, scheduledReportID string) ([]ForkReportDelivery, error)
+	ForkMarkReportDelivery(ctx context.Context, arg ForkMarkReportDeliveryParams) error
+	ForkPruneReportArchive(ctx context.Context, arg ForkPruneReportArchiveParams) (int64, error)
 	// Fork: queries for host-group-scoped scheduled reports (internal/reports).
 	// Every query filters by host_ids FIRST and only then aggregates, sorts or
 	// limits, so a report for one group can never see another group's data.
@@ -250,6 +271,9 @@ type Querier interface {
 	// Available version ONLY from host_packages; packages.latest_version is a
 	// shared catalog that any host may overwrite.
 	ForkReportSecurityUpdates(ctx context.Context, arg ForkReportSecurityUpdatesParams) ([]ForkReportSecurityUpdatesRow, error)
+	ForkSetScheduledReportNextRunIfNull(ctx context.Context, arg ForkSetScheduledReportNextRunIfNullParams) (int64, error)
+	ForkSetScheduledReportRecipients(ctx context.Context, arg ForkSetScheduledReportRecipientsParams) error
+	ForkSnapshotReportArchive(ctx context.Context, arg ForkSnapshotReportArchiveParams) error
 	// Fork: last boot instant reported by agents 2.0.20+. Kept out of
 	// UpdateHostFromReport so that upstream query stays untouched. The caller only
 	// invokes it with a plausible value; a missing value never clears the column.
