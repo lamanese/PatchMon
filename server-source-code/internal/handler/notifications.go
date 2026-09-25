@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/PatchMon/PatchMon/server-source-code/internal/branding"
@@ -499,7 +501,135 @@ func (h *NotificationsHandler) scheduledReportToMap(row db.ScheduledReport) map[
 		"last_run_at":     pgTime(row.LastRunAt),
 		"created_at":      pgTime(row.CreatedAt),
 		"updated_at":      pgTime(row.UpdatedAt),
+		// null = internal report, [...] = customer report (mail per recipient).
+		"email_recipients": row.ForkEmailRecipients,
+		"customer_mode":    row.ForkEmailRecipients != nil,
 	}
+}
+
+// RunNowCooldown bounds "Run now" to one enqueue per report and window.
+const RunNowCooldown = 60 * time.Second
+
+// MinCustomerReportInterval is the shortest schedule a customer report may use.
+const MinCustomerReportInterval = time.Hour
+
+// deliveryError is a validation error with an API-safe text (never a
+// recipient address). It unwraps to reports.ErrRecipients so
+// definitionErrorStatus answers 400.
+type deliveryError struct{ msg string }
+
+func (e deliveryError) Error() string { return e.msg }
+func (e deliveryError) Unwrap() error { return reports.ErrRecipients }
+
+// reportDeliveryPlan is the validated delivery side of a report.
+type reportDeliveryPlan struct {
+	Recipients   []string // nil = internal report
+	CustomerMode bool
+}
+
+// validateReportDelivery checks recipients, destinations and, for customer
+// reports, the single enabled e-mail destination and the schedule interval.
+func (h *NotificationsHandler) validateReportDelivery(ctx context.Context, recipients *[]string, destIDs []string, cronExpr, tz string) (reportDeliveryPlan, error) {
+	var plan reportDeliveryPlan
+	if recipients != nil {
+		parsed, err := reports.ParseRecipients(*recipients)
+		if err != nil {
+			// The helper texts carry no address; rename the field for the API.
+			return plan, deliveryError{msg: "email_recipients: " + strings.Replace(err.Error(), "recipients: ", "", 1)}
+		}
+		plan.Recipients = parsed
+		plan.CustomerMode = parsed != nil
+	}
+	q := h.q(ctx)
+	dests := make([]db.NotificationDestination, 0, len(destIDs))
+	for _, id := range destIDs {
+		dst, err := q.GetNotificationDestinationByID(ctx, id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return plan, deliveryError{msg: fmt.Sprintf("destination %s not found", id)}
+			}
+			return plan, fmt.Errorf("load destination: %w", err)
+		}
+		if dst.ChannelType == "internal" {
+			return plan, deliveryError{msg: "destination type internal cannot receive reports"}
+		}
+		dests = append(dests, dst)
+	}
+	if !plan.CustomerMode {
+		return plan, nil
+	}
+	if len(dests) != 1 || dests[0].ChannelType != "email" || !dests[0].Enabled {
+		return plan, deliveryError{msg: "customer reports need exactly one enabled e-mail destination"}
+	}
+	if err := validateCustomerCron(cronExpr, tz, time.Now()); err != nil {
+		return plan, err
+	}
+	return plan, nil
+}
+
+// validateCustomerCron rejects schedules whose next two runs are less than
+// MinCustomerReportInterval apart.
+func validateCustomerCron(expr, tz string, now time.Time) error {
+	n1, err := notifications.NextCronRun(expr, tz, now)
+	if err != nil {
+		return deliveryError{msg: "Invalid cron_expr"}
+	}
+	n2, err := notifications.NextCronRun(expr, tz, n1)
+	if err != nil {
+		return deliveryError{msg: "Invalid cron_expr"}
+	}
+	if n2.Sub(n1) < MinCustomerReportInterval {
+		return deliveryError{msg: "customer reports can run at most once per hour"}
+	}
+	return nil
+}
+
+// runNowLimiter remembers the last accepted "Run now" per report (in memory,
+// per server process).
+type runNowLimiter struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+	now  func() time.Time
+}
+
+var runNowLimit = &runNowLimiter{last: map[string]time.Time{}, now: time.Now}
+
+// allow reserves the run-now slot of reportID; when the cooldown is still
+// running it returns the remaining wait and false.
+func (l *runNowLimiter) allow(reportID string) (time.Duration, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	if t, ok := l.last[reportID]; ok {
+		if wait := RunNowCooldown - now.Sub(t); wait > 0 {
+			return wait, false
+		}
+	}
+	if len(l.last) >= 1024 {
+		for id, t := range l.last {
+			if now.Sub(t) >= RunNowCooldown {
+				delete(l.last, id)
+			}
+		}
+	}
+	l.last[reportID] = now
+	return 0, true
+}
+
+// forget releases a reserved slot (enqueue failed, nothing ran).
+func (l *runNowLimiter) forget(reportID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.last, reportID)
+}
+
+// destinationIDsOf decodes the stored destination_ids JSON array.
+func destinationIDsOf(raw []byte) []string {
+	var ids []string
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &ids)
+	}
+	return ids
 }
 
 // validatedDefinition parses a submitted report definition strictly, checks
@@ -556,11 +686,12 @@ func (h *NotificationsHandler) ListScheduledReports(w http.ResponseWriter, r *ht
 // CreateScheduledReport POST /notifications/scheduled-reports
 func (h *NotificationsHandler) CreateScheduledReport(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name           string                 `json:"name"`
-		CronExpr       string                 `json:"cron_expr"`
-		Enabled        *bool                  `json:"enabled"`
-		Definition     map[string]interface{} `json:"definition"`
-		DestinationIDs []string               `json:"destination_ids"`
+		Name            string                 `json:"name"`
+		CronExpr        string                 `json:"cron_expr"`
+		Enabled         *bool                  `json:"enabled"`
+		Definition      map[string]interface{} `json:"definition"`
+		DestinationIDs  []string               `json:"destination_ids"`
+		EmailRecipients *[]string              `json:"email_recipients"`
 	}
 	if err := decodeJSON(r, &req); err != nil || req.Name == "" {
 		Error(w, http.StatusBadRequest, "name required")
@@ -586,8 +717,22 @@ func (h *NotificationsHandler) CreateScheduledReport(w http.ResponseWriter, r *h
 		Error(w, http.StatusBadRequest, "Invalid cron_expr")
 		return
 	}
+	plan, err := h.validateReportDelivery(r.Context(), req.EmailRecipients, req.DestinationIDs, cron, tz)
+	if err != nil {
+		Error(w, definitionErrorStatus(err), definitionErrorText(err))
+		return
+	}
 	id := uuid.New().String()
-	row, err := h.q(r.Context()).CreateScheduledReport(r.Context(), db.CreateScheduledReportParams{
+	ctx := r.Context()
+	d := h.db.DB(ctx)
+	tx, err := d.Begin(ctx)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "Failed to create")
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := d.Queries.WithTx(tx)
+	_, err = q.CreateScheduledReport(ctx, db.CreateScheduledReportParams{
 		ID:             id,
 		Name:           req.Name,
 		CronExpr:       cron,
@@ -598,6 +743,17 @@ func (h *NotificationsHandler) CreateScheduledReport(w http.ResponseWriter, r *h
 		NextRunAt:      pgtime.From(next),
 		LastRunAt:      pgtype.Timestamp{Valid: false},
 	})
+	if err == nil {
+		err = q.ForkSetScheduledReportRecipients(ctx, db.ForkSetScheduledReportRecipientsParams{ID: id, Recipients: plan.Recipients})
+	}
+	if err == nil {
+		err = tx.Commit(ctx)
+	}
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "Failed to create")
+		return
+	}
+	row, err := d.Queries.GetScheduledReportByID(ctx, id)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "Failed to create")
 		return
@@ -618,6 +774,8 @@ func (h *NotificationsHandler) UpdateScheduledReport(w http.ResponseWriter, r *h
 		Enabled        *bool                  `json:"enabled"`
 		Definition     map[string]interface{} `json:"definition"`
 		DestinationIDs []string               `json:"destination_ids"`
+		// Missing or null = internal report (the modal always sends it).
+		EmailRecipients *[]string `json:"email_recipients"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		Error(w, http.StatusBadRequest, "Invalid JSON")
@@ -656,8 +814,15 @@ func (h *NotificationsHandler) UpdateScheduledReport(w http.ResponseWriter, r *h
 		}
 	}
 	dest := ex.DestinationIds
+	destIDs := destinationIDsOf(ex.DestinationIds)
 	if req.DestinationIDs != nil {
 		dest, _ = json.Marshal(req.DestinationIDs)
+		destIDs = req.DestinationIDs
+	}
+	plan, err := h.validateReportDelivery(r.Context(), req.EmailRecipients, destIDs, cron, tz)
+	if err != nil {
+		Error(w, definitionErrorStatus(err), definitionErrorText(err))
+		return
 	}
 	nextAt := ex.NextRunAt
 	if req.CronExpr != "" {
@@ -665,7 +830,23 @@ func (h *NotificationsHandler) UpdateScheduledReport(w http.ResponseWriter, r *h
 			nextAt = pgtime.From(n)
 		}
 	}
-	row, err := h.q(r.Context()).UpdateScheduledReport(r.Context(), db.UpdateScheduledReportParams{
+	// A slot in the past (or none) would enqueue an immediate run; move it
+	// to the next cron slot instead.
+	if en && nextAt.Time.Before(time.Now()) {
+		if n, err := notifications.NextCronRun(cron, tz, time.Now()); err == nil {
+			nextAt = pgtime.From(n)
+		}
+	}
+	ctx := r.Context()
+	d := h.db.DB(ctx)
+	tx, err := d.Begin(ctx)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "Failed to update")
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := d.Queries.WithTx(tx)
+	_, err = q.UpdateScheduledReport(ctx, db.UpdateScheduledReportParams{
 		ID:             id,
 		Name:           name,
 		CronExpr:       cron,
@@ -676,6 +857,17 @@ func (h *NotificationsHandler) UpdateScheduledReport(w http.ResponseWriter, r *h
 		NextRunAt:      nextAt,
 		LastRunAt:      ex.LastRunAt,
 	})
+	if err == nil {
+		err = q.ForkSetScheduledReportRecipients(ctx, db.ForkSetScheduledReportRecipientsParams{ID: id, Recipients: plan.Recipients})
+	}
+	if err == nil {
+		err = tx.Commit(ctx)
+	}
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "Failed to update")
+		return
+	}
+	row, err := d.Queries.GetScheduledReportByID(ctx, id)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "Failed to update")
 		return
@@ -694,18 +886,25 @@ func (h *NotificationsHandler) RunScheduledReportNow(w http.ResponseWriter, r *h
 		Error(w, http.StatusBadRequest, "id required")
 		return
 	}
+	if wait, ok := runNowLimit.allow(id); !ok {
+		Error(w, http.StatusTooManyRequests, fmt.Sprintf("Please wait %d seconds before running this report again", int(wait.Seconds())+1))
+		return
+	}
 	ex, err := h.q(r.Context()).GetScheduledReportByID(r.Context(), id)
 	if err != nil {
+		runNowLimit.forget(id)
 		Error(w, http.StatusNotFound, "Not found")
 		return
 	}
 	if !ex.Enabled {
+		runNowLimit.forget(id)
 		Error(w, http.StatusBadRequest, "Report is disabled")
 		return
 	}
 	// Enqueue immediately for instant execution.
 	runID, err := queue.EnqueueScheduledReportManual(h.qc, id, hostFromRequest(r))
 	if err != nil {
+		runNowLimit.forget(id)
 		Error(w, http.StatusInternalServerError, "Failed to schedule report")
 		return
 	}
@@ -792,6 +991,122 @@ func (h *NotificationsHandler) PreviewScheduledReport(w http.ResponseWriter, r *
 	w.Header().Set("Content-Length", strconv.Itoa(len(out.PDF)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out.PDF)
+}
+
+func timePtrUTC(t *time.Time) interface{} {
+	if t == nil {
+		return nil
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+func strOrEmpty(ss []string) []string {
+	if ss == nil {
+		return []string{}
+	}
+	return ss
+}
+
+// ListReportArchive GET /notifications/scheduled-reports/{id}/archive
+// Lists the newest archived runs of a report with their deliveries. PDF
+// bytes are never part of the list (download them separately).
+func (h *NotificationsHandler) ListReportArchive(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	ctx := r.Context()
+	q := h.q(ctx)
+	if _, err := q.GetScheduledReportByID(ctx, id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			Error(w, http.StatusNotFound, "Not found")
+			return
+		}
+		slog.Error("report archive: load report failed", "report_id", id, "error", err)
+		Error(w, http.StatusInternalServerError, "Failed to load archive")
+		return
+	}
+	rows, err := q.ForkListReportArchive(ctx, db.ForkListReportArchiveParams{ScheduledReportID: id, Limit: int32(queue.ReportArchiveKeep)})
+	if err != nil {
+		slog.Error("report archive: list failed", "report_id", id, "error", err)
+		Error(w, http.StatusInternalServerError, "Failed to load archive")
+		return
+	}
+	dels, err := q.ForkListReportDeliveriesForReport(ctx, id)
+	if err != nil {
+		slog.Error("report archive: list deliveries failed", "report_id", id, "error", err)
+		Error(w, http.StatusInternalServerError, "Failed to load archive")
+		return
+	}
+	byArchive := make(map[string][]map[string]interface{}, len(rows))
+	for _, dl := range dels {
+		byArchive[dl.ArchiveID] = append(byArchive[dl.ArchiveID], map[string]interface{}{
+			"id":               dl.ID,
+			"destination_id":   dl.DestinationID,
+			"destination_name": dl.DestinationName,
+			"channel":          dl.Channel,
+			"recipient":        dl.Recipient,
+			"status":           dl.Status,
+			"error_code":       dl.ErrorCode,
+			"error_message":    dl.ErrorMessage,
+			"attempts":         dl.Attempts,
+			"sent_at":          timePtrUTC(dl.SentAt),
+		})
+	}
+	out := make([]map[string]interface{}, len(rows))
+	for i, a := range rows {
+		deliveries := byArchive[a.ID]
+		if deliveries == nil {
+			deliveries = []map[string]interface{}{}
+		}
+		out[i] = map[string]interface{}{
+			"id":            a.ID,
+			"trigger":       a.TriggerKind,
+			"slot_at":       timePtrUTC(a.SlotAt),
+			"created_at":    a.CreatedAt.UTC().Format(time.RFC3339),
+			"finished_at":   timePtrUTC(a.FinishedAt),
+			"status":        a.Status,
+			"error_code":    a.ErrorCode,
+			"error_message": a.ErrorMessage,
+			"report_name":   a.ReportName,
+			"language":      a.Language,
+			"period_from":   timePtrUTC(a.PeriodFrom),
+			"period_to":     timePtrUTC(a.PeriodTo),
+			"group_names":   strOrEmpty(a.GroupNames),
+			"host_count":    a.HostCount,
+			"customer_mode": a.CustomerMode,
+			"recipients":    strOrEmpty(a.Recipients),
+			"mail_from":     a.MailFrom,
+			"pdf_size":      a.PdfSize,
+			"has_pdf":       a.HasPdf,
+			"deliveries":    deliveries,
+		}
+	}
+	JSON(w, http.StatusOK, out)
+}
+
+// DownloadReportArchivePDF GET /notifications/scheduled-reports/archive/{archiveId}/pdf
+func (h *NotificationsHandler) DownloadReportArchivePDF(w http.ResponseWriter, r *http.Request) {
+	archiveID := chi.URLParam(r, "archiveId")
+	ctx := r.Context()
+	row, err := h.q(ctx).ForkGetReportArchivePDF(ctx, archiveID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			Error(w, http.StatusNotFound, "Not found")
+			return
+		}
+		slog.Error("report archive: load pdf failed", "archive_id", archiveID, "error", err)
+		Error(w, http.StatusInternalServerError, "Failed to load PDF")
+		return
+	}
+	if len(row.Pdf) == 0 {
+		Error(w, http.StatusNotFound, "Not found")
+		return
+	}
+	loc, _ := reports.ResolveLocation(row.Timezone)
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+reports.PDFFileName(row.ReportName, row.CreatedAt.In(loc))+`"`)
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Content-Length", strconv.Itoa(len(row.Pdf)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(row.Pdf)
 }
 
 // DeleteScheduledReport DELETE /notifications/scheduled-reports/{id}
