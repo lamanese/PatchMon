@@ -28,10 +28,10 @@ func ParseRecipients(in []string) ([]string, error) {
 	}
 	seen := make(map[string]bool, len(in))
 	out := make([]string, 0, len(in))
-	for _, raw := range in {
+	for i, raw := range in {
 		addr, err := ParseMailbox(raw)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("entry %d: %w", i+1, err)
 		}
 		if seen[addr] {
 			continue
@@ -60,11 +60,11 @@ func ParseMailbox(s string) (string, error) {
 	}
 	a, err := mail.ParseAddress(s)
 	if err != nil {
-		return "", fmt.Errorf("%w: %q is not a valid address", ErrRecipients, s)
+		return "", fmt.Errorf("%w: invalid address", ErrRecipients)
 	}
 	addr := strings.ToLower(a.Address)
 	if !strings.Contains(addr, "@") {
-		return "", fmt.Errorf("%w: %q is not a valid address", ErrRecipients, s)
+		return "", fmt.Errorf("%w: invalid address", ErrRecipients)
 	}
 	return addr, nil
 }

@@ -38,6 +38,11 @@ func TestParseRecipientsRejectsEmptyTooManyAndInvalid(t *testing.T) {
 			t.Errorf("%v: want ErrRecipients, got %v", c, err)
 		}
 	}
+	// The archive/log error text must never echo the recipient address
+	// (global constraint: no recipient addresses in stored error texts).
+	if _, err := ParseRecipients([]string{"not-an-address"}); err == nil || strings.Contains(err.Error(), "not-an-address") {
+		t.Fatalf("error text must not contain the recipient address: %v", err)
+	}
 }
 
 func TestParseRecipientsRejectsInjectionAndLists(t *testing.T) {

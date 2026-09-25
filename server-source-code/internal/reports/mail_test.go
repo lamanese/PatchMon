@@ -101,6 +101,8 @@ func TestBuildMailMessageRejectsHeaderInjection(t *testing.T) {
 		func() MailInput { m := sampleMail(); m.To = "kunde@example.com\r\nBcc: x@y.example"; return m }(),
 		func() MailInput { m := sampleMail(); m.From = "a@b.example, c@d.example"; return m }(),
 		func() MailInput { m := sampleMail(); m.PDF = nil; return m }(),
+		func() MailInput { m := sampleMail(); m.MessageID = "x\r\nBcc: y@z.example"; return m }(),
+		func() MailInput { m := sampleMail(); m.MessageID = ""; return m }(),
 	}
 	for i, m := range bad {
 		if _, err := BuildMailMessage(m); err == nil {

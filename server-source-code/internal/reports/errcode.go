@@ -4,6 +4,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // Error codes stored in fork_report_archive.error_code and
@@ -56,7 +57,19 @@ func RetryableCode(code string) bool {
 
 var (
 	redactSpaces = regexp.MustCompile(`\s+`)
-	redactSecret = regexp.MustCompile(`(?i)(password|passwd|pass|secret|token|authorization)(\s*[=:]\s*)\S+`)
+
+	// redactSecret matches "<key><sep><value>" for a fixed list of
+	// credential-shaped keys. The key and an optional wrapping quote may sit
+	// on either side of the separator (covers JSON's `"password":"x"`); an
+	// optional "Bearer "/"Basic " scheme is absorbed into the value so an
+	// Authorization header's token is masked too; the value itself is either
+	// a quoted string (so an embedded space, as in `password = "a b"`,
+	// doesn't leak the part after the space) or a run of non-space bytes.
+	redactSecret = regexp.MustCompile(`(?i)(password|passwd|pass|secret|token|authorization|api_key|apikey|pwd)("?\s*[=:]\s*)(?:(?:bearer|basic)\s+)?(?:"[^"]*"|'[^']*'|\S+)`)
+
+	// redactURLCreds masks a userinfo credential embedded in a URL, e.g.
+	// smtp://user:hunter2@host -> smtp://***:***@host.
+	redactURLCreds = regexp.MustCompile(`://[^/\s:@]+:[^@\s]+@`)
 )
 
 // RedactError flattens an error to one line of at most MaxErrorMessage
@@ -67,19 +80,26 @@ func RedactError(err error) string {
 		return ""
 	}
 	s := redactSpaces.ReplaceAllString(err.Error(), " ")
+	s = redactURLCreds.ReplaceAllString(s, "://***:***@")
 	s = redactSecret.ReplaceAllString(s, "$1$2***")
 	s = strings.TrimSpace(s)
 	if len(s) <= MaxErrorMessage {
 		return s
 	}
-	// Cut on a rune boundary and leave room for the ellipsis so the final
-	// byte length never exceeds MaxErrorMessage, even for multi-byte runes.
+	// Walk forward once, summing rune byte-lengths, and cut as soon as the
+	// budget (MaxErrorMessage minus the ellipsis) would be exceeded. This is
+	// O(cut position) rather than the O(n^2) a backward-shrinking loop over
+	// string(runes[:cut]) would cost on a large error message, and the cut
+	// always lands on a rune boundary because it stops at a range-loop index.
 	const ellipsis = "…"
 	budget := MaxErrorMessage - len(ellipsis)
-	runes := []rune(s)
-	cut := len(runes)
-	for cut > 0 && len(string(runes[:cut])) > budget {
-		cut--
+	n := 0
+	for i, r := range s {
+		rl := utf8.RuneLen(r)
+		if n+rl > budget {
+			return s[:i] + ellipsis
+		}
+		n += rl
 	}
-	return string(runes[:cut]) + ellipsis
+	return s
 }

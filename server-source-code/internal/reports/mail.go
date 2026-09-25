@@ -10,9 +10,14 @@ import (
 	"mime"
 	"mime/quotedprintable"
 	"net/mail"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// validMessageID matches the local part of a Message-ID: no CR/LF/NUL or any
+// other byte that could break out of the header line, and never empty.
+var validMessageID = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // MailInput is one report mail: one recipient, HTML body, PDF attachment.
 type MailInput struct {
@@ -38,6 +43,9 @@ func BuildMailMessage(in MailInput) ([]byte, error) {
 	}
 	if len(in.PDF) == 0 {
 		return nil, errors.New("mail: empty pdf attachment")
+	}
+	if !validMessageID.MatchString(in.MessageID) {
+		return nil, errors.New("mail: invalid message id")
 	}
 	// A subject carrying CR/LF/NUL is a header-injection attempt (a forged
 	// second header line, e.g. "Report\r\nBcc: x@y.example"); strip those

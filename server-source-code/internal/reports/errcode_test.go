@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestBuildErrorCodeMapsKnownErrors(t *testing.T) {
@@ -50,5 +51,55 @@ func TestRedactErrorTruncatesFlattensAndMasks(t *testing.T) {
 	}
 	if RedactError(nil) != "" {
 		t.Fatal("nil error is empty")
+	}
+}
+
+func TestRedactErrorMasksCredentialForms(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     string
+		secret string
+	}{
+		{"password= form", "password=secret123", "secret123"},
+		{"password: form", "password: mysecretvalue", "mysecretvalue"},
+		{"Password= mixed case", "Password=TopSecret1", "TopSecret1"},
+		{"authorization bearer", "Authorization: Bearer abc123token", "abc123token"},
+		{"authorization basic", "Authorization: Basic QWxhZGRpbjpvcGVuc2VzYW1l", "QWxhZGRpbjpvcGVuc2VzYW1l"},
+		{"json quoted password", `"password":"topsecretvalue"`, "topsecretvalue"},
+		{"quoted value with embedded space", `password = "a topsecret b"`, "a topsecret b"},
+		{"url credentials", "smtp://smtpuser:hunter2pw@smtp.example.com:465", "hunter2pw"},
+		{"api_key", "api_key=abcdef123456", "abcdef123456"},
+		{"apikey no underscore", "apikey=abcdef123456", "abcdef123456"},
+		{"pwd short key", "pwd=hunter2pw", "hunter2pw"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := RedactError(errors.New(c.in))
+			if strings.Contains(got, c.secret) {
+				t.Fatalf("secret %q leaked in %q", c.secret, got)
+			}
+		})
+	}
+}
+
+func TestRedactErrorTruncatesLargeMultiByteInputEfficiently(t *testing.T) {
+	// A >=1 MB error with a multi-byte rune sitting exactly on the byte
+	// budget boundary: this must not split the rune, must not scan the whole
+	// message to find the cut (the old backward-shrinking loop was
+	// quadratic), and must still respect MaxErrorMessage.
+	const budget = MaxErrorMessage - len("…")
+	var b strings.Builder
+	b.WriteString(strings.Repeat("x", budget-1))
+	b.WriteString("€") // 3-byte rune straddling the cut boundary
+	b.WriteString(strings.Repeat("y", 1<<20))
+	got := RedactError(errors.New(b.String()))
+	if len(got) > MaxErrorMessage {
+		t.Fatalf("len %d exceeds %d", len(got), MaxErrorMessage)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("expected ellipsis suffix, got %q", got)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatal("result must be valid UTF-8: a rune must not be split")
 	}
 }
