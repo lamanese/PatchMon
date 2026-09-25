@@ -1,8 +1,8 @@
 // Fork branding. The product name is deliberately one constant so that a rename
 // touches this file only. Technical identifiers (agent binary, service names,
 // config paths, env prefix, webhook header) are NOT derived from it.
-export const PRODUCT_NAME = "amanIT Patch Management";
-export const PRODUCT_NAME_SHORT = "amanIT Patch";
+export const PRODUCT_NAME = "amanIT AutoMan";
+export const PRODUCT_NAME_SHORT = "AutoMan";
 export const VENDOR_NAME = "amanIT GmbH";
 export const VENDOR_URL = "https://amanit.swiss";
 
