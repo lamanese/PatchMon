@@ -752,6 +752,7 @@ export const NotificationPanel = ({ panel }) => {
 	const [reportModal, setReportModal] = useState({
 		open: false,
 		editing: null,
+		duplicate: false,
 	});
 	const [logPage, setLogPage] = useState(0);
 	const logPageSize = 50;
@@ -790,6 +791,18 @@ export const NotificationPanel = ({ panel }) => {
 		queryKey: ["hosts-list"],
 		queryFn: () => adminHostsAPI.list().then((r) => r.data ?? []),
 		enabled: canManage && canListHostGroups,
+	});
+
+	// Scope check for customer reports: all hosts with their group
+	// memberships. null (loading, no permission, unexpected shape) shows
+	// the host count as "unknown" instead of a wrong number.
+	const { data: reportScopeHosts = null } = useQuery({
+		queryKey: ["report-scope-hosts"],
+		queryFn: () =>
+			adminHostsAPI
+				.list({ all: true })
+				.then((r) => (Array.isArray(r.data?.data) ? r.data.data : null)),
+		enabled: canManage && canListHostGroups && (!panel || panel === "reports"),
 	});
 
 	const hostGroupOptions = useMemo(
@@ -879,7 +892,7 @@ export const NotificationPanel = ({ panel }) => {
 		onSuccess: () => {
 			invalidate();
 			toast.success("Report created");
-			setReportModal({ open: false, editing: null });
+			setReportModal({ open: false, editing: null, duplicate: false });
 		},
 		onError: (err) =>
 			toast.error(err.response?.data?.error || "Failed to create"),
@@ -890,7 +903,7 @@ export const NotificationPanel = ({ panel }) => {
 		onSuccess: () => {
 			invalidate();
 			toast.success("Report updated");
-			setReportModal({ open: false, editing: null });
+			setReportModal({ open: false, editing: null, duplicate: false });
 		},
 		onError: (err) =>
 			toast.error(err.response?.data?.error || "Failed to update"),
@@ -986,7 +999,7 @@ export const NotificationPanel = ({ panel }) => {
 	};
 
 	const handleReportSave = (data) => {
-		if (reportModal.editing) {
+		if (reportModal.editing && !reportModal.duplicate) {
 			updateReport.mutate({ id: reportModal.editing.id, body: data });
 		} else {
 			createReport.mutate(data);
@@ -1289,7 +1302,9 @@ export const NotificationPanel = ({ panel }) => {
 						<button
 							type="button"
 							className="btn-primary flex items-center gap-2"
-							onClick={() => setReportModal({ open: true, editing: null })}
+							onClick={() =>
+								setReportModal({ open: true, editing: null, duplicate: false })
+							}
 							disabled={destinations.length === 0}
 						>
 							<Plus className="h-4 w-4" /> New report
@@ -1364,7 +1379,11 @@ export const NotificationPanel = ({ panel }) => {
 													type="button"
 													className="text-primary-600 hover:text-primary-700 inline-flex items-center gap-1 text-xs"
 													onClick={() =>
-														setReportModal({ open: true, editing: r })
+														setReportModal({
+															open: true,
+															editing: r,
+															duplicate: false,
+														})
 													}
 												>
 													<Edit2 className="h-3.5 w-3.5" /> Edit
@@ -1543,13 +1562,21 @@ export const NotificationPanel = ({ panel }) => {
 				isPending={createRoute.isPending || updateRoute.isPending}
 			/>
 			<ReportModal
-				key={reportModal.editing?.id || "new-report"}
+				key={
+					reportModal.editing
+						? `${reportModal.duplicate ? "dup" : "edit"}-${reportModal.editing.id}`
+						: "new-report"
+				}
 				isOpen={reportModal.open}
-				onClose={() => setReportModal({ open: false, editing: null })}
+				onClose={() =>
+					setReportModal({ open: false, editing: null, duplicate: false })
+				}
 				onSave={handleReportSave}
 				editingReport={reportModal.editing}
+				duplicate={reportModal.duplicate}
 				destinations={destinations}
 				hostGroups={hostGroupOptions}
+				hosts={reportScopeHosts}
 				isPending={createReport.isPending || updateReport.isPending}
 			/>
 		</div>
