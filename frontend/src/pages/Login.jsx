@@ -14,7 +14,7 @@ import DiscordIcon from "../components/DiscordIcon";
 import { PRODUCT_NAME, SOURCE_CODE_URL } from "../constants/branding";
 import { useAuth } from "../contexts/AuthContext";
 import { authAPI, isCorsError } from "../utils/api";
-import { loginIconPath } from "../utils/logoPaths";
+import { loginIconPath, resolveLogoPath } from "../utils/logoPaths";
 
 const Login = () => {
 	const usernameId = useId();
