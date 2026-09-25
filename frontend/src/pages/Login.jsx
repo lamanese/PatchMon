@@ -11,7 +11,7 @@ import { useEffect, useId, useState } from "react";
 
 import { useNavigate } from "react-router-dom";
 import DiscordIcon from "../components/DiscordIcon";
-import { SOURCE_CODE_URL } from "../constants/branding";
+import { PRODUCT_NAME, SOURCE_CODE_URL } from "../constants/branding";
 import { useAuth } from "../contexts/AuthContext";
 import { authAPI, isCorsError } from "../utils/api";
 import { resolveLogoPath } from "../utils/logoPaths";
@@ -405,7 +405,10 @@ const Login = () => {
 											e.target.src = `/assets/logo_square_default.svg?v=${Date.now()}`;
 										}}
 									/>
-									<p className="text-sm text-blue-200 font-medium tracking-wide uppercase">
+									<p className="text-2xl text-white font-semibold tracking-tight">
+										{PRODUCT_NAME}
+									</p>
+									<p className="mt-1 text-sm text-blue-200 font-medium tracking-wide uppercase">
 										Patch Management
 									</p>
 								</div>
