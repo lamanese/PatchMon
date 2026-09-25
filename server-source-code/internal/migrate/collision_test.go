@@ -23,6 +23,9 @@ var forkOwnedIdentifiers = []string{
 	"fork_is_definition_update",
 	"fork_pkg_broken",
 	"fork_boot_time",
+	"fork_email_recipients",
+	"fork_report_archive",
+	"fork_report_deliveries",
 }
 
 func TestUpstreamMigrationsDoNotTouchForkObjects(t *testing.T) {
