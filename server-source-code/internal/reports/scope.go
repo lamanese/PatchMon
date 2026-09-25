@@ -38,7 +38,7 @@ func IsConfigError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return errors.Is(err, ErrDefinition) || errors.Is(err, ErrScopeInvalid) || errors.Is(err, ErrNoHosts) || errors.Is(err, ErrTooManyHosts)
+	return errors.Is(err, ErrDefinition) || errors.Is(err, ErrScopeInvalid) || errors.Is(err, ErrNoHosts) || errors.Is(err, ErrTooManyHosts) || errors.Is(err, ErrRecipients)
 }
 
 // ValidateGroupIDs checks that every id names an existing host group and
