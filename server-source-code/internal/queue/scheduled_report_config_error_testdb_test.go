@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/pgtime"
 	"github.com/google/uuid"
-	"github.com/hibiken/asynq"
 )
 
 // A report whose definition can never render (unknown language, deleted
@@ -24,8 +24,7 @@ func TestScheduledReportRunConfigErrorAdvancesScheduleWithoutRetry(t *testing.T)
 		t.Fatal(err)
 	}
 	h := NewScheduledReportRunHandler(d, nil, nil, nil, discardTestLogger())
-	task := asynq.NewTask(TypeScheduledReportRun, []byte(`{"report_id":"`+id+`"}`))
-	if err := h.ProcessTask(ctx, task); err != nil {
+	if err := h.ProcessTask(ctx, scheduledTask(id, past)); err != nil {
 		t.Fatalf("config errors must not be retried, got %v", err)
 	}
 	var status, msg string
@@ -42,6 +41,7 @@ func TestScheduledReportRunConfigErrorAdvancesScheduleWithoutRetry(t *testing.T)
 	if !next.After(time.Now()) {
 		t.Fatalf("next_run_at must move to the next slot, got %v", next)
 	}
+	assertArchiveFailed(t, d, id, "definition_invalid")
 }
 
 // A report without destinations is just as deterministic: one failed run per
@@ -57,7 +57,7 @@ func TestScheduledReportRunNoDestinationsAdvancesSchedule(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := NewScheduledReportRunHandler(d, nil, nil, nil, discardTestLogger())
-	if err := h.ProcessTask(ctx, asynq.NewTask(TypeScheduledReportRun, []byte(`{"report_id":"`+id+`"}`))); err != nil {
+	if err := h.ProcessTask(ctx, scheduledTask(id, past)); err != nil {
 		t.Fatalf("missing destinations must not be retried, got %v", err)
 	}
 	var status string
@@ -67,5 +67,18 @@ func TestScheduledReportRunNoDestinationsAdvancesSchedule(t *testing.T) {
 	}
 	if status != "failed" || !next.After(time.Now()) {
 		t.Fatalf("run %q next %v", status, next)
+	}
+	assertArchiveFailed(t, d, id, "destination_invalid")
+}
+
+// assertArchiveFailed checks the report's single archive row: failed with code.
+func assertArchiveFailed(t *testing.T, d *database.DB, reportID, wantCode string) {
+	t.Helper()
+	var status, code string
+	if err := d.RawQueryRow(context.Background(), `SELECT status, COALESCE(error_code,'') FROM fork_report_archive WHERE scheduled_report_id = $1`, reportID).Scan(&status, &code); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || code != wantCode {
+		t.Fatalf("archive %q %q, want failed %q", status, code, wantCode)
 	}
 }
