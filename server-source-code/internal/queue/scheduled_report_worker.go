@@ -84,13 +84,9 @@ func (h *ScheduledReportsDispatchHandler) processDB(ctx context.Context, d *data
 		return
 	}
 	for _, r := range rows {
-		// Use the same enqueue path as the event-driven chain so TaskIDs
-		// are consistent and duplicate runs are prevented.
-		if err := EnqueueScheduledReportAt(h.qc, r.ID, tenantHost, now); err != nil {
-			if h.log != nil {
-				h.log.Debug("scheduled_reports_dispatch: enqueue skipped", "report_id", r.ID, "error", err)
-			}
-		}
+		// Enqueue at the report's own stored slot (not "now") so the TaskID
+		// matches the event-driven chain and duplicate runs are prevented.
+		enqueueReportAtStoredSlot(ctx, d, h.qc, r, tenantHost, now, h.log)
 	}
 }
 
@@ -122,46 +118,6 @@ func (h *ScheduledReportsDispatchHandler) ProcessTask(ctx context.Context, t *as
 		h.processDB(ctx, d, host)
 	}
 	return nil
-}
-
-// ScheduledReportRunPayload is the payload for scheduled_report_run.
-type ScheduledReportRunPayload struct {
-	ReportID string `json:"report_id"`
-	Host     string `json:"host,omitempty"`
-}
-
-// NewScheduledReportRunTask enqueues report generation and delivery.
-// The TaskID includes a minute-bucket of the target run time so that each
-// scheduled execution is unique, self-enqueue doesn't collide with the
-// currently-active task, and "Run Now" can always enqueue.
-func NewScheduledReportRunTask(p ScheduledReportRunPayload, runAt time.Time) (*asynq.Task, error) {
-	b, err := json.Marshal(p)
-	if err != nil {
-		return nil, err
-	}
-	taskID := fmt.Sprintf("scheduled-report-run-%s-%d", p.ReportID, runAt.Unix()/60)
-	return asynq.NewTask(TypeScheduledReportRun, b,
-		asynq.Queue(QueueScheduledReports),
-		asynq.MaxRetry(3),
-		asynq.TaskID(taskID),
-	), nil
-}
-
-// EnqueueScheduledReportAt enqueues a scheduled report run to fire at a specific time.
-// Duplicate tasks for the same report+time bucket are silently ignored.
-func EnqueueScheduledReportAt(qc *asynq.Client, reportID, host string, runAt time.Time) error {
-	if qc == nil {
-		return nil
-	}
-	task, err := NewScheduledReportRunTask(ScheduledReportRunPayload{ReportID: reportID, Host: host}, runAt)
-	if err != nil {
-		return err
-	}
-	_, err = qc.Enqueue(task, asynq.ProcessAt(runAt))
-	if err == asynq.ErrDuplicateTask || err == asynq.ErrTaskIDConflict {
-		return nil
-	}
-	return err
 }
 
 // ScheduledReportRunHandler builds and sends a scheduled report.

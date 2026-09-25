@@ -704,11 +704,12 @@ func (h *NotificationsHandler) RunScheduledReportNow(w http.ResponseWriter, r *h
 		return
 	}
 	// Enqueue immediately for instant execution.
-	if err := queue.EnqueueScheduledReportAt(h.qc, id, hostFromRequest(r), time.Now()); err != nil {
+	runID, err := queue.EnqueueScheduledReportManual(h.qc, id, hostFromRequest(r))
+	if err != nil {
 		Error(w, http.StatusInternalServerError, "Failed to schedule report")
 		return
 	}
-	JSON(w, http.StatusOK, map[string]string{"status": "scheduled"})
+	JSON(w, http.StatusOK, map[string]string{"status": "scheduled", "run_id": runID})
 }
 
 var (

@@ -305,25 +305,7 @@ func RehydrateScheduledReports(qc *asynq.Client, defaultDB *database.DB, poolCac
 			return
 		}
 		for _, r := range rows {
-			runAt := r.NextRunAt.Time
-			if !r.NextRunAt.Valid || runAt.Before(now) {
-				// Compute actual next cron time instead of running immediately,
-				// to avoid spurious duplicate runs on every restart.
-				tz := r.Timezone
-				if tz == "" {
-					tz = "UTC"
-				}
-				if next, nerr := notifications.NextCronRun(r.CronExpr, tz, now); nerr == nil {
-					runAt = next
-				} else {
-					runAt = now
-				}
-			}
-			if err := EnqueueScheduledReportAt(qc, r.ID, host, runAt); err != nil {
-				if log != nil {
-					log.Error("rehydrate scheduled reports: enqueue failed", "report_id", r.ID, "error", err)
-				}
-			}
+			enqueueReportAtStoredSlot(ctx, d, qc, r, host, now, log)
 		}
 		if log != nil && len(rows) > 0 {
 			log.Info("rehydrate scheduled reports", "host", host, "count", len(rows))
