@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/branding"
 	"html/template"
 	"strings"
 	"time"
@@ -25,8 +26,8 @@ type Branding struct {
 
 // Vendor identity shown in every report footer (fork operator).
 const (
-	BrandName = "amanIT GmbH"
-	BrandURL  = "https://amanit.swiss"
+	BrandName = branding.VendorName
+	BrandURL  = branding.VendorURL
 )
 
 type htmlData struct {

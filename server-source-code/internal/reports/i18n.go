@@ -73,7 +73,7 @@ func (t Texts) Status(status string) string {
 var texts = map[string]map[string]string{
 	"en": {
 		"title":          "Report",
-		"subject_prefix": "PatchMon Report",
+		"subject_prefix": "amanIT Patch Report",
 		"generated_at":   "Generated",
 		"period":         "Period",
 		"period_label":   "Last %d days",
@@ -161,7 +161,7 @@ var texts = map[string]map[string]string{
 		"val.more_rows":            "The list was cut at %d rows.",
 		"val.pkg_broken":           "Package installation incomplete",
 
-		"note.reboot":       "Reboot entries show whether PatchMon delivered the reboot command to the agent, not whether the host actually restarted.",
+		"note.reboot":       "Reboot entries show whether the server delivered the reboot command to the agent, not whether the host actually restarted.",
 		"note.activity":     "Activity is listed as far as it is still stored. Runs of hosts that were removed are no longer available.",
 		"note.windows_boot": "On Windows, Fast Startup and hibernation do not count as a reboot; the last boot time may be older than expected. FreeBSD values are estimates.",
 
@@ -188,7 +188,7 @@ var texts = map[string]map[string]string{
 	},
 	"de": {
 		"title":          "Bericht",
-		"subject_prefix": "PatchMon-Bericht",
+		"subject_prefix": "amanIT Patch-Bericht",
 		"generated_at":   "Erstellt",
 		"period":         "Zeitraum",
 		"period_label":   "Letzte %d Tage",
@@ -276,7 +276,7 @@ var texts = map[string]map[string]string{
 		"val.more_rows":            "Die Liste wurde nach %d Zeilen gekürzt.",
 		"val.pkg_broken":           "Paketinstallation unvollständig",
 
-		"note.reboot":       "Neustart-Einträge zeigen, ob PatchMon den Neustartbefehl an den Agenten zugestellt hat, nicht ob der Host tatsächlich neu gestartet ist.",
+		"note.reboot":       "Neustart-Einträge zeigen, ob der Server den Neustartbefehl an den Agenten zugestellt hat, nicht ob der Host tatsächlich neu gestartet ist.",
 		"note.activity":     "Die Aktivität wird aufgeführt, soweit sie noch gespeichert ist. Läufe entfernter Hosts sind nicht mehr verfügbar.",
 		"note.windows_boot": "Unter Windows zählen Schnellstart und Ruhezustand nicht als Neustart; der letzte Start kann älter sein als erwartet. FreeBSD-Werte sind Schätzungen.",
 

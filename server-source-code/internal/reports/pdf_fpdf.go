@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"codeberg.org/go-pdf/fpdf"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/branding"
 )
 
 const (
@@ -73,9 +74,9 @@ func newFpdfCanvas(ctx context.Context, m *Model, b Branding) *fpdfCanvas {
 	pdf.SetTitle(pdfText(Subject(m.Language, m.ReportName)), true)
 	pdf.SetAuthor(BrandName, true)
 	// Producer and creator are plain ASCII: written as Latin-1 so the info
-	// dictionary reads "(PatchMon)" instead of a UTF-16 byte string.
-	pdf.SetCreator("PatchMon", false)
-	pdf.SetProducer("PatchMon", false)
+	// dictionary reads the plain ASCII name instead of a UTF-16 byte string.
+	pdf.SetCreator(branding.ProductName, false)
+	pdf.SetProducer(branding.ProductName, false)
 	pdf.SetCreationDate(m.GeneratedAt)
 	pdf.SetModificationDate(m.GeneratedAt)
 

@@ -69,10 +69,10 @@ func TestBuildRejectsInvalidDefinitionBeforeTouchingTheDatabase(t *testing.T) {
 }
 
 func TestSubjectPerLanguage(t *testing.T) {
-	if got := Subject("de", "Kunde X"); got != "PatchMon-Bericht: Kunde X" {
+	if got := Subject("de", "Kunde X"); got != "amanIT Patch-Bericht: Kunde X" {
 		t.Fatalf("de subject %q", got)
 	}
-	if got := Subject("en", "Fleet"); got != "PatchMon Report: Fleet" {
+	if got := Subject("en", "Fleet"); got != "amanIT Patch Report: Fleet" {
 		t.Fatalf("en subject %q", got)
 	}
 }

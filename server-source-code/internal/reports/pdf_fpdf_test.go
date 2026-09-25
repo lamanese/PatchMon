@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/PatchMon/PatchMon/server-source-code/internal/branding"
 )
 
 func newTestCanvas(t *testing.T) *fpdfCanvas {
@@ -270,7 +272,7 @@ func TestCanvasOutputIsAPDFWithMetadata(t *testing.T) {
 	if !bytes.HasPrefix(out, []byte("%PDF-1.")) {
 		t.Fatalf("not a PDF: %q", out[:8])
 	}
-	if !bytes.Contains(out, []byte("/Producer (PatchMon)")) || !bytes.Contains(out, []byte("/CreationDate (D:20260924100000")) {
+	if !bytes.Contains(out, []byte("/Producer ("+branding.ProductName+")")) || !bytes.Contains(out, []byte("/CreationDate (D:20260924100000")) {
 		t.Fatal("metadata missing or not deterministic")
 	}
 	if c.logoSource() != LogoSourceDefault {
