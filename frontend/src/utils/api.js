@@ -709,6 +709,12 @@ export const notificationsAPI = {
 			responseType: "blob",
 			timeout: 40000,
 		}),
+	listReportArchive: (id) =>
+		api.get(`/notifications/scheduled-reports/${id}/archive`),
+	downloadReportArchivePdf: (archiveId) =>
+		api.get(`/notifications/scheduled-reports/archive/${archiveId}/pdf`, {
+			responseType: "blob",
+		}),
 };
 
 export default api;

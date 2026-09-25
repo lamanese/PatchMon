@@ -24,6 +24,11 @@ import {
 	hostGroupsAPI,
 	notificationsAPI,
 } from "../../utils/api";
+import {
+	downloadBlob,
+	errorFromBlobResponse,
+	filenameFromDisposition,
+} from "../../utils/downloadBlob";
 import ReportModal, {
 	CHANNEL_TYPES,
 	channelIcon,
@@ -912,36 +917,20 @@ export const NotificationPanel = ({ panel }) => {
 		setPreviewingId(r.id);
 		try {
 			const res = await notificationsAPI.previewScheduledReport(r.id);
-			const blob = new Blob([res.data], { type: "application/pdf" });
-			const disposition = res.headers?.["content-disposition"] || "";
-			const match = /filename="?([^";]+)"?/.exec(disposition);
-			const filename = match ? match[1] : `report-${r.id}.pdf`;
-			const url = window.URL.createObjectURL(blob);
-			const a = document.createElement("a");
-			a.href = url;
-			a.download = filename;
-			document.body.appendChild(a);
-			a.click();
-			a.remove();
-			window.URL.revokeObjectURL(url);
+			downloadBlob(
+				res.data,
+				filenameFromDisposition(
+					res.headers?.["content-disposition"],
+					`report-${r.id}.pdf`,
+				),
+			);
 			if (res.headers?.["x-report-logo"] === "default") {
 				toast.info(
 					"The PDF uses the default logo. Upload a PNG or JPEG under Settings → Branding for your own logo.",
 				);
 			}
 		} catch (err) {
-			let message = "Preview failed";
-			const data = err.response?.data;
-			if (data instanceof Blob) {
-				try {
-					message = JSON.parse(await data.text()).error || message;
-				} catch {
-					/* not JSON */
-				}
-			} else if (data?.error) {
-				message = data.error;
-			}
-			toast.error(message);
+			toast.error(await errorFromBlobResponse(err, "Preview failed"));
 		} finally {
 			setPreviewingId(null);
 		}
