@@ -455,14 +455,16 @@ const ReportModal = ({
 			return next;
 		});
 
-	const commitRecipientInput = () => {
+	// silent (blur): an invalid address stays in the field without a toast;
+	// Enter/comma and Save report it.
+	const commitRecipientInput = ({ silent = false } = {}) => {
 		if (!recipientInput.trim()) return;
 		const { list, error } = addRecipients(
 			form.email_recipients,
 			recipientInput,
 		);
 		if (error) {
-			toast.warning(error);
+			if (!silent) toast.warning(error);
 			return;
 		}
 		upd("email_recipients", list);
@@ -779,7 +781,7 @@ const ReportModal = ({
 												commitRecipientInput();
 											}
 										}}
-										onBlur={commitRecipientInput}
+										onBlur={() => commitRecipientInput({ silent: true })}
 									/>
 									<p className="mt-1 text-xs text-secondary-500">
 										Up to {MAX_RECIPIENTS} addresses. Each recipient gets their

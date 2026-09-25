@@ -750,6 +750,8 @@ export const NotificationPanel = ({ panel }) => {
 	const canManage = canManageNotifications();
 	const canLog = canViewNotificationLogs();
 	const canListHostGroups = hasPermission("can_view_hosts");
+	// /hosts/admin/list requires can_manage_hosts.
+	const canListAllHosts = hasPermission("can_manage_hosts");
 
 	// Modal states
 	const [destModal, setDestModal] = useState({ open: false, editing: null });
@@ -809,7 +811,8 @@ export const NotificationPanel = ({ panel }) => {
 			adminHostsAPI
 				.list({ all: true })
 				.then((r) => (Array.isArray(r.data?.data) ? r.data.data : null)),
-		enabled: canManage && canListHostGroups && (!panel || panel === "reports"),
+		enabled: canManage && canListAllHosts && (!panel || panel === "reports"),
+		retry: false,
 	});
 
 	const hostGroupOptions = useMemo(
@@ -1613,24 +1616,29 @@ export const NotificationPanel = ({ panel }) => {
 				hosts={Array.isArray(hostsList) ? hostsList : []}
 				isPending={createRoute.isPending || updateRoute.isPending}
 			/>
-			<ReportModal
-				key={
-					reportModal.editing
-						? `${reportModal.duplicate ? "dup" : "edit"}-${reportModal.editing.id}`
-						: "new-report"
-				}
-				isOpen={reportModal.open}
-				onClose={() =>
-					setReportModal({ open: false, editing: null, duplicate: false })
-				}
-				onSave={handleReportSave}
-				editingReport={reportModal.editing}
-				duplicate={reportModal.duplicate}
-				destinations={destinations}
-				hostGroups={hostGroupOptions}
-				hosts={reportScopeHosts}
-				isPending={createReport.isPending || updateReport.isPending}
-			/>
+			{reportModal.open && (
+				<ReportModal
+					key={
+						reportModal.editing
+							? `${reportModal.duplicate ? "dup" : "edit"}-${reportModal.editing.id}`
+							: "new-report"
+					}
+					isOpen={reportModal.open}
+					onClose={() => {
+						// Closing is blocked while a save runs, so the save's onSuccess
+						// can only ever close the modal it belongs to.
+						if (createReport.isPending || updateReport.isPending) return;
+						setReportModal({ open: false, editing: null, duplicate: false });
+					}}
+					onSave={handleReportSave}
+					editingReport={reportModal.editing}
+					duplicate={reportModal.duplicate}
+					destinations={destinations}
+					hostGroups={hostGroupOptions}
+					hosts={reportScopeHosts}
+					isPending={createReport.isPending || updateReport.isPending}
+				/>
+			)}
 			<ReportConfirmDialog
 				open={runConfirm !== null}
 				title="Send this customer report now?"
