@@ -40,13 +40,12 @@ func BuildMailMessage(in MailInput) ([]byte, error) {
 		return nil, errors.New("mail: empty pdf attachment")
 	}
 	// A subject carrying CR/LF/NUL is a header-injection attempt (a forged
-	// second header line, e.g. "Report\r\nBcc: x@y.example"); truncate at the
-	// first such byte instead of flattening, so no trace of the injected text
-	// reaches the wire.
-	subject := in.Subject
-	if i := strings.IndexAny(subject, "\r\n\x00"); i >= 0 {
-		subject = subject[:i]
-	}
+	// second header line, e.g. "Report\r\nBcc: x@y.example"); strip those
+	// bytes and join what remains onto the single Subject line, matching the
+	// codebase's existing subject-sanitisation pattern. The injected text
+	// stays visible in the subject on purpose -- what must never happen is a
+	// new physical header line, not that its text disappears.
+	subject := strings.NewReplacer("\r", "", "\n", "", "\x00", "").Replace(in.Subject)
 	name := in.PDFName
 	if name == "" {
 		name = "report.pdf"

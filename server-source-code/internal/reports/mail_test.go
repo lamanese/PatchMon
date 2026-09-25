@@ -113,8 +113,17 @@ func TestBuildMailMessageRejectsHeaderInjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(raw, []byte("Bcc:")) {
-		t.Fatal("subject CR/LF must be stripped")
+	if bytes.Contains(raw, []byte("\r\nBcc:")) || bytes.Contains(raw, []byte("\nBcc:")) {
+		t.Fatal("subject CR/LF must never start a new header line")
+	}
+	msg, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec := new(mime.WordDecoder)
+	subj, err := dec.DecodeHeader(msg.Header.Get("Subject"))
+	if err != nil || subj != "ReportBcc: x@y.example" {
+		t.Fatalf("subject %q %v", subj, err)
 	}
 }
 
