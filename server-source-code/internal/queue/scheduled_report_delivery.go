@@ -9,7 +9,9 @@ import (
 	"net"
 	"net/smtp"
 	"net/textproto"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
@@ -42,6 +44,11 @@ func (h *ScheduledReportRunHandler) sendDelivery(ctx context.Context, d *databas
 		if err := json.Unmarshal([]byte(plain), &cfg); err != nil {
 			return fmt.Errorf("%w: config unreadable", errDestinationInvalid)
 		}
+		// The sender frozen with the snapshot wins over the live config, so
+		// a retry sends exactly what the archive says.
+		if content.MailFrom != nil && strings.TrimSpace(*content.MailFrom) != "" {
+			cfg.From = *content.MailFrom
+		}
 		msg, err := reports.BuildMailMessage(reports.MailInput{
 			From:      cfg.From,
 			To:        del.Recipient,
@@ -59,11 +66,21 @@ func (h *ScheduledReportRunHandler) sendDelivery(ctx context.Context, d *databas
 		}
 		return sendReportEmail(ctx, cfg, del.Recipient, msg)
 	case "webhook":
-		return sendReportWebhook(ctx, plain, content.Subject, content.Html, content.Csv)
+		return stripURLError(sendReportWebhook(ctx, plain, content.Subject, content.Html, content.Csv))
 	case "ntfy":
-		return sendReportNtfy(ctx, plain, content.Subject, content.Html, content.Csv)
+		return stripURLError(sendReportNtfy(ctx, plain, content.Subject, content.Html, content.Csv))
 	}
 	return fmt.Errorf("%w: unsupported channel", errDestinationInvalid)
+}
+
+// stripURLError drops the URL from an HTTP client error: webhook and ntfy
+// URLs carry secrets in their path and the text is stored and shown in the UI.
+func stripURLError(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
+	}
+	return err
 }
 
 // sendReportEmailSMTP delivers one prepared message to one recipient within
@@ -132,8 +149,10 @@ func classifyDeliveryError(channel string, err error) string {
 	case channel != "email":
 		return reports.CodeDeliveryFailed
 	case errors.As(err, &tp):
-		switch tp.Code {
-		case 530, 534, 535, 538:
+		switch {
+		case tp.Code >= 400 && tp.Code < 500:
+			return reports.CodeSMTPTemporary
+		case tp.Code == 530, tp.Code == 534, tp.Code == 535, tp.Code == 538:
 			return reports.CodeSMTPAuth
 		}
 		return reports.CodeSMTPRejected

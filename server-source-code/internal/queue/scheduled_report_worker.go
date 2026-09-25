@@ -339,9 +339,7 @@ func (h *ScheduledReportRunHandler) handleRenderError(ctx context.Context, d *da
 	}
 	code, msg := runErrorCode(err), reports.RedactError(err)
 	h.logWarn("scheduled_report: run failed", "report_id", rep.ID, "archive_id", archiveID, "code", code)
-	h.finishArchive(ctx, d, archiveID, "failed", code, msg)
-	h.insertRun(ctx, d, rep.ID, "failed", msg, "")
-	applyReportRetention(ctx, d, rep.ID, h.log)
+	h.finalizeRun(ctx, d, rep.ID, archiveID, "failed", code, msg, "")
 	return nil
 }
 
@@ -557,6 +555,11 @@ func (h *ScheduledReportRunHandler) deliverArchive(ctx context.Context, d *datab
 			sent++
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			// Shutdown or timeout: stop sending; the archive stays pending
+			// and asynq requeues the task.
+			return err
+		}
 		sendErr := h.sendDelivery(ctx, d, del, content, loc)
 		params := db.ForkMarkReportDeliveryParams{ID: del.ID, Status: "sent"}
 		if sendErr != nil {
@@ -594,17 +597,26 @@ func (h *ScheduledReportRunHandler) deliverArchive(ctx context.Context, d *datab
 		status, msg = "partial", fmt.Sprintf("%d of %d deliveries failed", failed, sent+failed)
 	}
 	h.logInfo("scheduled_report: run finished", "report_id", rep.ID, "archive_id", archiveID, "status", status, "sent", sent, "failed", failed)
-	h.finishArchive(ctx, d, archiveID, status, code, msg)
 	pdfSum := ""
 	if content.PdfSha256 != nil {
 		pdfSum = *content.PdfSha256
 	}
-	h.insertRun(ctx, d, rep.ID, status, msg, pdfSum)
-	applyReportRetention(ctx, d, rep.ID, h.log)
+	h.finalizeRun(ctx, d, rep.ID, archiveID, status, code, msg, pdfSum)
 	return nil
 }
 
-// finishArchive sets the archive row's final status.
+// finalizeRun writes the archive's final status, the run row and applies
+// retention on a context detached from the task's, so a run that reached its
+// end is recorded even when the task context ends now.
+func (h *ScheduledReportRunHandler) finalizeRun(ctx context.Context, d *database.DB, reportID, archiveID, status, code, msg, pdfSum string) {
+	markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reportMarkTimeout)
+	defer cancel()
+	h.finishArchive(markCtx, d, archiveID, status, code, msg)
+	h.insertRun(markCtx, d, reportID, status, msg, pdfSum)
+	applyReportRetention(markCtx, d, reportID, h.log)
+}
+
+// finishArchive sets the archive row's final status (ctx: see finalizeRun).
 func (h *ScheduledReportRunHandler) finishArchive(ctx context.Context, d *database.DB, archiveID, status, code, msg string) {
 	var cp, mp *string
 	if code != "" {
@@ -613,9 +625,7 @@ func (h *ScheduledReportRunHandler) finishArchive(ctx context.Context, d *databa
 	if msg != "" {
 		mp = &msg
 	}
-	markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reportMarkTimeout)
-	defer cancel()
-	if err := d.Queries.ForkFinishReportArchive(markCtx, db.ForkFinishReportArchiveParams{ID: archiveID, Status: status, ErrorCode: cp, ErrorMessage: mp}); err != nil {
+	if err := d.Queries.ForkFinishReportArchive(ctx, db.ForkFinishReportArchiveParams{ID: archiveID, Status: status, ErrorCode: cp, ErrorMessage: mp}); err != nil {
 		h.logError("scheduled_report: finish archive failed", "archive_id", archiveID, "error", err)
 	}
 }

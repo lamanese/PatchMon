@@ -20,6 +20,7 @@ const (
 	CodeSMTPAuth           = "smtp_auth"
 	CodeSMTPRejected       = "smtp_rejected"
 	CodeSMTPTimeout        = "smtp_timeout"
+	CodeSMTPTemporary      = "smtp_temporary"
 	CodeDestinationInvalid = "destination_invalid"
 	CodeDeliveryFailed     = "delivery_failed"
 	CodeAbandoned          = "abandoned"
@@ -49,7 +50,7 @@ func BuildErrorCode(err error) string {
 // later attempt (transport problems yes, credentials and rejections no).
 func RetryableCode(code string) bool {
 	switch code {
-	case CodeSMTPConnect, CodeSMTPTimeout, CodeDeliveryFailed:
+	case CodeSMTPConnect, CodeSMTPTimeout, CodeSMTPTemporary, CodeDeliveryFailed:
 		return true
 	}
 	return false
@@ -70,6 +71,14 @@ var (
 	// redactURLCreds masks a userinfo credential embedded in a URL, e.g.
 	// smtp://user:hunter2@host -> smtp://***:***@host.
 	redactURLCreds = regexp.MustCompile(`://[^/\s:@]+:[^@\s]+@`)
+
+	// redactURLPath keeps a URL's scheme and host but drops path, query and
+	// fragment: webhook and ntfy URLs carry their secret there (Slack/Discord
+	// tokens, ntfy topics).
+	redactURLPath = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://[^/\s"'?#]+)[^\s"']*`)
+
+	// redactEmail masks mail addresses (SMTP replies echo the recipient).
+	redactEmail = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
 )
 
 // RedactError flattens an error to one line of at most MaxErrorMessage
@@ -81,6 +90,8 @@ func RedactError(err error) string {
 	}
 	s := redactSpaces.ReplaceAllString(err.Error(), " ")
 	s = redactURLCreds.ReplaceAllString(s, "://***:***@")
+	s = redactURLPath.ReplaceAllString(s, "$1/***")
+	s = redactEmail.ReplaceAllString(s, "***@***")
 	s = redactSecret.ReplaceAllString(s, "$1$2***")
 	s = strings.TrimSpace(s)
 	if len(s) <= MaxErrorMessage {

@@ -184,6 +184,10 @@ func TestReportRunRetryResendsOnlyUnsentDeliveries(t *testing.T) {
 	if _, err := d.Exec(context.Background(), `UPDATE scheduled_reports SET name = 'Renamed' WHERE id = $1`, rep); err != nil {
 		t.Fatal(err)
 	}
+	// The destination's sender changes too: the retry must use the snapshotted one.
+	if _, err := d.Exec(context.Background(), `UPDATE notification_destinations SET config_encrypted = replace(config_encrypted, 'reports@example.com', 'changed@example.com')`); err != nil {
+		t.Fatal(err)
+	}
 	delete(rec.failFor, "b@example.com")
 	reportRetryState = func(context.Context) (int, int) { return 1, 3 }
 	if err := h.ProcessTask(context.Background(), scheduledTask(rep, slot)); err != nil {
@@ -194,6 +198,9 @@ func TestReportRunRetryResendsOnlyUnsentDeliveries(t *testing.T) {
 	}
 	if !bytes.Contains(rec.sent["b@example.com"][0], []byte("Weekly")) || bytes.Contains(rec.sent["b@example.com"][0], []byte("Renamed")) {
 		t.Fatal("retry must send the snapshot, not a re-render")
+	}
+	if !bytes.Contains(rec.sent["b@example.com"][0], []byte("From: <reports@example.com>")) {
+		t.Fatal("retry must use the snapshotted sender, not the changed destination config")
 	}
 	status, _, _ := archiveRow(t, d, rep)
 	var attemptsB int32

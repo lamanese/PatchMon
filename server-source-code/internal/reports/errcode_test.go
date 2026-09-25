@@ -25,7 +25,7 @@ func TestBuildErrorCodeMapsKnownErrors(t *testing.T) {
 }
 
 func TestRetryableCodes(t *testing.T) {
-	for _, c := range []string{CodeSMTPConnect, CodeSMTPTimeout, CodeDeliveryFailed} {
+	for _, c := range []string{CodeSMTPConnect, CodeSMTPTimeout, CodeSMTPTemporary, CodeDeliveryFailed} {
 		if !RetryableCode(c) {
 			t.Errorf("%s must be retryable", c)
 		}
@@ -101,5 +101,22 @@ func TestRedactErrorTruncatesLargeMultiByteInputEfficiently(t *testing.T) {
 	}
 	if !utf8.ValidString(got) {
 		t.Fatal("result must be valid UTF-8: a rune must not be split")
+	}
+}
+
+func TestRedactErrorDropsURLPathsAndAddresses(t *testing.T) {
+	got := RedactError(errors.New(`Post "https://hooks.slack.com/services/T1/B2/SECRET": dial tcp`))
+	if strings.Contains(got, "SECRET") || strings.Contains(got, "T1/B2") {
+		t.Fatalf("webhook path leaked: %q", got)
+	}
+	if !strings.Contains(got, "https://hooks.slack.com") {
+		t.Fatalf("scheme and host must stay: %q", got)
+	}
+	got = RedactError(errors.New("550 5.1.1 <kunde@example.com>: Recipient address rejected"))
+	if strings.Contains(got, "kunde") || strings.Contains(got, "example.com") {
+		t.Fatalf("address leaked: %q", got)
+	}
+	if !strings.Contains(got, "550 5.1.1") || !strings.Contains(got, "***@***") {
+		t.Fatalf("reply code must stay, address masked: %q", got)
 	}
 }

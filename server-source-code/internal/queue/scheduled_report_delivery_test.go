@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/textproto"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/PatchMon/PatchMon/server-source-code/internal/reports"
@@ -30,6 +32,10 @@ func TestClassifyDeliveryError(t *testing.T) {
 		{"webhook status", "webhook", errors.New("webhook status 500"), reports.CodeDeliveryFailed},
 		{"auth", "email", &textproto.Error{Code: 535, Msg: "bad credentials"}, reports.CodeSMTPAuth},
 		{"rejected", "email", &textproto.Error{Code: 550, Msg: "no such user"}, reports.CodeSMTPRejected},
+		{"421", "email", &textproto.Error{Code: 421, Msg: "try later"}, reports.CodeSMTPTemporary},
+		{"450", "email", &textproto.Error{Code: 450, Msg: "mailbox busy"}, reports.CodeSMTPTemporary},
+		{"451", "email", &textproto.Error{Code: 451, Msg: "local error"}, reports.CodeSMTPTemporary},
+		{"452", "email", &textproto.Error{Code: 452, Msg: "insufficient storage"}, reports.CodeSMTPTemporary},
 		{"deadline", "email", context.DeadlineExceeded, reports.CodeSMTPTimeout},
 		{"net timeout", "email", &net.OpError{Op: "read", Err: timeoutErr{}}, reports.CodeSMTPTimeout},
 		{"refused", "email", errors.New("dial tcp: connection refused"), reports.CodeSMTPConnect},
@@ -50,5 +56,16 @@ func TestRunErrorCodeMapsDeliveryConfigToDestinationInvalid(t *testing.T) {
 	}
 	if got := runErrorCode(fmt.Errorf("x: %w", reports.ErrNoHosts)); got != reports.CodeNoHosts {
 		t.Errorf("no hosts: %s", got)
+	}
+}
+
+func TestStripURLErrorDropsWebhookPath(t *testing.T) {
+	err := stripURLError(&url.Error{Op: "Post", URL: "https://hooks.slack.com/services/T1/B2/SECRET", Err: errors.New("dial tcp: connection refused")})
+	stored := reports.RedactError(err)
+	if strings.Contains(stored, "SECRET") || strings.Contains(stored, "/services/") {
+		t.Fatalf("webhook path in stored text: %q", stored)
+	}
+	if classifyDeliveryError("webhook", err) != reports.CodeDeliveryFailed {
+		t.Fatal("webhook errors stay delivery_failed")
 	}
 }
