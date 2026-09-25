@@ -16,6 +16,7 @@ import {
 
 import { useEffect, useId, useState } from "react";
 import UpgradeNotificationIcon from "../components/UpgradeNotificationIcon";
+import { PRODUCT_NAME_SHORT } from "../constants/branding";
 import { useUpdateNotification } from "../contexts/UpdateNotificationContext";
 import {
 	agentFileAPI,
@@ -603,8 +604,8 @@ const Settings = () => {
 
 			<div className="mb-8">
 				<p className="text-secondary-600 dark:text-white">
-					Configure your PatchMon server settings. These settings will be used
-					in installation scripts and agent communications.
+					Configure your {PRODUCT_NAME_SHORT} server settings. These settings
+					will be used in installation scripts and agent communications.
 				</p>
 			</div>
 
@@ -766,8 +767,8 @@ const Settings = () => {
 									</h3>
 								</div>
 								<p className="text-sm text-secondary-500 dark:text-white mb-4">
-									Customize your PatchMon installation with custom logos and
-									favicon.
+									Customize your {PRODUCT_NAME_SHORT} installation with custom
+									logos and favicon.
 								</p>
 
 								<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1438,7 +1439,8 @@ const Settings = () => {
 												</h3>
 												<div className="mt-2 text-sm text-red-700 dark:text-red-300">
 													<p className="mb-3">
-														To completely remove PatchMon from a host:
+														To completely remove the {PRODUCT_NAME_SHORT} agent
+														from a host:
 													</p>
 
 													{/* Agent Removal Script - Standard */}

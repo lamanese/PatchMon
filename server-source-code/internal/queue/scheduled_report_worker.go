@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/PatchMon/PatchMon/server-source-code/internal/branding"
 	hostctx "github.com/PatchMon/PatchMon/server-source-code/internal/context"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/db"
@@ -479,7 +480,7 @@ func sendScheduledNtfy(ctx context.Context, plain, subject, html, csv string) er
 
 	title := strings.TrimSpace(subject)
 	if title == "" {
-		title = "PatchMon scheduled report"
+		title = branding.ProductNameShort + " scheduled report"
 	}
 
 	// Build a plain-text excerpt from the HTML for ntfy

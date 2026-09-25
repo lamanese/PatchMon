@@ -79,6 +79,7 @@ import {
 	PatchRunStatusBoxes,
 	PatchRunsByType,
 } from "../components/patching/widgets";
+import { PRODUCT_NAME, PRODUCT_NAME_SHORT } from "../constants/branding";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../contexts/ToastContext";
@@ -246,7 +247,7 @@ const Dashboard = () => {
 				spread: 70,
 				origin: { y: 0.6 },
 			});
-			toast.success("Welcome to PatchMon!");
+			toast.success(`Welcome to ${PRODUCT_NAME}!`);
 		}
 	}, [toast]);
 
@@ -2344,7 +2345,7 @@ const Dashboard = () => {
 						Welcome back, {user?.first_name || user?.username || "User"} 👋
 					</h1>
 					<p className="text-sm text-secondary-600 dark:text-white/80 mt-1">
-						Overview of your PatchMon infrastructure
+						Overview of your {PRODUCT_NAME_SHORT} infrastructure
 					</p>
 				</div>
 				<div className="flex items-center gap-3">

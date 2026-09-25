@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Image, RotateCcw, Upload, X } from "lucide-react";
 import { useState } from "react";
+import { PRODUCT_NAME_SHORT } from "../../constants/branding";
 import { settingsAPI } from "../../utils/api";
 import { isLegacyDefaultPath, resolveLogoPath } from "../../utils/logoPaths";
 
@@ -178,8 +179,8 @@ const BrandingTab = () => {
 					</h2>
 				</div>
 				<p className="text-sm text-secondary-500 dark:text-white mb-6">
-					Customize your PatchMon installation with custom logos and favicon.
-					These will be displayed throughout the application.
+					Customize your {PRODUCT_NAME_SHORT} installation with custom logos and
+					favicon. These will be displayed throughout the application.
 				</p>
 			</div>
 

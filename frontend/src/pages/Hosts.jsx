@@ -2761,8 +2761,8 @@ const BulkRebootModal = ({
 						<p className="text-sm text-secondary-600 dark:text-white mb-4">
 							You are about to reboot {rebootableNames.length} host
 							{rebootableNames.length !== 1 ? "s" : ""}. Each host reboots one
-							minute after receiving the command. The host running the PatchMon
-							server is always excluded.
+							minute after receiving the command. The host running the server
+							itself is always excluded.
 						</p>
 					</div>
 

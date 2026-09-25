@@ -9,6 +9,7 @@ import {
 	Users,
 } from "lucide-react";
 import { useId, useState } from "react";
+import { PRODUCT_NAME_SHORT } from "../constants/branding";
 import { hostGroupsAPI } from "../utils/api";
 
 const Options = () => {
@@ -252,7 +253,7 @@ const Options = () => {
 					Options
 				</h1>
 				<p className="text-secondary-600 dark:text-white mt-1">
-					Configure PatchMon parameters and user preferences
+					Configure {PRODUCT_NAME_SHORT} parameters and user preferences
 				</p>
 			</div>
 

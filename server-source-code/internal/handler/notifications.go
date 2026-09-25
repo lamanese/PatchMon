@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/PatchMon/PatchMon/server-source-code/internal/branding"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/config"
 	hostctx "github.com/PatchMon/PatchMon/server-source-code/internal/context"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
@@ -447,8 +448,8 @@ func (h *NotificationsHandler) TestDestination(w http.ResponseWriter, r *http.Re
 	err := h.emit.EnqueueToDestination(r.Context(), d, th, req.DestinationID, notifications.Event{
 		Type:          "test",
 		Severity:      "informational",
-		Title:         "PatchMon test notification",
-		Message:       "This is a test message from PatchMon notification settings.",
+		Title:         branding.ProductNameShort + " test notification",
+		Message:       "This is a test message from the " + branding.ProductNameShort + " notification settings.",
 		ReferenceType: "test",
 		ReferenceID:   uuid.New().String(),
 		Metadata:      map[string]interface{}{"source": "manual_test"},

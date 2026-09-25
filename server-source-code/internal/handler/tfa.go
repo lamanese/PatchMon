@@ -7,6 +7,7 @@ import (
 
 	"log/slog"
 
+	"github.com/PatchMon/PatchMon/server-source-code/internal/branding"
 	hostctx "github.com/PatchMon/PatchMon/server-source-code/internal/context"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/middleware"
@@ -54,7 +55,7 @@ func (h *TfaHandler) Setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	secret, otpauthURL, err := util.GenerateTOTPSecret("PatchMon", "PatchMon ("+user.Username+")")
+	secret, otpauthURL, err := util.GenerateTOTPSecret(branding.ProductNameShort, branding.ProductNameShort+" ("+user.Username+")")
 	if err != nil {
 		if h.log != nil {
 			h.log.Error("tfa setup generate secret", "error", err)

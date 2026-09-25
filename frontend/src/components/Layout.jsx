@@ -28,7 +28,11 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { FaLinkedin, FaYoutube } from "react-icons/fa";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { SOURCE_CODE_URL } from "../constants/branding";
+import {
+	PRODUCT_NAME,
+	PRODUCT_NAME_SHORT,
+	SOURCE_CODE_URL,
+} from "../constants/branding";
 import { getRequiredTier } from "../constants/tiers";
 import { useAuth } from "../contexts/AuthContext";
 import { useColorTheme } from "../contexts/ColorThemeContext";
@@ -526,14 +530,14 @@ const Layout = ({ children }) => {
 		if (path === "/users") return "Users";
 		if (path === "/permissions") return "Permissions";
 		if (path === "/settings") return "Settings";
-		if (path === "/options") return "PatchMon Options";
+		if (path === "/options") return "Options";
 		if (path === "/audit-log") return "Audit Log";
 		if (path === "/settings/profile") return "My Profile";
 		if (path.startsWith("/hosts/")) return "Host Details";
 		if (path.startsWith("/packages/")) return "Package Details";
 		if (path.startsWith("/settings/")) return "Settings";
 
-		return "PatchMon";
+		return PRODUCT_NAME_SHORT;
 	};
 
 	const handleLogout = async () => {
@@ -693,7 +697,7 @@ const Layout = ({ children }) => {
 						</div>
 						<div className="flex flex-shrink-0 items-center justify-center px-4">
 							<Link to="/" className="flex items-center">
-								<Logo className="h-10 w-auto" alt="PatchMon Logo" />
+								<Logo className="h-10 w-auto" alt={PRODUCT_NAME} />
 							</Link>
 						</div>
 						<nav className="mt-8 flex-1 space-y-6 px-2">
@@ -1038,7 +1042,7 @@ const Layout = ({ children }) => {
 												? new Date(settings.updated_at).getTime()
 												: Date.now()
 										}`}
-										alt="PatchMon"
+										alt={PRODUCT_NAME}
 										className="h-12 w-12 object-contain"
 										onError={(e) => {
 											e.target.src = `/assets/logo_square_default.svg?v=${Date.now()}`;
@@ -1047,7 +1051,7 @@ const Layout = ({ children }) => {
 								</Link>
 							) : (
 								<Link to="/" className="flex items-center">
-									<Logo className="h-10 w-auto" alt="PatchMon Logo" />
+									<Logo className="h-10 w-auto" alt={PRODUCT_NAME} />
 								</Link>
 							)}
 						</div>

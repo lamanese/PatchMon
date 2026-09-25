@@ -659,7 +659,7 @@ func (h *HostsHandler) AllowRebootBulk(w http.ResponseWriter, r *http.Request) {
 			hostname = *host.Hostname
 		}
 		if req.AllowReboot && isSelfHost(host) {
-			skipped = append(skipped, map[string]string{"hostId": hostID, "hostname": hostname, "reason": "PatchMon server host cannot be made rebootable"})
+			skipped = append(skipped, map[string]string{"hostId": hostID, "hostname": hostname, "reason": "the server's own host cannot be made rebootable"})
 			continue
 		}
 		updateIDs = append(updateIDs, hostID)
@@ -758,7 +758,7 @@ func (h *HostsHandler) RebootBulk(w http.ResponseWriter, r *http.Request) {
 			hostname = *host.Hostname
 		}
 		if isSelfHost(host) {
-			skipped = append(skipped, map[string]string{"hostId": hostID, "hostname": hostname, "reason": "PatchMon server host cannot be rebooted"})
+			skipped = append(skipped, map[string]string{"hostId": hostID, "hostname": hostname, "reason": "the server's own host cannot be rebooted"})
 			continue
 		}
 		if !host.AllowReboot {

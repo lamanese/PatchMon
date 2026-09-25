@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle, Save, Shield, X } from "lucide-react";
 import { useEffect, useId, useState } from "react";
+import { PRODUCT_NAME_SHORT } from "../../constants/branding";
 import { settingsAPI } from "../../utils/api";
 
 const AgentUpdatesTab = () => {
@@ -567,7 +568,9 @@ const AgentUpdatesTab = () => {
 							Agent Uninstall Command
 						</h3>
 						<div className="mt-2 text-sm text-red-700 dark:text-red-300">
-							<p className="mb-3">To completely remove PatchMon from a host:</p>
+							<p className="mb-3">
+								To completely remove the {PRODUCT_NAME_SHORT} agent from a host:
+							</p>
 
 							{/* OS Selector */}
 							<div className="flex gap-2 mb-3">

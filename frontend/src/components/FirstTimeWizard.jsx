@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { PRODUCT_NAME, PRODUCT_NAME_SHORT } from "../constants/branding";
 import { useAuth } from "../contexts/AuthContext";
 import { authAPI, settingsAPI } from "../utils/api";
 import { WizardCommunityLinks } from "./CommunityLinks";
@@ -522,7 +523,7 @@ const FirstTimeWizard = () => {
 							<div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600" />
 						</div>
 						<h2 className="text-xl font-bold text-secondary-900 dark:text-white mb-2">
-							Setting up PatchMon
+							Setting up {PRODUCT_NAME}
 						</h2>
 						<p className="text-secondary-600 dark:text-secondary-300 mb-6">
 							{setupStatus}
@@ -598,7 +599,8 @@ const FirstTimeWizard = () => {
 									Create Admin Account
 								</h1>
 								<p className="text-secondary-600 dark:text-secondary-300">
-									Set up your administrator account to manage PatchMon
+									Set up your administrator account to manage{" "}
+									{PRODUCT_NAME_SHORT}
 								</p>
 							</div>
 
@@ -987,7 +989,7 @@ const FirstTimeWizard = () => {
 								</h1>
 								<p className="text-secondary-600 dark:text-secondary-300">
 									Opt-in to receive security and important information about
-									your PatchMon instance (optional).
+									your {PRODUCT_NAME_SHORT} instance (optional).
 								</p>
 							</div>
 							<div className="flex items-start justify-between gap-4 p-4 bg-secondary-50 dark:bg-secondary-800/50 rounded-lg border border-secondary-200 dark:border-secondary-600">
@@ -997,7 +999,7 @@ const FirstTimeWizard = () => {
 										className="text-sm font-medium text-secondary-900 dark:text-secondary-100"
 									>
 										Opt-in to stay updated with security and important
-										information about PatchMon instance
+										information about your {PRODUCT_NAME_SHORT} instance
 									</span>
 									{wizardData.newsletterSubscribed && (
 										<div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-secondary-600 dark:text-secondary-400">

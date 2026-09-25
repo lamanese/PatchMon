@@ -150,9 +150,8 @@ const RebootSchedules = () => {
 			<div className="flex items-start justify-between gap-4">
 				<p className="text-sm text-secondary-500 dark:text-white max-w-3xl">
 					Scheduled reboots target one host group. At execution time only hosts
-					with reboot allowed are rebooted; the PatchMon server's own host is
-					always excluded. Missed one-time schedules expire instead of running
-					late.
+					with reboot allowed are rebooted; the server's own host is always
+					excluded. Missed one-time schedules expire instead of running late.
 				</p>
 				<button
 					type="button"

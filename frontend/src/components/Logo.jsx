@@ -1,13 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
+import { PRODUCT_NAME } from "../constants/branding";
 import { useTheme } from "../contexts/ThemeContext";
 import { settingsAPI } from "../utils/api";
 import { resolveLogoPath } from "../utils/logoPaths";
 
-const Logo = ({
-	className = "h-8 w-auto",
-	alt = "PatchMon Logo",
-	...props
-}) => {
+const Logo = ({ className = "h-8 w-auto", alt = PRODUCT_NAME, ...props }) => {
 	const { isDark } = useTheme();
 
 	const { data: settings } = useQuery({
