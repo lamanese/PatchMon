@@ -79,7 +79,13 @@ func Build(ctx context.Context, d *database.DB, in BuildInput) (*Output, error) 
 // scheduled-report worker and the preview API so both stay in sync.
 func BrandingFromSettings(s db.Setting) (Branding, time.Duration) {
 	b := Branding{ServerURL: strings.TrimRight(s.ServerUrl, "/")}
-	if s.LogoLight != nil && *s.LogoLight != "" {
+	// The HTML mail header is dark (#0f172a): prefer the dark-mode logo
+	// (light artwork on transparent), fall back to the light one so an
+	// instance with only one upload keeps showing a logo. The PDF header on
+	// a white page uses the light logo bytes below.
+	if s.LogoDark != nil && *s.LogoDark != "" {
+		b.LogoURL = b.ServerURL + *s.LogoDark
+	} else if s.LogoLight != nil && *s.LogoLight != "" {
 		b.LogoURL = b.ServerURL + *s.LogoLight
 	}
 	b.LogoData = s.LogoLightData
