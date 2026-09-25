@@ -24,7 +24,8 @@ WHERE id = sqlc.arg('id');
 -- name: ForkInsertReportArchive :exec
 INSERT INTO fork_report_archive (id, scheduled_report_id, run_key, trigger_kind, slot_at, report_name, language, customer_mode, group_ids, recipients)
 VALUES (sqlc.arg('id'), sqlc.arg('scheduled_report_id'), sqlc.arg('run_key'), sqlc.arg('trigger_kind'), sqlc.narg('slot_at'),
-        sqlc.arg('report_name'), sqlc.arg('language'), sqlc.arg('customer_mode'), sqlc.arg('group_ids')::text[], sqlc.arg('recipients')::text[]);
+        sqlc.arg('report_name'), sqlc.arg('language'), sqlc.arg('customer_mode'),
+        COALESCE(sqlc.arg('group_ids')::text[], '{}'::text[]), COALESCE(sqlc.arg('recipients')::text[], '{}'::text[]));
 
 -- name: ForkGetReportArchiveByRunKey :one
 SELECT id, scheduled_report_id, run_key, trigger_kind, slot_at, created_at, finished_at, status, error_code, error_message,
@@ -35,7 +36,8 @@ FROM fork_report_archive WHERE run_key = $1;
 -- name: ForkSnapshotReportArchive :exec
 UPDATE fork_report_archive
 SET period_from = sqlc.arg('period_from'), period_to = sqlc.arg('period_to'),
-    group_ids = sqlc.arg('group_ids')::text[], group_names = sqlc.arg('group_names')::text[], host_count = sqlc.arg('host_count'),
+    group_ids = COALESCE(sqlc.arg('group_ids')::text[], '{}'::text[]),
+    group_names = COALESCE(sqlc.arg('group_names')::text[], '{}'::text[]), host_count = sqlc.arg('host_count'),
     smtp_destination_id = sqlc.narg('smtp_destination_id'), mail_from = sqlc.narg('mail_from'),
     subject = sqlc.arg('subject'), html = sqlc.arg('html'), csv = sqlc.arg('csv'),
     pdf = sqlc.arg('pdf'), pdf_size = sqlc.arg('pdf_size'), pdf_sha256 = sqlc.arg('pdf_sha256')

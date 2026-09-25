@@ -232,7 +232,8 @@ func (q *Queries) ForkGetReportArchivePDF(ctx context.Context, id string) (ForkG
 const forkInsertReportArchive = `-- name: ForkInsertReportArchive :exec
 INSERT INTO fork_report_archive (id, scheduled_report_id, run_key, trigger_kind, slot_at, report_name, language, customer_mode, group_ids, recipients)
 VALUES ($1, $2, $3, $4, $5,
-        $6, $7, $8, $9::text[], $10::text[])
+        $6, $7, $8,
+        COALESCE($9::text[], '{}'::text[]), COALESCE($10::text[], '{}'::text[]))
 `
 
 type ForkInsertReportArchiveParams struct {
@@ -539,7 +540,8 @@ func (q *Queries) ForkSetScheduledReportRecipients(ctx context.Context, arg Fork
 const forkSnapshotReportArchive = `-- name: ForkSnapshotReportArchive :exec
 UPDATE fork_report_archive
 SET period_from = $1, period_to = $2,
-    group_ids = $3::text[], group_names = $4::text[], host_count = $5,
+    group_ids = COALESCE($3::text[], '{}'::text[]),
+    group_names = COALESCE($4::text[], '{}'::text[]), host_count = $5,
     smtp_destination_id = $6, mail_from = $7,
     subject = $8, html = $9, csv = $10,
     pdf = $11, pdf_size = $12, pdf_sha256 = $13
