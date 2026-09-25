@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	Archive,
 	Check,
 	ChevronLeft,
 	ChevronRight,
 	Clock,
+	Copy,
 	Edit2,
 	FileText,
 	Loader2,
@@ -29,11 +31,14 @@ import {
 	errorFromBlobResponse,
 	filenameFromDisposition,
 } from "../../utils/downloadBlob";
+import ReportArchiveDialog from "./ReportArchiveDialog";
 import ReportModal, {
+	buildReportSummary,
 	CHANNEL_TYPES,
 	channelIcon,
 	describeSchedule,
 	INPUT,
+	ReportConfirmDialog,
 	SELECT,
 } from "./ReportModal";
 
@@ -757,6 +762,8 @@ export const NotificationPanel = ({ panel }) => {
 	const [logPage, setLogPage] = useState(0);
 	const logPageSize = 50;
 	const [previewingId, setPreviewingId] = useState(null);
+	const [archiveReport, setArchiveReport] = useState(null);
+	const [runConfirm, setRunConfirm] = useState(null);
 
 	// Queries
 	const { data: destinations = [], isLoading: destLoading } = useQuery({
@@ -919,12 +926,31 @@ export const NotificationPanel = ({ panel }) => {
 	});
 	const runReportNow = useMutation({
 		mutationFn: (id) => notificationsAPI.runScheduledReportNow(id),
-		onSuccess: () => {
-			invalidate();
-			toast.success("Report scheduled for immediate delivery");
-		},
-		onError: (err) => toast.error(err.response?.data?.error || "Failed to run"),
 	});
+
+	const runNow = async (r) => {
+		try {
+			const res = await runReportNow.mutateAsync(r.id);
+			invalidate();
+			const runId =
+				typeof res?.data?.run_id === "string"
+					? res.data.run_id.slice(0, 8)
+					: "";
+			toast.success(runId ? `Report queued (run ${runId})` : "Report queued");
+		} catch (err) {
+			// 429 carries the cooldown text ("Please wait N seconds ...").
+			toast.error(err.response?.data?.error || "Failed to run");
+		}
+	};
+
+	// Customer reports leave the house: confirm scope and recipients first.
+	const handleRunNow = (r) => {
+		if (r.customer_mode || Array.isArray(r.email_recipients)) {
+			setRunConfirm(r);
+			return;
+		}
+		runNow(r);
+	};
 
 	const previewReport = async (r) => {
 		setPreviewingId(r.id);
@@ -1333,7 +1359,7 @@ export const NotificationPanel = ({ panel }) => {
 										<th className={TH}>Schedule</th>
 										<th className={TH}>Next run</th>
 										<th className={`${TH} ${W_STATUS}`}>Status</th>
-										<th className={`${TH} ${W_ACTIONS}`}>Actions</th>
+										<th className={`${TH} w-[22rem]`}>Actions</th>
 									</tr>
 								</thead>
 								<tbody className="bg-white dark:bg-secondary-800 divide-y divide-secondary-200 dark:divide-secondary-600">
@@ -1346,7 +1372,7 @@ export const NotificationPanel = ({ panel }) => {
 												<button
 													type="button"
 													className="inline-flex items-center justify-center w-6 h-6 rounded border border-transparent text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-40"
-													onClick={() => runReportNow.mutate(r.id)}
+													onClick={() => handleRunNow(r)}
 													disabled={runReportNow.isPending || !r.enabled}
 													title={
 														!r.enabled ? "Enable the report first" : "Run now"
@@ -1400,9 +1426,35 @@ export const NotificationPanel = ({ panel }) => {
 												</button>
 												<button
 													type="button"
+													className="text-primary-600 hover:text-primary-700 inline-flex items-center gap-1 text-xs"
+													onClick={() => setArchiveReport(r)}
+													title="Past runs, delivery status and PDFs"
+												>
+													<Archive className="h-3.5 w-3.5" /> Archive
+												</button>
+												<button
+													type="button"
+													className="text-primary-600 hover:text-primary-700 inline-flex items-center gap-1 text-xs"
+													onClick={() =>
+														setReportModal({
+															open: true,
+															editing: r,
+															duplicate: true,
+														})
+													}
+													title="Copy as a new, disabled internal report"
+												>
+													<Copy className="h-3.5 w-3.5" /> Duplicate
+												</button>
+												<button
+													type="button"
 													className="text-red-600 hover:text-red-700 inline-flex items-center gap-1 text-xs"
 													onClick={() => {
-														if (confirm("Delete this report?"))
+														if (
+															confirm(
+																"Delete this report and its archived PDFs?",
+															)
+														)
 															deleteReport.mutate(r.id);
 													}}
 												>
@@ -1579,6 +1631,36 @@ export const NotificationPanel = ({ panel }) => {
 				hosts={reportScopeHosts}
 				isPending={createReport.isPending || updateReport.isPending}
 			/>
+			<ReportConfirmDialog
+				open={runConfirm !== null}
+				title="Send this customer report now?"
+				summary={
+					runConfirm
+						? buildReportSummary({
+								groupIds: runConfirm.definition?.host_group_ids,
+								hostGroups: hostGroupOptions,
+								hosts: reportScopeHosts,
+								recipients: runConfirm.email_recipients,
+								destinations,
+								smtpId: runConfirm.destination_ids?.[0],
+								language: runConfirm.definition?.language,
+							})
+						: null
+				}
+				confirmLabel="Send now"
+				onConfirm={() => {
+					const r = runConfirm;
+					setRunConfirm(null);
+					runNow(r);
+				}}
+				onCancel={() => setRunConfirm(null)}
+			/>
+			{archiveReport && (
+				<ReportArchiveDialog
+					report={archiveReport}
+					onClose={() => setArchiveReport(null)}
+				/>
+			)}
 		</div>
 	);
 };
