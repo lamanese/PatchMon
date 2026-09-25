@@ -4,7 +4,7 @@
 
 This repository is not affiliated with, endorsed by or supported by PatchMon Ltd. "PatchMon" and the PatchMon logo are trademarks of PatchMon Ltd; the fork is distributed and operated under its own name. See [NOTICE](NOTICE) for attribution and the notice of changes required by the AGPL.
 
-Licensed under the [GNU Affero General Public License v3](LICENSE). If you use an instance of this software over a network you are entitled to the source code of exactly the version you are using: every release is tagged (`v<upstream-base>-am.<n>`, for example `v2.0.2-am.11`), the running version is shown under *Settings → Server Version* together with a link to its tag, and the login page links to the [tag list](https://github.com/lamanese/PatchMon/tags).
+Licensed under the [GNU Affero General Public License v3](LICENSE). If you use an instance of this software over a network you are entitled to the source code of exactly the version you are using: every release is tagged (`v<upstream-base>-am.<n>`, for example `v2.0.2-am.11`), the running version is shown under *Settings → Server Version* together with a link to its tag, the login page links to the [tag list](https://github.com/lamanese/PatchMon/tags), and every tag has a [GitHub Release](https://github.com/lamanese/PatchMon/releases) describing what it contains.
 
 ## What it is
 
@@ -57,7 +57,7 @@ Configuration is done through `docker/.env`; the relevant variables are document
 
 - `feat/remote-reboot` is the deploy branch (GitHub default branch). Every push builds `:latest`.
 - `feat/remote-reboot-base` is the branch of the upstream pull request #837 (basic remote reboot only).
-- `main` is a frozen copy of upstream `main` from May 2026 and is not deployed.
+- `upstream-main-2026-05` is a frozen copy of upstream `main` from May 2026 (the fork point plus upstream commits up to 1 May 2026) and is never deployed.
 
 ## Contributing
 
