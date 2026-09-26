@@ -9,9 +9,9 @@ package branding
 
 const (
 	// ProductName is the full product name shown in titles, mails and PDFs.
-	ProductName = "amanIT AutoMan"
+	ProductName = "amanIT PatMan"
 	// ProductNameShort is the short form used where space is tight.
-	ProductNameShort = "AutoMan"
+	ProductNameShort = "PatMan"
 	// VendorName is the operator named in footers and as PDF author.
 	VendorName = "amanIT GmbH"
 	// VendorURL is linked from footers.

@@ -73,7 +73,7 @@ func (t Texts) Status(status string) string {
 var texts = map[string]map[string]string{
 	"en": {
 		"title":          "Report",
-		"subject_prefix": "AutoMan Report",
+		"subject_prefix": "PatMan Report",
 		"generated_at":   "Generated",
 		"period":         "Period",
 		"period_label":   "Last %d days",
@@ -203,7 +203,7 @@ var texts = map[string]map[string]string{
 	},
 	"de": {
 		"title":          "Bericht",
-		"subject_prefix": "AutoMan-Bericht",
+		"subject_prefix": "PatMan-Bericht",
 		"generated_at":   "Erstellt",
 		"period":         "Zeitraum",
 		"period_label":   "Letzte %d Tage",

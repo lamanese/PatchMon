@@ -1,4 +1,4 @@
-# amanIT AutoMan
+# amanIT PatMan
 
 **An independent fork of [PatchMon](https://github.com/PatchMon/PatchMon), operated and extended by [amanIT GmbH](https://amanit.swiss).**
 

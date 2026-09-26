@@ -15,7 +15,7 @@ import (
 func sampleMail() MailInput {
 	return MailInput{
 		From: "reports@example.com", To: "kunde@example.com",
-		Subject: "AutoMan Report: Wöchentlicher Überblick", HTML: "<p>Grüezi – Überblick</p>",
+		Subject: "PatMan Report: Wöchentlicher Überblick", HTML: "<p>Grüezi – Überblick</p>",
 		PDF: []byte("%PDF-1.4 fake"), PDFName: "report-ueberblick-20260926.pdf",
 		Date: time.Date(2026, 9, 26, 6, 0, 0, 0, time.UTC), MessageID: "abc123",
 	}
@@ -32,7 +32,7 @@ func TestBuildMailMessageStructure(t *testing.T) {
 	}
 	dec := new(mime.WordDecoder)
 	subj, err := dec.DecodeHeader(msg.Header.Get("Subject"))
-	if err != nil || subj != "AutoMan Report: Wöchentlicher Überblick" {
+	if err != nil || subj != "PatMan Report: Wöchentlicher Überblick" {
 		t.Fatalf("subject %q %v", subj, err)
 	}
 	if msg.Header.Get("From") != "<reports@example.com>" || msg.Header.Get("To") != "<kunde@example.com>" {

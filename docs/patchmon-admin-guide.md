@@ -3945,7 +3945,7 @@ Who receives what:
 
 Mail details:
 
-- The subject is the localised prefix plus the report name (for example `AutoMan Report: Customer A`, or `AutoMan-Bericht: …` in German).
+- The subject is the localised prefix plus the report name (for example `PatMan Report: Customer A`, or `PatMan-Bericht: …` in German).
 - The attachment is named `report-<slug>-<yyyymmdd>.pdf`: the report name lower-cased and hyphenated, plus the run's date in the report's timezone. The CSV is not attached to e-mails; it goes to webhooks and is stored in the archive.
 - Each mail is addressed to exactly one mailbox. An internal e-mail destination whose **To** field holds several addresses fails with `destination_invalid`; use a customer report or one destination per address instead.
 - The `From` header carries the bare sender address of the SMTP account, without a display name.
