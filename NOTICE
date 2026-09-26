@@ -15,7 +15,7 @@ This version has been modified by amanIT GmbH, starting June 2026 and
 continuing. The modified files, the nature of each change and its date are
 recorded in the Git history of the fork repository:
 
-    https://github.com/lamanese/PatchMon
+    https://github.com/lamanese/PatMan
 
 Every release of the fork is tagged (v<upstream-base>-am.<n>, for example
 v2.0.2-am.11). The tag matching the running version is shown in the

@@ -43,7 +43,7 @@ const Settings = () => {
 		serverPort: 3001,
 		updateInterval: 60,
 		autoUpdate: false,
-		githubRepoUrl: "https://github.com/lamanese/PatchMon.git",
+		githubRepoUrl: "https://github.com/lamanese/PatMan.git",
 		repositoryType: "public",
 		sshKeyPath: "",
 		useCustomSshKey: false,

@@ -233,7 +233,7 @@ const VersionUpdateTab = () => {
 								rel="noopener noreferrer"
 								className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 text-sm font-mono"
 							>
-								lamanese/PatchMon @ v{versionInfo.currentVersion}{" "}
+								lamanese/PatMan @ v{versionInfo.currentVersion}{" "}
 								<ExternalLink className="h-3 w-3 inline ml-1" />
 							</a>
 						</div>

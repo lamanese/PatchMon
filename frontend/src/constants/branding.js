@@ -7,7 +7,7 @@ export const VENDOR_NAME = "amanIT GmbH";
 export const VENDOR_URL = "https://amanit.swiss";
 
 // Public source repository of this fork (AGPL v3 section 13 offer).
-export const SOURCE_REPO_URL = "https://github.com/lamanese/PatchMon";
+export const SOURCE_REPO_URL = "https://github.com/lamanese/PatMan";
 export const SOURCE_CODE_URL = `${SOURCE_REPO_URL}/tags`;
 export const DOCS_BASE_URL = `${SOURCE_REPO_URL}/blob/feat/remote-reboot/docs`;
 
