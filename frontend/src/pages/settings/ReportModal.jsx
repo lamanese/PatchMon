@@ -420,6 +420,12 @@ const ReportModal = ({
 	const smtpValid = emailAccounts.some(
 		(d) => d.id === form.smtp_destination_id,
 	);
+	// Internal destinations never receive reports; stored ids of deleted
+	// destinations are dropped on save.
+	const reportDestinations = destinations.filter(
+		(d) => d.channel_type !== "internal",
+	);
+	const reportDestinationIds = new Set(reportDestinations.map((d) => d.id));
 
 	const upd = (key, value) => setForm((p) => ({ ...p, [key]: value }));
 	const toggleArr = (key, id) =>
@@ -538,7 +544,9 @@ const ReportModal = ({
 			},
 			destination_ids: isCustomer
 				? [form.smtp_destination_id]
-				: form.destination_ids,
+				: destinations.length > 0
+					? form.destination_ids.filter((id) => reportDestinationIds.has(id))
+					: form.destination_ids,
 			email_recipients: isCustomer ? recipients : null,
 		};
 		if (isCustomer && form.enabled) {
@@ -816,6 +824,9 @@ const ReportModal = ({
 										</select>
 									)}
 									<p className="mt-1 text-xs text-secondary-500">
+										The account must use TLS (STARTTLS or port 465).
+									</p>
+									<p className="mt-1 text-xs text-secondary-500">
 										The account&apos;s own To address is ignored; the report
 										goes to the recipients above.
 									</p>
@@ -857,13 +868,13 @@ const ReportModal = ({
 									<label className="block text-sm font-medium text-secondary-700 dark:text-white mb-2">
 										Deliver to
 									</label>
-									{destinations.length === 0 ? (
+									{reportDestinations.length === 0 ? (
 										<p className="text-xs text-secondary-500">
 											Add a destination first.
 										</p>
 									) : (
 										<div className="space-y-1.5">
-											{destinations.map((d) => (
+											{reportDestinations.map((d) => (
 												<label
 													key={d.id}
 													className="flex items-center gap-2 text-sm text-secondary-700 dark:text-white"
