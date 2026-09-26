@@ -29,13 +29,13 @@ var errDestinationInvalid = errors.New("destination missing or disabled")
 // with these texts; the worker records them as destination_invalid.
 var (
 	ErrCustomerSMTPUnreadable = errors.New("the SMTP destination config is unreadable")
-	ErrCustomerSMTPNoTLS      = errors.New("customer reports require an encrypted SMTP connection (TLS)")
+	ErrCustomerSMTPNoTLS      = errors.New("customer reports require an SMTP destination with 'Use TLS' enabled")
 	ErrCustomerSMTPNoSender   = errors.New("the SMTP destination has no valid sender address")
 )
 
 // CheckCustomerSMTPConfig validates the e-mail destination a customer report
-// sends through: readable config, transport encryption (use_tls, or the
-// implicit-TLS port 465) and a valid sender address.
+// sends through: readable config, use_tls switched on (the dialer uses TLS,
+// STARTTLS or implicit on 465, only then) and a valid sender address.
 func CheckCustomerSMTPConfig(enc *util.Encryption, configEncrypted string) error {
 	plain, err := decryptNotifConfig(enc, configEncrypted)
 	if err != nil {
@@ -49,7 +49,7 @@ func CheckCustomerSMTPConfig(enc *util.Encryption, configEncrypted string) error
 }
 
 func checkCustomerSMTP(cfg scheduledEmailConfig) error {
-	if !cfg.UseTLS && !implicitTLSPort(cfg.SMTPPort) {
+	if !cfg.UseTLS {
 		return ErrCustomerSMTPNoTLS
 	}
 	if _, err := reports.ParseMailbox(cfg.From); err != nil {

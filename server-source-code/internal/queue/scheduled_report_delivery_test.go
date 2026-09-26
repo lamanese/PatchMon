@@ -147,7 +147,8 @@ func TestCheckCustomerSMTP(t *testing.T) {
 		want error
 	}{
 		{scheduledEmailConfig{SMTPPort: 587, UseTLS: true, From: "r@example.com"}, nil},
-		{scheduledEmailConfig{SMTPPort: 465, From: "r@example.com"}, nil},
+		{scheduledEmailConfig{SMTPPort: 465, UseTLS: true, From: "r@example.com"}, nil},
+		{scheduledEmailConfig{SMTPPort: 465, From: "r@example.com"}, ErrCustomerSMTPNoTLS},
 		{scheduledEmailConfig{SMTPPort: 587, From: "r@example.com"}, ErrCustomerSMTPNoTLS},
 		{scheduledEmailConfig{SMTPPort: 587, UseTLS: true, From: ""}, ErrCustomerSMTPNoSender},
 	}

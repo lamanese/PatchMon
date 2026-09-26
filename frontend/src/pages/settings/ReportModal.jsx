@@ -824,7 +824,7 @@ const ReportModal = ({
 										</select>
 									)}
 									<p className="mt-1 text-xs text-secondary-500">
-										The account must use TLS (STARTTLS or port 465).
+										The account must have &quot;Use TLS&quot; enabled.
 									</p>
 									<p className="mt-1 text-xs text-secondary-500">
 										The account&apos;s own To address is ignored; the report

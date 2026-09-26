@@ -3872,7 +3872,7 @@ A customer report sends the PDF to people outside your organisation, so it has s
 | Rule | Detail |
 |------|--------|
 | **Recipients** | 1 to 10 addresses in `email_recipients`. Each entry must be exactly one mailbox (an optional display name is dropped); lists, `,`/`;` inside an entry, control characters and quoted local parts (such as `"first last"@example.com`) are rejected. Addresses are stored in lowercase and duplicates are dropped. |
-| **SMTP account** | Exactly one destination, and it must be an **enabled e-mail** destination with an encrypted connection: **Use TLS** switched on (STARTTLS), or port 465 (implicit TLS). A plaintext account is rejected with `customer reports require an encrypted SMTP connection (TLS)`; the worker applies the same rule at run time (`destination_invalid`). Its sender address must be one valid mailbox. Its host, port, credentials and sender address are used; its own **To** address is ignored. Webhook and ntfy destinations cannot be combined with a customer report. |
+| **SMTP account** | Exactly one destination, and it must be an **enabled e-mail** destination with **Use TLS** switched on (STARTTLS on 587/25, implicit TLS on 465). Without it the account is rejected with `customer reports require an SMTP destination with 'Use TLS' enabled`, whatever the port; the worker applies the same rule at run time (`destination_invalid`). Its sender address must be one valid mailbox. Its host, port, credentials and sender address are used; its own **To** address is ignored. Webhook and ntfy destinations cannot be combined with a customer report. |
 | **Host groups** | At least one; saving without groups answers `customer reports need at least one host group`. A customer report never falls back to the whole fleet; a run without groups fails with `scope_invalid`. |
 | **Schedule** | At most once per hour. The server checks the next 64 runs and rejects any cron where two consecutive runs are less than an hour apart (for example `*/30 * * * *`, or `0,30 9 * * *`); `0 * * * *` is the shortest allowed schedule. The modal's frequencies are all daily or rarer. |
 
@@ -3947,7 +3947,7 @@ Mail details:
 - The attachment is named `report-<slug>-<yyyymmdd>.pdf`: the report name lower-cased and hyphenated, plus the run's date in the report's timezone. The CSV is not attached to e-mails; it goes to webhooks and is stored in the archive.
 - Each mail is addressed to exactly one mailbox. An internal e-mail destination whose **To** field holds several addresses fails with `destination_invalid`; use a customer report or one destination per address instead.
 - The `From` header carries the bare sender address of the SMTP account, without a display name.
-- One mail (connect, greeting, TLS, authentication and data) has 60 seconds; a slower server, or one that accepts the connection and never answers, fails the delivery with `smtp_timeout`. Port 465 uses implicit TLS, 587 and 25 STARTTLS.
+- One mail (connect, greeting, TLS, authentication and data) has 60 seconds; a slower server, or one that accepts the connection and never answers, fails the delivery with `smtp_timeout`. With **Use TLS** on, port 465 uses implicit TLS, 587 and 25 STARTTLS.
 
 Disabled destinations are skipped when the run is planned. A destination that is deleted, disabled or unreadable between planning and sending fails its delivery with `destination_invalid`.
 

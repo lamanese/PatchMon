@@ -71,7 +71,8 @@ func TestCreateReportRejectsBadRecipients(t *testing.T) {
 	email := insertHandlerDestination(t, d, "email", true)
 	webhook := insertHandlerDestination(t, d, "webhook", true)
 	plain := insertHandlerDestinationConfig(t, d, "email", true, `{"smtp_host":"mail.example","smtp_port":587,"use_tls":false,"from":"reports@example.com"}`)
-	smtps := insertHandlerDestinationConfig(t, d, "email", true, `{"smtp_host":"mail.example","smtp_port":465,"from":"reports@example.com"}`)
+	smtps := insertHandlerDestinationConfig(t, d, "email", true, `{"smtp_host":"mail.example","smtp_port":465,"use_tls":false,"from":"reports@example.com"}`)
+	smtpsTLS := insertHandlerDestinationConfig(t, d, "email", true, `{"smtp_host":"mail.example","smtp_port":465,"use_tls":true,"from":"reports@example.com"}`)
 	noFrom := insertHandlerDestinationConfig(t, d, "email", true, `{"smtp_host":"mail.example","smtp_port":587,"use_tls":true,"from":"not an address"}`)
 	g := groupDef(insertHandlerGroup(t, d))
 	cases := []struct {
@@ -90,7 +91,8 @@ func TestCreateReportRejectsBadRecipients(t *testing.T) {
 		{"name too long", `{"name":"` + strings.Repeat("x", 201) + `","destination_ids":["` + webhook + `"]}`, 400},
 		{"unknown destination in internal mode is dropped", `{"name":"r","destination_ids":["nope"]}`, 201},
 		{"valid customer report", `{"name":"r",` + g + `,"cron_expr":"0 6 * * 1","email_recipients":["A@Example.com","b@example.com"],"destination_ids":["` + email + `"]}`, 201},
-		{"valid customer report over port 465", `{"name":"r",` + g + `,"cron_expr":"0 6 * * 1","email_recipients":["A@Example.com","b@example.com"],"destination_ids":["` + smtps + `"]}`, 201},
+		{"customer report over port 465 without Use TLS (plaintext rule)", `{"name":"r",` + g + `,"cron_expr":"0 6 * * 1","email_recipients":["a@example.com"],"destination_ids":["` + smtps + `"]}`, 400},
+		{"valid customer report over port 465", `{"name":"r",` + g + `,"cron_expr":"0 6 * * 1","email_recipients":["A@Example.com","b@example.com"],"destination_ids":["` + smtpsTLS + `"]}`, 201},
 		{"valid internal report", `{"name":"i","destination_ids":["` + webhook + `"]}`, 201},
 		{"name of 200 characters", `{"name":"` + strings.Repeat("x", 200) + `","destination_ids":["` + webhook + `"]}`, 201},
 	}
@@ -105,7 +107,7 @@ func TestCreateReportRejectsBadRecipients(t *testing.T) {
 			_ = json.Unmarshal(w.Body.Bytes(), &resp)
 			msg, _ := resp["error"].(string)
 			for sub, want := range map[string]string{
-				"plaintext":           "customer reports require an encrypted SMTP connection (TLS)",
+				"plaintext":           "customer reports require an SMTP destination with 'Use TLS' enabled",
 				"without host groups": "customer reports need at least one host group",
 				"invalid sender":      "the SMTP destination has no valid sender address",
 				"too long":            "name too long (max 200)",
