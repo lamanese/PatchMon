@@ -142,10 +142,9 @@ func (h *ScheduledReportRunHandler) resolveDB(ctx context.Context, payload []byt
 	return resolveTenantDB(ctx, h.defaultDB, h.poolCache, p.Host)
 }
 
-// Report archive and delivery limits (spec §7).
+// Report delivery limits (spec §7). Archive retention is per report
+// (scheduled_reports.fork_archive_keep, see reports.DefaultArchiveKeep).
 const (
-	// ReportArchiveKeep is the number of archive rows kept per report.
-	ReportArchiveKeep = 24
 	// ReportMailDeadline bounds one mail (dial, auth, data) end to end.
 	ReportMailDeadline = 60 * time.Second
 )
@@ -346,6 +345,7 @@ func (h *ScheduledReportRunHandler) openArchive(ctx context.Context, d *database
 		CustomerMode:      rep.ForkEmailRecipients != nil,
 		GroupIds:          groupIDs,
 		Recipients:        rep.ForkEmailRecipients,
+		DeliveryEnabled:   rep.ForkDeliver,
 	}); err != nil {
 		return none, false, err
 	}
@@ -534,9 +534,14 @@ func (h *ScheduledReportRunHandler) renderAndSnapshot(ctx context.Context, d *da
 	if err != nil {
 		return err
 	}
-	plan, err := h.planDeliveries(ctx, d, rep)
-	if err != nil {
-		return err
+	// Delivery off: the run is rendered and archived only. No destination
+	// is resolved, so a missing SMTP account never fails an archive-only run;
+	// the configured recipients are still recorded for the archive view.
+	plan := deliveryPlan{recipients: rep.ForkEmailRecipients}
+	if rep.ForkDeliver {
+		if plan, err = h.planDeliveries(ctx, d, rep); err != nil {
+			return err
+		}
 	}
 
 	m := out.Model
@@ -691,7 +696,7 @@ func (h *ScheduledReportRunHandler) deliverArchive(ctx context.Context, d *datab
 	default:
 		status, msg = "partial", fmt.Sprintf("%d of %d deliveries failed", failed, sent+failed)
 	}
-	h.logInfo("scheduled_report: run finished", "report_id", rep.ID, "archive_id", archiveID, "status", status, "sent", sent, "failed", failed)
+	h.logInfo("scheduled_report: run finished", "report_id", rep.ID, "archive_id", archiveID, "status", status, "sent", sent, "failed", failed, "deliver", rep.ForkDeliver)
 	pdfSum := ""
 	if content.PdfSha256 != nil {
 		pdfSum = *content.PdfSha256
@@ -759,13 +764,14 @@ func (h *ScheduledReportRunHandler) finishArchive(ctx context.Context, d *databa
 }
 
 // applyReportRetention marks pending rows older than 24 h as abandoned and
-// keeps the ReportArchiveKeep newest rows of the report.
+// keeps the report's newest fork_archive_keep rows (the query reads the
+// report's own value).
 func applyReportRetention(ctx context.Context, d *database.DB, reportID string, log *slog.Logger) {
 	abandoned, err := d.Queries.ForkAbandonStaleReportArchive(ctx, reportID)
 	if err != nil && log != nil {
 		log.Error("scheduled_report: abandon stale archive rows failed", "report_id", reportID, "error", err)
 	}
-	pruned, err := d.Queries.ForkPruneReportArchive(ctx, db.ForkPruneReportArchiveParams{ID: reportID, Keep: ReportArchiveKeep})
+	pruned, err := d.Queries.ForkPruneReportArchive(ctx, reportID)
 	if err != nil && log != nil {
 		log.Error("scheduled_report: prune archive failed", "report_id", reportID, "error", err)
 	}

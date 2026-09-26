@@ -254,7 +254,7 @@ type Querier interface {
 	ForkListReportDeliveries(ctx context.Context, archiveID string) ([]ForkReportDelivery, error)
 	ForkListReportDeliveriesForReport(ctx context.Context, scheduledReportID string) ([]ForkReportDelivery, error)
 	ForkMarkReportDelivery(ctx context.Context, arg ForkMarkReportDeliveryParams) error
-	ForkPruneReportArchive(ctx context.Context, arg ForkPruneReportArchiveParams) (int64, error)
+	ForkPruneReportArchive(ctx context.Context, id string) (int64, error)
 	// Fork: queries for host-group-scoped scheduled reports (internal/reports).
 	// Every query filters by host_ids FIRST and only then aggregates, sorts or
 	// limits, so a report for one group can never see another group's data.
@@ -275,8 +275,10 @@ type Querier interface {
 	// Available version ONLY from host_packages; packages.latest_version is a
 	// shared catalog that any host may overwrite.
 	ForkReportSecurityUpdates(ctx context.Context, arg ForkReportSecurityUpdatesParams) ([]ForkReportSecurityUpdatesRow, error)
+	// The fork-owned columns of a report (upstream's Create/Update queries never
+	// see them): recipients (NULL = internal), delivery on/off, archive retention.
+	ForkSetScheduledReportForkFields(ctx context.Context, arg ForkSetScheduledReportForkFieldsParams) error
 	ForkSetScheduledReportNextRunIfNull(ctx context.Context, arg ForkSetScheduledReportNextRunIfNullParams) (int64, error)
-	ForkSetScheduledReportRecipients(ctx context.Context, arg ForkSetScheduledReportRecipientsParams) error
 	ForkSnapshotReportArchive(ctx context.Context, arg ForkSnapshotReportArchiveParams) error
 	// Fork: last boot instant reported by agents 2.0.20+. Kept out of
 	// UpdateHostFromReport so that upstream query stays untouched. The caller only

@@ -284,6 +284,7 @@ type ForkReportArchive struct {
 	Pdf               []byte     `json:"pdf"`
 	PdfSize           int32      `json:"pdf_size"`
 	PdfSha256         *string    `json:"pdf_sha256"`
+	DeliveryEnabled   bool       `json:"delivery_enabled"`
 }
 
 type ForkReportDelivery struct {
@@ -624,6 +625,8 @@ type ScheduledReport struct {
 	CreatedAt           pgtype.Timestamp `json:"created_at"`
 	UpdatedAt           pgtype.Timestamp `json:"updated_at"`
 	ForkEmailRecipients []string         `json:"fork_email_recipients"`
+	ForkDeliver         bool             `json:"fork_deliver"`
+	ForkArchiveKeep     int32            `json:"fork_archive_keep"`
 }
 
 type ScheduledReportRun struct {

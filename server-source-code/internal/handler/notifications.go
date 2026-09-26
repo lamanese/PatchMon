@@ -505,7 +505,23 @@ func (h *NotificationsHandler) scheduledReportToMap(row db.ScheduledReport) map[
 		// null = internal report, [...] = customer report (mail per recipient).
 		"email_recipients": row.ForkEmailRecipients,
 		"customer_mode":    row.ForkEmailRecipients != nil,
+		// false = render and archive only, nothing is sent.
+		"deliver": row.ForkDeliver,
+		// Newest runs kept in the archive.
+		"archive_keep": row.ForkArchiveKeep,
 	}
+}
+
+// archiveKeepOrError validates an optional archive_keep from a request body;
+// nil means "use fallback".
+func archiveKeepOrError(v *int, fallback int32) (int32, error) {
+	if v == nil {
+		return fallback, nil
+	}
+	if err := reports.ValidateArchiveKeep(*v); err != nil {
+		return 0, deliveryError{msg: strings.Replace(err.Error(), "archive_keep: ", "archive_keep ", 1)}
+	}
+	return int32(*v), nil //nolint:gosec // bounded by ValidateArchiveKeep
 }
 
 // RunNowCooldown bounds "Run now" to one enqueue per report and window.
@@ -742,9 +758,19 @@ func (h *NotificationsHandler) CreateScheduledReport(w http.ResponseWriter, r *h
 		Definition      map[string]interface{} `json:"definition"`
 		DestinationIDs  []string               `json:"destination_ids"`
 		EmailRecipients *[]string              `json:"email_recipients"`
+		// Absent = true. false renders and archives without sending.
+		Deliver *bool `json:"deliver"`
+		// Absent = reports.DefaultArchiveKeep; otherwise 1..MaxArchiveKeep.
+		ArchiveKeep *int `json:"archive_keep"`
 	}
 	if err := decodeJSON(r, &req); err != nil || req.Name == "" {
 		Error(w, http.StatusBadRequest, "name required")
+		return
+	}
+	deliver := req.Deliver == nil || *req.Deliver
+	archiveKeep, err := archiveKeepOrError(req.ArchiveKeep, reports.DefaultArchiveKeep)
+	if err != nil {
+		Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if reportNameTooLong(req.Name) {
@@ -800,7 +826,7 @@ func (h *NotificationsHandler) CreateScheduledReport(w http.ResponseWriter, r *h
 		LastRunAt:      pgtype.Timestamp{Valid: false},
 	})
 	if err == nil {
-		err = q.ForkSetScheduledReportRecipients(ctx, db.ForkSetScheduledReportRecipientsParams{ID: id, Recipients: plan.Recipients})
+		err = q.ForkSetScheduledReportForkFields(ctx, db.ForkSetScheduledReportForkFieldsParams{ID: id, Recipients: plan.Recipients, Deliver: deliver, ArchiveKeep: archiveKeep})
 	}
 	if err == nil {
 		err = tx.Commit(ctx)
@@ -833,6 +859,9 @@ func (h *NotificationsHandler) UpdateScheduledReport(w http.ResponseWriter, r *h
 		// Absent = keep the stored recipients, null = internal report,
 		// [...] = customer report ([] is rejected).
 		EmailRecipients json.RawMessage `json:"email_recipients"`
+		// Absent = keep the stored values.
+		Deliver     *bool `json:"deliver"`
+		ArchiveKeep *int  `json:"archive_keep"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		Error(w, http.StatusBadRequest, "Invalid JSON")
@@ -865,6 +894,15 @@ func (h *NotificationsHandler) UpdateScheduledReport(w http.ResponseWriter, r *h
 	name := ex.Name
 	if req.Name != "" {
 		name = req.Name
+	}
+	deliver := ex.ForkDeliver
+	if req.Deliver != nil {
+		deliver = *req.Deliver
+	}
+	archiveKeep, err := archiveKeepOrError(req.ArchiveKeep, ex.ForkArchiveKeep)
+	if err != nil {
+		Error(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	cron := ex.CronExpr
 	if req.CronExpr != "" {
@@ -949,7 +987,7 @@ func (h *NotificationsHandler) UpdateScheduledReport(w http.ResponseWriter, r *h
 		LastRunAt:      ex.LastRunAt,
 	})
 	if err == nil {
-		err = q.ForkSetScheduledReportRecipients(ctx, db.ForkSetScheduledReportRecipientsParams{ID: id, Recipients: plan.Recipients})
+		err = q.ForkSetScheduledReportForkFields(ctx, db.ForkSetScheduledReportForkFieldsParams{ID: id, Recipients: plan.Recipients, Deliver: deliver, ArchiveKeep: archiveKeep})
 	}
 	if err == nil {
 		err = tx.Commit(ctx)
@@ -1127,7 +1165,7 @@ func (h *NotificationsHandler) ListReportArchive(w http.ResponseWriter, r *http.
 		Error(w, http.StatusInternalServerError, "Failed to load archive")
 		return
 	}
-	rows, err := q.ForkListReportArchive(ctx, db.ForkListReportArchiveParams{ScheduledReportID: id, Limit: int32(queue.ReportArchiveKeep)})
+	rows, err := q.ForkListReportArchive(ctx, db.ForkListReportArchiveParams{ScheduledReportID: id, Limit: int32(reports.MaxArchiveKeep)})
 	if err != nil {
 		slog.Error("report archive: list failed", "report_id", id, "error", err)
 		Error(w, http.StatusInternalServerError, "Failed to load archive")
@@ -1176,11 +1214,13 @@ func (h *NotificationsHandler) ListReportArchive(w http.ResponseWriter, r *http.
 			"group_names":   strOrEmpty(a.GroupNames),
 			"host_count":    a.HostCount,
 			"customer_mode": a.CustomerMode,
-			"recipients":    strOrEmpty(a.Recipients),
-			"mail_from":     a.MailFrom,
-			"pdf_size":      a.PdfSize,
-			"has_pdf":       a.HasPdf,
-			"deliveries":    deliveries,
+			// false = the run was archived without sending (delivery off).
+			"delivery_enabled": a.DeliveryEnabled,
+			"recipients":       strOrEmpty(a.Recipients),
+			"mail_from":        a.MailFrom,
+			"pdf_size":         a.PdfSize,
+			"has_pdf":          a.HasPdf,
+			"deliveries":       deliveries,
 		}
 	}
 	JSON(w, http.StatusOK, out)

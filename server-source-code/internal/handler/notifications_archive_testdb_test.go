@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/reports"
 	"github.com/google/uuid"
 )
 
@@ -368,5 +369,57 @@ func TestUpdateInternalReportDropsStaleDestinations(t *testing.T) {
 	_ = json.Unmarshal(raw, &stored)
 	if len(stored) != 1 || stored[0] != webhook {
 		t.Fatalf("stored destination_ids %v, want only %s", stored, webhook)
+	}
+}
+
+func TestCreateReportDeliverAndArchiveKeep(t *testing.T) {
+	d := newHandlerTestDB(t)
+	h := handlerWithDB(d)
+	email := insertHandlerDestination(t, d, "email", true)
+	g := groupDef(insertHandlerGroup(t, d))
+	base := `"name":"R","cron_expr":"0 8 * * *","destination_ids":["` + email + `"],"email_recipients":["a@example.com"],` + g
+
+	// Defaults: delivery on, 24 runs kept; both appear in the response.
+	w := httptest.NewRecorder()
+	h.CreateScheduledReport(w, routedRequest(http.MethodPost, "/", `{`+base+`}`, nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	var got map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if got["deliver"] != true || got["archive_keep"] != float64(reports.DefaultArchiveKeep) {
+		t.Fatalf("defaults: deliver=%v archive_keep=%v", got["deliver"], got["archive_keep"])
+	}
+
+	for _, bad := range []string{`0`, `201`, `-1`, `"x"`, `1.5`} {
+		w := httptest.NewRecorder()
+		h.CreateScheduledReport(w, routedRequest(http.MethodPost, "/", `{`+base+`,"archive_keep":`+bad+`}`, nil))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("archive_keep=%s: %d %s", bad, w.Code, w.Body.String())
+		}
+	}
+
+	id2 := createReport(t, h, `{`+base+`,"deliver":false,"archive_keep":5}`)
+	var deliver bool
+	var keep int
+	if err := d.RawQueryRow(context.Background(), `SELECT fork_deliver, fork_archive_keep FROM scheduled_reports WHERE id = $1`, id2).Scan(&deliver, &keep); err != nil || deliver || keep != 5 {
+		t.Fatalf("stored deliver=%v keep=%d err=%v", deliver, keep, err)
+	}
+
+	// Update: absent fields keep their values, present ones change, bad ones are rejected.
+	if w := putReport(h, id2, `{"name":"R2"}`); w.Code != http.StatusOK {
+		t.Fatalf("put name: %d %s", w.Code, w.Body.String())
+	}
+	if err := d.RawQueryRow(context.Background(), `SELECT fork_deliver, fork_archive_keep FROM scheduled_reports WHERE id = $1`, id2).Scan(&deliver, &keep); err != nil || deliver || keep != 5 {
+		t.Fatalf("after name update deliver=%v keep=%d err=%v", deliver, keep, err)
+	}
+	if w := putReport(h, id2, `{"archive_keep":500}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("put keep=500: %d %s", w.Code, w.Body.String())
+	}
+	if w := putReport(h, id2, `{"deliver":true,"archive_keep":200}`); w.Code != http.StatusOK {
+		t.Fatalf("put deliver/keep: %d %s", w.Code, w.Body.String())
+	}
+	if err := d.RawQueryRow(context.Background(), `SELECT fork_deliver, fork_archive_keep FROM scheduled_reports WHERE id = $1`, id2).Scan(&deliver, &keep); err != nil || !deliver || keep != 200 {
+		t.Fatalf("after update deliver=%v keep=%d err=%v", deliver, keep, err)
 	}
 }

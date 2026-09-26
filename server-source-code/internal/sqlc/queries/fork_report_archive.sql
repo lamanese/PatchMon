@@ -22,20 +22,26 @@ SELECT * FROM scheduled_reports WHERE id = $1 FOR UPDATE;
 UPDATE scheduled_reports SET next_run_at = sqlc.arg('next'), updated_at = NOW()
 WHERE id = sqlc.arg('id') AND next_run_at IS NULL;
 
--- name: ForkSetScheduledReportRecipients :exec
-UPDATE scheduled_reports SET fork_email_recipients = sqlc.narg('recipients')::text[], updated_at = NOW()
+-- name: ForkSetScheduledReportForkFields :exec
+-- The fork-owned columns of a report (upstream's Create/Update queries never
+-- see them): recipients (NULL = internal), delivery on/off, archive retention.
+UPDATE scheduled_reports
+SET fork_email_recipients = sqlc.narg('recipients')::text[],
+    fork_deliver = sqlc.arg('deliver'),
+    fork_archive_keep = sqlc.arg('archive_keep'),
+    updated_at = NOW()
 WHERE id = sqlc.arg('id');
 
 -- name: ForkInsertReportArchive :exec
-INSERT INTO fork_report_archive (id, scheduled_report_id, run_key, trigger_kind, slot_at, report_name, language, customer_mode, group_ids, recipients)
+INSERT INTO fork_report_archive (id, scheduled_report_id, run_key, trigger_kind, slot_at, report_name, language, customer_mode, group_ids, recipients, delivery_enabled)
 VALUES (sqlc.arg('id'), sqlc.arg('scheduled_report_id'), sqlc.arg('run_key'), sqlc.arg('trigger_kind'), sqlc.narg('slot_at'),
         sqlc.arg('report_name'), sqlc.arg('language'), sqlc.arg('customer_mode'),
-        COALESCE(sqlc.arg('group_ids')::text[], '{}'::text[]), COALESCE(sqlc.arg('recipients')::text[], '{}'::text[]));
+        COALESCE(sqlc.arg('group_ids')::text[], '{}'::text[]), COALESCE(sqlc.arg('recipients')::text[], '{}'::text[]), sqlc.arg('delivery_enabled'));
 
 -- name: ForkGetReportArchiveByRunKey :one
 SELECT id, scheduled_report_id, run_key, trigger_kind, slot_at, created_at, finished_at, status, error_code, error_message,
        report_name, language, period_from, period_to, group_ids, group_names, host_count, customer_mode,
-       smtp_destination_id, mail_from, recipients, pdf_size, pdf_sha256, (pdf IS NOT NULL)::boolean AS has_pdf
+       smtp_destination_id, mail_from, recipients, pdf_size, pdf_sha256, (pdf IS NOT NULL)::boolean AS has_pdf, delivery_enabled
 FROM fork_report_archive WHERE run_key = $1;
 
 -- name: ForkSnapshotReportArchive :exec
@@ -64,7 +70,7 @@ WHERE id = sqlc.arg('id') AND status = 'pending';
 -- name: ForkListReportArchive :many
 SELECT id, scheduled_report_id, run_key, trigger_kind, slot_at, created_at, finished_at, status, error_code, error_message,
        report_name, language, period_from, period_to, group_ids, group_names, host_count, customer_mode,
-       smtp_destination_id, mail_from, recipients, pdf_size, pdf_sha256, (pdf IS NOT NULL)::boolean AS has_pdf
+       smtp_destination_id, mail_from, recipients, pdf_size, pdf_sha256, (pdf IS NOT NULL)::boolean AS has_pdf, delivery_enabled
 FROM fork_report_archive
 WHERE scheduled_report_id = sqlc.arg('scheduled_report_id')
 ORDER BY created_at DESC, id
@@ -108,6 +114,6 @@ WHERE fra.scheduled_report_id = sqlc.arg('id')
       SELECT id FROM fork_report_archive
       WHERE scheduled_report_id = sqlc.arg('id')
       ORDER BY created_at DESC, id
-      LIMIT sqlc.arg('keep')
+      LIMIT (SELECT COALESCE(MAX(fork_archive_keep), 24) FROM scheduled_reports WHERE id = sqlc.arg('id'))
   )
   AND NOT (fra.status = 'pending' AND fra.created_at > NOW() - INTERVAL '24 hours');

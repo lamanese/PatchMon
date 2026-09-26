@@ -10,6 +10,7 @@ import (
 
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/pgtime"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/reports"
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 )
@@ -282,6 +283,10 @@ func TestReportArchiveRetentionAbandonsStalePendingAndKeeps24(t *testing.T) {
 	d := newPatchRunCleanupTestDB(t)
 	ctx := context.Background()
 	rep := insertReport(t, d, "Weekly", time.Now().Add(time.Hour), insertEmailDestination(t, d, "SMTP"), nil)
+	var keep int
+	if err := d.RawQueryRow(ctx, `SELECT fork_archive_keep FROM scheduled_reports WHERE id = $1`, rep).Scan(&keep); err != nil || keep != reports.DefaultArchiveKeep {
+		t.Fatalf("default archive keep = %d (%v), want %d", keep, err, reports.DefaultArchiveKeep)
+	}
 	for i := 0; i < 30; i++ {
 		if _, err := d.Exec(ctx, `INSERT INTO fork_report_archive (id, scheduled_report_id, run_key, trigger_kind, status, report_name, created_at)
 			VALUES ($1, $2, $1, 'manual', 'completed', 'Weekly', NOW() - ($3::int * INTERVAL '1 hour'))`, uuid.NewString(), rep, i+48); err != nil {
@@ -297,8 +302,8 @@ func TestReportArchiveRetentionAbandonsStalePendingAndKeeps24(t *testing.T) {
 	}
 	applyReportRetention(ctx, d, rep, discardTestLogger())
 	var n int
-	if err := d.RawQueryRow(ctx, `SELECT COUNT(*) FROM fork_report_archive WHERE scheduled_report_id = $1`, rep).Scan(&n); err != nil || n != ReportArchiveKeep {
-		t.Fatalf("kept %d rows, want %d (%v)", n, ReportArchiveKeep, err)
+	if err := d.RawQueryRow(ctx, `SELECT COUNT(*) FROM fork_report_archive WHERE scheduled_report_id = $1`, rep).Scan(&n); err != nil || n != reports.DefaultArchiveKeep {
+		t.Fatalf("kept %d rows, want %d (%v)", n, reports.DefaultArchiveKeep, err)
 	}
 	var st, code string
 	if err := d.RawQueryRow(ctx, `SELECT status, COALESCE(error_code,'') FROM fork_report_archive WHERE id = $1`, stale).Scan(&st, &code); err != nil || st != "failed" || code != "abandoned" {
@@ -307,5 +312,70 @@ func TestReportArchiveRetentionAbandonsStalePendingAndKeeps24(t *testing.T) {
 	var freshStatus string
 	if err := d.RawQueryRow(ctx, `SELECT status FROM fork_report_archive WHERE id = $1`, fresh).Scan(&freshStatus); err != nil || freshStatus != "pending" {
 		t.Fatalf("fresh pending row must survive: %s %v", freshStatus, err)
+	}
+}
+
+func TestReportArchiveRetentionUsesReportKeep(t *testing.T) {
+	d := newPatchRunCleanupTestDB(t)
+	ctx := context.Background()
+	rep := insertReport(t, d, "Weekly", time.Now().Add(time.Hour), insertEmailDestination(t, d, "SMTP"), nil)
+	if _, err := d.Exec(ctx, `UPDATE scheduled_reports SET fork_archive_keep = 3 WHERE id = $1`, rep); err != nil {
+		t.Fatal(err)
+	}
+	var newest string
+	for i := 0; i < 8; i++ {
+		id := uuid.NewString()
+		if i == 0 {
+			newest = id
+		}
+		if _, err := d.Exec(ctx, `INSERT INTO fork_report_archive (id, scheduled_report_id, run_key, trigger_kind, status, report_name, created_at)
+			VALUES ($1, $2, $1, 'manual', 'completed', 'Weekly', NOW() - ($3::int * INTERVAL '1 hour'))`, id, rep, i+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	applyReportRetention(ctx, d, rep, discardTestLogger())
+	var n int
+	if err := d.RawQueryRow(ctx, `SELECT COUNT(*) FROM fork_report_archive WHERE scheduled_report_id = $1`, rep).Scan(&n); err != nil || n != 3 {
+		t.Fatalf("kept %d rows, want 3 (%v)", n, err)
+	}
+	var kept bool
+	if err := d.RawQueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM fork_report_archive WHERE id = $1)`, newest).Scan(&kept); err != nil || !kept {
+		t.Fatalf("newest row must survive: %v %v", kept, err)
+	}
+}
+
+func TestReportRunWithDeliveryOffArchivesWithoutSending(t *testing.T) {
+	d := newPatchRunCleanupTestDB(t)
+	rec := installMailRecorder(t)
+	insertTestHost(t, d, "h1")
+	slot := time.Now().UTC().Truncate(time.Second).Add(-time.Minute)
+	dest := insertEmailDestination(t, d, "SMTP")
+	rep := insertReport(t, d, "Weekly", slot, dest, []string{"kunde@example.com"})
+	if _, err := d.Exec(context.Background(), `UPDATE scheduled_reports SET fork_deliver = false WHERE id = $1`, rep); err != nil {
+		t.Fatal(err)
+	}
+	h := NewScheduledReportRunHandler(d, nil, nil, nil, discardTestLogger())
+	if err := h.ProcessTask(context.Background(), scheduledTask(rep, slot)); err != nil {
+		t.Fatal(err)
+	}
+	status, hasPDF, n := archiveRow(t, d, rep)
+	if n != 1 || status != "completed" || !hasPDF {
+		t.Fatalf("archive n=%d status=%s pdf=%v", n, status, hasPDF)
+	}
+	if rec.count("kunde@example.com") != 0 || rec.count("intern@example.com") != 0 {
+		t.Fatalf("delivery off must not send: %v", rec.sent)
+	}
+	var deliveries int
+	var deliveryEnabled bool
+	var recipients []string
+	if err := d.RawQueryRow(context.Background(), `SELECT (SELECT COUNT(*) FROM fork_report_deliveries fd WHERE fd.archive_id = a.id), a.delivery_enabled, a.recipients FROM fork_report_archive a WHERE a.scheduled_report_id = $1`, rep).Scan(&deliveries, &deliveryEnabled, &recipients); err != nil {
+		t.Fatal(err)
+	}
+	if deliveries != 0 || deliveryEnabled || len(recipients) != 1 {
+		t.Fatalf("deliveries=%d delivery_enabled=%v recipients=%v", deliveries, deliveryEnabled, recipients)
+	}
+	var runStatus string
+	if err := d.RawQueryRow(context.Background(), `SELECT status FROM scheduled_report_runs WHERE scheduled_report_id = $1`, rep).Scan(&runStatus); err != nil || runStatus != "completed" {
+		t.Fatalf("run=%s err=%v", runStatus, err)
 	}
 }

@@ -98,9 +98,17 @@ const ReportArchiveDialog = ({ report, onClose }) => {
 				onClick={(e) => e.stopPropagation()}
 			>
 				<div className="px-6 py-4 border-b border-secondary-200 dark:border-secondary-600 flex items-center justify-between">
-					<h3 className="text-lg font-semibold text-secondary-900 dark:text-white">
-						Archive: {report.name}
-					</h3>
+					<div>
+						<h3 className="text-lg font-semibold text-secondary-900 dark:text-white">
+							Archive: {report.name}
+						</h3>
+						{Number.isInteger(report.archive_keep) && (
+							<p className="text-xs text-secondary-500">
+								Keeps the newest {report.archive_keep} runs; older runs are
+								deleted when a run finishes.
+							</p>
+						)}
+					</div>
 					<button
 						type="button"
 						onClick={onClose}
@@ -176,7 +184,14 @@ const ReportArchiveDialog = ({ report, onClose }) => {
 													{run.host_count ?? " -"}
 												</td>
 												<td className={TD}>
-													{deliveries.length === 0 ? (
+													{run.delivery_enabled === false ? (
+														<span
+															className="text-xs text-secondary-500"
+															title="Delivery was off for this run; the report was rendered and archived only."
+														>
+															Not delivered (delivery off)
+														</span>
+													) : deliveries.length === 0 ? (
 														<span className="text-xs text-secondary-500">
 															None
 														</span>

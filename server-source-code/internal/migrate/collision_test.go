@@ -26,6 +26,10 @@ var forkOwnedIdentifiers = []string{
 	"fork_email_recipients",
 	"fork_report_archive",
 	"fork_report_deliveries",
+	"fork_deliver",
+	"fork_archive_keep",
+	"fork_archive_keep_range",
+	"delivery_enabled",
 }
 
 func TestUpstreamMigrationsDoNotTouchForkObjects(t *testing.T) {

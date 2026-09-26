@@ -54,6 +54,11 @@ const RECIPIENT_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/i;
 
 // Adds the addresses in raw (separated by comma, semicolon or whitespace)
 // to list. On any invalid address nothing is added.
+// Archive retention per report (runs kept); mirrors the server's limits.
+export const ARCHIVE_KEEP_DEFAULT = 24;
+export const ARCHIVE_KEEP_MIN = 1;
+export const ARCHIVE_KEEP_MAX = 200;
+
 const addRecipients = (list, raw) => {
 	const next = [...list];
 	for (const part of String(raw || "").split(/[\s,;]+/)) {
@@ -382,6 +387,11 @@ const ReportModal = ({
 		days: cronInit.days,
 		monthDay: cronInit.monthDay,
 		enabled: isDuplicate ? false : editingReport?.enabled !== false,
+		// Delivery off = render and archive only (download from the archive).
+		deliver: editingReport?.deliver !== false,
+		archive_keep: Number.isInteger(editingReport?.archive_keep)
+			? editingReport.archive_keep
+			: ARCHIVE_KEEP_DEFAULT,
 		// The single destination of a customer report is its SMTP account,
 		// not an internal destination.
 		destination_ids:
@@ -505,6 +515,17 @@ const ReportModal = ({
 			hostGroups.length > 0
 				? form.host_group_ids.filter((id) => knownGroupIds.has(id))
 				: form.host_group_ids;
+		const archiveKeep = Number(form.archive_keep);
+		if (
+			!Number.isInteger(archiveKeep) ||
+			archiveKeep < ARCHIVE_KEEP_MIN ||
+			archiveKeep > ARCHIVE_KEEP_MAX
+		) {
+			toast.warning(
+				`Archive retention must be between ${ARCHIVE_KEEP_MIN} and ${ARCHIVE_KEEP_MAX} runs`,
+			);
+			return;
+		}
 		let recipients = form.email_recipients;
 		if (isCustomer) {
 			if (recipientInput.trim()) {
@@ -548,8 +569,11 @@ const ReportModal = ({
 					? form.destination_ids.filter((id) => reportDestinationIds.has(id))
 					: form.destination_ids,
 			email_recipients: isCustomer ? recipients : null,
+			deliver: form.deliver,
+			archive_keep: archiveKeep,
 		};
-		if (isCustomer && form.enabled) {
+		// Only a report that actually leaves the house needs the confirmation.
+		if (isCustomer && form.enabled && form.deliver) {
 			setConfirmBody(body);
 			return;
 		}
@@ -978,6 +1002,45 @@ const ReportModal = ({
 									/>
 									Enabled
 								</label>
+							</div>
+						</div>
+
+						<div className="grid grid-cols-2 gap-4">
+							<div>
+								<label className="block text-sm font-medium text-secondary-700 dark:text-white mb-1">
+									Archive retention (runs)
+								</label>
+								<input
+									className={INPUT}
+									type="number"
+									min={ARCHIVE_KEEP_MIN}
+									max={ARCHIVE_KEEP_MAX}
+									step={1}
+									value={form.archive_keep}
+									onChange={(e) => upd("archive_keep", e.target.value)}
+								/>
+								<p className="mt-1 text-xs text-secondary-500">
+									The newest {form.archive_keep || ARCHIVE_KEEP_DEFAULT} runs
+									stay in the archive with their PDF; older runs are deleted
+									when a run finishes.
+								</p>
+							</div>
+							<div className="flex flex-col justify-end pb-1">
+								<label className="flex items-center gap-2 text-sm text-secondary-700 dark:text-white">
+									<input
+										type="checkbox"
+										checked={form.deliver}
+										onChange={(e) => upd("deliver", e.target.checked)}
+									/>
+									Deliver
+								</label>
+								<p className="mt-1 text-xs text-secondary-500">
+									{form.deliver
+										? isCustomer
+											? "Each run is e-mailed to the recipients."
+											: "Each run is sent to the selected destinations."
+										: "Runs are only rendered and stored in the archive. Nothing is sent; download the PDF from the archive."}
+								</p>
 							</div>
 						</div>
 

@@ -956,8 +956,12 @@ export const NotificationPanel = ({ panel }) => {
 	};
 
 	// Customer reports leave the house: confirm scope and recipients first.
+	// With delivery off nothing is sent, so there is nothing to confirm.
 	const handleRunNow = (r) => {
-		if (r.customer_mode || Array.isArray(r.email_recipients)) {
+		if (
+			r.deliver !== false &&
+			(r.customer_mode || Array.isArray(r.email_recipients))
+		) {
 			setRunConfirm(r);
 			return;
 		}
@@ -1411,6 +1415,14 @@ export const NotificationPanel = ({ panel }) => {
 												>
 													{r.enabled ? "Active" : "Disabled"}
 												</span>
+												{r.deliver === false && (
+													<span
+														className="ml-1 px-2 py-0.5 text-xs font-medium rounded-md bg-secondary-100 text-secondary-600 dark:bg-secondary-700 dark:text-secondary-300"
+														title="Runs are rendered and archived only; nothing is sent."
+													>
+														Archive only
+													</span>
+												)}
 											</td>
 											<td className={`${TD} flex items-center gap-2`}>
 												<button

@@ -3860,6 +3860,8 @@ To include host-group scoping, the user must also have `can_view_hosts` (so the 
 | **Activity period** | 7, 30 or 90 days (default 30). Window for the patching KPIs, patch activity and reboots; independent of the delivery schedule. |
 | **Top rows per section** | Numeric cap on per-host lists, defaults to **20**, at most 200. |
 | **Enabled** | On by default. Disable to keep the report saved but paused. |
+| **Deliver** | On by default. Switch it off to render and archive every run **without sending anything**: no mail, no webhook, no ntfy message. The report then lives only in the [archive](#report-archive), where you download the PDF. Recipients and destinations stay required and are kept, so switching delivery back on needs no further change. The table shows an **Archive only** badge next to the status. |
+| **Archive retention (runs)** | How many runs the [archive](#report-archive) keeps for this report: 1 to 200, default **24**. Older runs (with their PDFs) are deleted when a run of the report finishes. |
 
 5. Click **Create**. For an enabled customer report, a confirmation dialog appears first (see [Customer reports](#customer-reports)).
 
@@ -3884,7 +3886,7 @@ Customer mode also changes the content:
 - **Open alerts** list only alerts bound to a host in scope, and only alert types meaningful to a customer; server-wide alerts are left out.
 - Every PDF page carries the vendor name in its footer, next to the page number.
 
-**Confirmation dialog.** Saving an enabled customer report and clicking **Run now** on a customer report both open a confirmation dialog that lists the host groups, the current number of hosts in them, the recipients, the sender (SMTP account) and the language. Nothing is saved or sent until you confirm. If the selected groups contain no hosts right now, the dialog says so.
+**Confirmation dialog.** Saving an enabled customer report with **Deliver** on, and clicking **Run now** on such a report, both open a confirmation dialog that lists the host groups, the current number of hosts in them, the recipients, the sender (SMTP account) and the language. Nothing is saved or sent until you confirm. If the selected groups contain no hosts right now, the dialog says so.
 
 **Duplicate** creates a copy as a disabled **internal** report: recipients are never copied from one customer's report to the next.
 
@@ -3989,7 +3991,8 @@ Scheduled reports do not write to the **Delivery Log**; the archive is their del
 
 Click **Archive** in the report's row to see its past runs. For each run the archive shows when it was created, whether it was scheduled or manual, the status (with the error code when there is one), the activity period, the host groups and host count, and one line per delivery with its target, status, number of attempts and error code. Hover an error code to read the redacted error text.
 
-- **Retention:** the 24 newest runs per report are kept; older runs are deleted when a run of the report finishes.
+- **Retention:** the newest **Archive retention (runs)** runs per report are kept (default 24, 1 to 200, set in the report's modal); older runs are deleted when a run of the report finishes. Lowering the value takes effect at the next finished run of that report. The dialog header shows the report's current value.
+- **Delivery off:** a run of a report whose **Deliver** switch is off shows `Not delivered (delivery off)` instead of a delivery list. Its status is `completed` as soon as the PDF is stored.
 - **PDF download:** **Download** returns the PDF exactly as it was sent, named like the mail attachment. A run that failed before rendering has no PDF.
 - **Abandoned runs:** a run still `pending` after 24 hours (for example after a server crash in the middle of sending) is marked `failed` with the code `abandoned` the next time a run of the same report finishes.
 - **Deleting a report** deletes its whole archive, including the stored PDFs. The delete dialog says so.
@@ -3997,12 +4000,12 @@ Click **Archive** in the report's row to see its past runs. For each run the arc
 
 The same data is available through the API (session authentication, `can_manage_notifications`):
 
-- `GET /api/v1/notifications/scheduled-reports/{id}/archive`: the newest runs with their deliveries. PDF bytes are never part of the list.
+- `GET /api/v1/notifications/scheduled-reports/{id}/archive`: the newest runs with their deliveries (`delivery_enabled` tells whether the run was meant to be sent). PDF bytes are never part of the list.
 - `GET /api/v1/notifications/scheduled-reports/archive/{archiveId}/pdf`: the stored PDF of one run (`404` when the run has none).
 
 ### Running a report manually
 
-Click the green **Play** button in the report's row to run it immediately. For a customer report the [confirmation dialog](#customer-reports) appears first. The run is queued and delivered like a scheduled run, with its own archive entry marked `manual`; it does not move the report's schedule.
+Click the green **Play** button in the report's row to run it immediately. For a customer report with **Deliver** on, the [confirmation dialog](#customer-reports) appears first; with delivery off nothing leaves the server, so the run starts at once. The run is queued and delivered like a scheduled run, with its own archive entry marked `manual`; it does not move the report's schedule.
 
 `POST /api/v1/notifications/scheduled-reports/{id}/run-now` answers `{"status":"scheduled","run_id":"…"}`; the UI shows the first characters of the run id in its toast.
 
@@ -4037,10 +4040,12 @@ API notes for `PUT /api/v1/notifications/scheduled-reports/{id}`:
 - The customer-mode rules (host groups, one enabled e-mail destination with TLS and a valid sender, hourly minimum) are checked only when the resulting report is an enabled customer report. `{"enabled": false}` always succeeds, even when the report's e-mail destination was deleted or disabled.
 - Deleting a destination does not remove its id from reports. For internal reports, and for disabled customer reports, ids of deleted destinations and of `internal` destinations are dropped silently on save and the stored list is cleaned. An enabled customer report answers `400` instead.
 - `name` is limited to 200 characters.
+- `deliver` (boolean, default `true` on `POST`; omitted on `PUT` = unchanged) switches delivery on or off. With `false` every run is rendered and archived only; the delivery rules of a customer report are still checked.
+- `archive_keep` (integer 1 to 200, default 24 on `POST`; omitted on `PUT` = unchanged) sets the archive retention in runs. Values outside the range answer `400 archive_keep must be between 1 and 200 runs`. Both fields are returned by every report response.
 
 ### How scheduling works internally
 
-Scheduled reports are stored in the `scheduled_reports` table; customer recipients in its `fork_email_recipients` column (`NULL` for internal reports). On create or update, PatchMon computes the next run via the cron expression in the server's timezone, writes it to `next_run_at` and enqueues a task to asynq for exactly that time. There is no per-minute polling of the table; only the hourly fallback job (see **After downtime** below) re-enqueues reports whose task went missing. An update recomputes `next_run_at` from the cron only when the cron expression changed, or when it enables a disabled report whose stored slot is empty or in the past. Every other update keeps `next_run_at` and `last_run_at` exactly as stored, including a past slot of a report that stays enabled: the worker still claims that slot, once and late (see **After downtime**). The row is locked for the update, so a run claimed at the same moment is never overwritten.
+Scheduled reports are stored in the `scheduled_reports` table; customer recipients in its `fork_email_recipients` column (`NULL` for internal reports), the delivery switch in `fork_deliver` and the archive retention in `fork_archive_keep`. On create or update, PatchMon computes the next run via the cron expression in the server's timezone, writes it to `next_run_at` and enqueues a task to asynq for exactly that time. There is no per-minute polling of the table; only the hourly fallback job (see **After downtime** below) re-enqueues reports whose task went missing. An update recomputes `next_run_at` from the cron only when the cron expression changed, or when it enables a disabled report whose stored slot is empty or in the past. Every other update keeps `next_run_at` and `last_run_at` exactly as stored, including a past slot of a report that stays enabled: the worker still claims that slot, once and late (see **After downtime**). The row is locked for the update, so a run claimed at the same moment is never overwritten.
 
 **Run identity.** Every run has a run key: `sched:<tenant>:<report>:<unix slot>` for a scheduled run (the report plus the `next_run_at` it was enqueued for) or `manual:<tenant>:<report>:<uuid>` for **Run now**. The asynq task id is derived from the run key, so enqueuing the same slot twice is a no-op, and the archive stores the run key as a unique value, so a slot can produce at most one archive entry.
 
@@ -4050,7 +4055,7 @@ When a task executes, the worker:
 2. **Claims the slot** (scheduled runs only): in one transaction it moves `next_run_at` to the following cron slot, but only while `next_run_at` still equals the task's slot, and inserts the `pending` archive row. If another task has already claimed the slot, or the report was rescheduled in the meantime, the task ends without a run.
 3. **Enqueues the next run** right after the claim, independent of how rendering and delivery go.
 4. Validates the definition, resolves the host scope and renders HTML, CSV and PDF from a typed model (`internal/reports`). Every section reads only the hosts in scope; a report never falls back to the whole fleet. Unknown host groups, groups without hosts, or more than 500 hosts fail the run with the matching [error code](#delivering-a-report).
-5. **Snapshots** the output, the report name, language, mode and recipients of this render, the resolved groups, the host count, the sender (customer reports) and the planned deliveries into the archive row in one transaction.
+5. **Snapshots** the output, the report name, language, mode and recipients of this render, the resolved groups, the host count, the sender (customer reports) and the planned deliveries into the archive row in one transaction. With **Deliver** off no destination is resolved and no delivery is planned; the run completes at step 6 without sending.
 6. Sends every delivery that is `pending` or failed with a retryable code from the snapshot, records each result, and finalises the run: archive status and `scheduled_report_runs` row in one transaction, then retention. Only the finalisation that moves the archive row out of `pending` writes a run row. If that write fails, the task returns an error and asynq retries it; the retry finds the row still `pending` and finalises again. A retry resumes at step 6 with the same archive row (or at step 4 when no PDF was stored yet).
 
 **After downtime.** The hourly fallback job and the startup rehydration enqueue each enabled report at its stored `next_run_at`, not at "now". A slot that passed while the server was down therefore runs once, late, after the restart; the slot claim prevents a second run. Tasks queued by images before 2.0.2-am.13 (payload without a trigger) are discarded once when they execute; the stored `next_run_at` re-creates the chain.

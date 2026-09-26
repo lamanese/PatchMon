@@ -782,7 +782,9 @@ CREATE TABLE IF NOT EXISTS scheduled_reports (
     last_run_at TIMESTAMP(3),
     created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    fork_email_recipients TEXT[]
+    fork_email_recipients TEXT[],
+    fork_deliver BOOLEAN NOT NULL DEFAULT true,
+    fork_archive_keep INTEGER NOT NULL DEFAULT 24 CHECK (fork_archive_keep BETWEEN 1 AND 200)
 );
 
 -- scheduled_report_runs
@@ -824,7 +826,8 @@ CREATE TABLE fork_report_archive (
     csv                 TEXT,
     pdf                 BYTEA,
     pdf_size            INTEGER NOT NULL DEFAULT 0,
-    pdf_sha256          TEXT
+    pdf_sha256          TEXT,
+    delivery_enabled    BOOLEAN NOT NULL DEFAULT true
 );
 CREATE INDEX fork_report_archive_report_created_idx
     ON fork_report_archive (scheduled_report_id, created_at DESC);

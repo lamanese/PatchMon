@@ -92,7 +92,7 @@ func (q *Queries) ForkFinishReportArchive(ctx context.Context, arg ForkFinishRep
 const forkGetReportArchiveByRunKey = `-- name: ForkGetReportArchiveByRunKey :one
 SELECT id, scheduled_report_id, run_key, trigger_kind, slot_at, created_at, finished_at, status, error_code, error_message,
        report_name, language, period_from, period_to, group_ids, group_names, host_count, customer_mode,
-       smtp_destination_id, mail_from, recipients, pdf_size, pdf_sha256, (pdf IS NOT NULL)::boolean AS has_pdf
+       smtp_destination_id, mail_from, recipients, pdf_size, pdf_sha256, (pdf IS NOT NULL)::boolean AS has_pdf, delivery_enabled
 FROM fork_report_archive WHERE run_key = $1
 `
 
@@ -121,6 +121,7 @@ type ForkGetReportArchiveByRunKeyRow struct {
 	PdfSize           int32      `json:"pdf_size"`
 	PdfSha256         *string    `json:"pdf_sha256"`
 	HasPdf            bool       `json:"has_pdf"`
+	DeliveryEnabled   bool       `json:"delivery_enabled"`
 }
 
 func (q *Queries) ForkGetReportArchiveByRunKey(ctx context.Context, runKey string) (ForkGetReportArchiveByRunKeyRow, error) {
@@ -151,6 +152,7 @@ func (q *Queries) ForkGetReportArchiveByRunKey(ctx context.Context, runKey strin
 		&i.PdfSize,
 		&i.PdfSha256,
 		&i.HasPdf,
+		&i.DeliveryEnabled,
 	)
 	return i, err
 }
@@ -234,7 +236,7 @@ func (q *Queries) ForkGetReportArchivePDF(ctx context.Context, id string) (ForkG
 }
 
 const forkGetScheduledReportForUpdate = `-- name: ForkGetScheduledReportForUpdate :one
-SELECT id, name, cron_expr, enabled, definition, destination_ids, timezone, next_run_at, last_run_at, created_at, updated_at, fork_email_recipients FROM scheduled_reports WHERE id = $1 FOR UPDATE
+SELECT id, name, cron_expr, enabled, definition, destination_ids, timezone, next_run_at, last_run_at, created_at, updated_at, fork_email_recipients, fork_deliver, fork_archive_keep FROM scheduled_reports WHERE id = $1 FOR UPDATE
 `
 
 // Row lock for the update handler, so a concurrent slot claim is never
@@ -255,15 +257,17 @@ func (q *Queries) ForkGetScheduledReportForUpdate(ctx context.Context, id string
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ForkEmailRecipients,
+		&i.ForkDeliver,
+		&i.ForkArchiveKeep,
 	)
 	return i, err
 }
 
 const forkInsertReportArchive = `-- name: ForkInsertReportArchive :exec
-INSERT INTO fork_report_archive (id, scheduled_report_id, run_key, trigger_kind, slot_at, report_name, language, customer_mode, group_ids, recipients)
+INSERT INTO fork_report_archive (id, scheduled_report_id, run_key, trigger_kind, slot_at, report_name, language, customer_mode, group_ids, recipients, delivery_enabled)
 VALUES ($1, $2, $3, $4, $5,
         $6, $7, $8,
-        COALESCE($9::text[], '{}'::text[]), COALESCE($10::text[], '{}'::text[]))
+        COALESCE($9::text[], '{}'::text[]), COALESCE($10::text[], '{}'::text[]), $11)
 `
 
 type ForkInsertReportArchiveParams struct {
@@ -277,6 +281,7 @@ type ForkInsertReportArchiveParams struct {
 	CustomerMode      bool       `json:"customer_mode"`
 	GroupIds          []string   `json:"group_ids"`
 	Recipients        []string   `json:"recipients"`
+	DeliveryEnabled   bool       `json:"delivery_enabled"`
 }
 
 func (q *Queries) ForkInsertReportArchive(ctx context.Context, arg ForkInsertReportArchiveParams) error {
@@ -291,6 +296,7 @@ func (q *Queries) ForkInsertReportArchive(ctx context.Context, arg ForkInsertRep
 		arg.CustomerMode,
 		arg.GroupIds,
 		arg.Recipients,
+		arg.DeliveryEnabled,
 	)
 	return err
 }
@@ -325,7 +331,7 @@ func (q *Queries) ForkInsertReportDelivery(ctx context.Context, arg ForkInsertRe
 const forkListReportArchive = `-- name: ForkListReportArchive :many
 SELECT id, scheduled_report_id, run_key, trigger_kind, slot_at, created_at, finished_at, status, error_code, error_message,
        report_name, language, period_from, period_to, group_ids, group_names, host_count, customer_mode,
-       smtp_destination_id, mail_from, recipients, pdf_size, pdf_sha256, (pdf IS NOT NULL)::boolean AS has_pdf
+       smtp_destination_id, mail_from, recipients, pdf_size, pdf_sha256, (pdf IS NOT NULL)::boolean AS has_pdf, delivery_enabled
 FROM fork_report_archive
 WHERE scheduled_report_id = $1
 ORDER BY created_at DESC, id
@@ -362,6 +368,7 @@ type ForkListReportArchiveRow struct {
 	PdfSize           int32      `json:"pdf_size"`
 	PdfSha256         *string    `json:"pdf_sha256"`
 	HasPdf            bool       `json:"has_pdf"`
+	DeliveryEnabled   bool       `json:"delivery_enabled"`
 }
 
 func (q *Queries) ForkListReportArchive(ctx context.Context, arg ForkListReportArchiveParams) ([]ForkListReportArchiveRow, error) {
@@ -398,6 +405,7 @@ func (q *Queries) ForkListReportArchive(ctx context.Context, arg ForkListReportA
 			&i.PdfSize,
 			&i.PdfSha256,
 			&i.HasPdf,
+			&i.DeliveryEnabled,
 		); err != nil {
 			return nil, err
 		}
@@ -516,22 +524,45 @@ WHERE fra.scheduled_report_id = $1
       SELECT id FROM fork_report_archive
       WHERE scheduled_report_id = $1
       ORDER BY created_at DESC, id
-      LIMIT $2
+      LIMIT (SELECT COALESCE(MAX(fork_archive_keep), 24) FROM scheduled_reports WHERE id = $1)
   )
   AND NOT (fra.status = 'pending' AND fra.created_at > NOW() - INTERVAL '24 hours')
 `
 
-type ForkPruneReportArchiveParams struct {
-	ID   string `json:"id"`
-	Keep int32  `json:"keep"`
-}
-
-func (q *Queries) ForkPruneReportArchive(ctx context.Context, arg ForkPruneReportArchiveParams) (int64, error) {
-	result, err := q.db.Exec(ctx, forkPruneReportArchive, arg.ID, arg.Keep)
+func (q *Queries) ForkPruneReportArchive(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, forkPruneReportArchive, id)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const forkSetScheduledReportForkFields = `-- name: ForkSetScheduledReportForkFields :exec
+UPDATE scheduled_reports
+SET fork_email_recipients = $1::text[],
+    fork_deliver = $2,
+    fork_archive_keep = $3,
+    updated_at = NOW()
+WHERE id = $4
+`
+
+type ForkSetScheduledReportForkFieldsParams struct {
+	Recipients  []string `json:"recipients"`
+	Deliver     bool     `json:"deliver"`
+	ArchiveKeep int32    `json:"archive_keep"`
+	ID          string   `json:"id"`
+}
+
+// The fork-owned columns of a report (upstream's Create/Update queries never
+// see them): recipients (NULL = internal), delivery on/off, archive retention.
+func (q *Queries) ForkSetScheduledReportForkFields(ctx context.Context, arg ForkSetScheduledReportForkFieldsParams) error {
+	_, err := q.db.Exec(ctx, forkSetScheduledReportForkFields,
+		arg.Recipients,
+		arg.Deliver,
+		arg.ArchiveKeep,
+		arg.ID,
+	)
+	return err
 }
 
 const forkSetScheduledReportNextRunIfNull = `-- name: ForkSetScheduledReportNextRunIfNull :execrows
@@ -550,21 +581,6 @@ func (q *Queries) ForkSetScheduledReportNextRunIfNull(ctx context.Context, arg F
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const forkSetScheduledReportRecipients = `-- name: ForkSetScheduledReportRecipients :exec
-UPDATE scheduled_reports SET fork_email_recipients = $1::text[], updated_at = NOW()
-WHERE id = $2
-`
-
-type ForkSetScheduledReportRecipientsParams struct {
-	Recipients []string `json:"recipients"`
-	ID         string   `json:"id"`
-}
-
-func (q *Queries) ForkSetScheduledReportRecipients(ctx context.Context, arg ForkSetScheduledReportRecipientsParams) error {
-	_, err := q.db.Exec(ctx, forkSetScheduledReportRecipients, arg.Recipients, arg.ID)
-	return err
 }
 
 const forkSnapshotReportArchive = `-- name: ForkSnapshotReportArchive :exec
