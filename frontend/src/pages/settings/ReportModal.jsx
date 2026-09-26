@@ -52,13 +52,13 @@ export const CUSTOMER_DEFAULT_SECTIONS = [
 const MAX_RECIPIENTS = 10;
 const RECIPIENT_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/i;
 
-// Adds the addresses in raw (separated by comma, semicolon or whitespace)
-// to list. On any invalid address nothing is added.
 // Archive retention per report (runs kept); mirrors the server's limits.
 export const ARCHIVE_KEEP_DEFAULT = 24;
 export const ARCHIVE_KEEP_MIN = 1;
 export const ARCHIVE_KEEP_MAX = 200;
 
+// Adds the addresses in raw (separated by comma, semicolon or whitespace)
+// to list. On any invalid address nothing is added.
 const addRecipients = (list, raw) => {
 	const next = [...list];
 	for (const part of String(raw || "").split(/[\s,;]+/)) {
@@ -1020,9 +1020,12 @@ const ReportModal = ({
 									onChange={(e) => upd("archive_keep", e.target.value)}
 								/>
 								<p className="mt-1 text-xs text-secondary-500">
-									The newest {form.archive_keep || ARCHIVE_KEEP_DEFAULT} runs
-									stay in the archive with their PDF; older runs are deleted
-									when a run finishes.
+									The newest{" "}
+									{Number(form.archive_keep) >= ARCHIVE_KEEP_MIN
+										? Number(form.archive_keep)
+										: ARCHIVE_KEEP_DEFAULT}{" "}
+									runs stay in the archive with their PDF; older runs are
+									deleted when a run finishes.
 								</p>
 							</div>
 							<div className="flex flex-col justify-end pb-1">

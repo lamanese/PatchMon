@@ -51,7 +51,7 @@ SET period_from = sqlc.arg('period_from'), period_to = sqlc.arg('period_to'),
     group_names = COALESCE(sqlc.arg('group_names')::text[], '{}'::text[]), host_count = sqlc.arg('host_count'),
     smtp_destination_id = sqlc.narg('smtp_destination_id'), mail_from = sqlc.narg('mail_from'),
     report_name = sqlc.arg('report_name'), language = sqlc.arg('language'), customer_mode = sqlc.arg('customer_mode'),
-    recipients = COALESCE(sqlc.arg('recipients')::text[], '{}'::text[]),
+    recipients = COALESCE(sqlc.arg('recipients')::text[], '{}'::text[]), delivery_enabled = sqlc.arg('delivery_enabled'),
     subject = sqlc.arg('subject'), html = sqlc.arg('html'), csv = sqlc.arg('csv'),
     pdf = sqlc.arg('pdf'), pdf_size = sqlc.arg('pdf_size'), pdf_sha256 = sqlc.arg('pdf_sha256')
 WHERE id = sqlc.arg('id');

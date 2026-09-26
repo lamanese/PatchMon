@@ -542,6 +542,9 @@ func (h *ScheduledReportRunHandler) renderAndSnapshot(ctx context.Context, d *da
 		if plan, err = h.planDeliveries(ctx, d, rep); err != nil {
 			return err
 		}
+	} else if normalized, perr := reports.ParseRecipients(rep.ForkEmailRecipients); perr == nil {
+		// Same normalisation as the delivery path, so archive rows look alike.
+		plan.recipients = normalized
 	}
 
 	m := out.Model
@@ -572,16 +575,17 @@ func (h *ScheduledReportRunHandler) renderAndSnapshot(ctx context.Context, d *da
 		MailFrom:          plan.mailFrom,
 		// Name, language, mode and recipients of THIS render: a retry after a
 		// transient render failure may render a changed report.
-		ReportName:   rep.Name,
-		Language:     m.Language,
-		CustomerMode: rep.ForkEmailRecipients != nil,
-		Recipients:   plan.recipients,
-		Subject:      out.Subject,
-		Html:         &out.HTML,
-		Csv:          &out.CSV,
-		Pdf:          out.PDF,
-		PdfSize:      int32(len(out.PDF)), //nolint:gosec // bounded by the 10 MB PDF limit
-		PdfSha256:    &sumHex,
+		ReportName:      rep.Name,
+		Language:        m.Language,
+		CustomerMode:    rep.ForkEmailRecipients != nil,
+		Recipients:      plan.recipients,
+		DeliveryEnabled: rep.ForkDeliver,
+		Subject:         out.Subject,
+		Html:            &out.HTML,
+		Csv:             &out.CSV,
+		Pdf:             out.PDF,
+		PdfSize:         int32(len(out.PDF)), //nolint:gosec // bounded by the 10 MB PDF limit
+		PdfSha256:       &sumHex,
 	}); err != nil {
 		return err
 	}

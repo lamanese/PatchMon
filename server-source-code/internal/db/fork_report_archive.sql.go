@@ -590,10 +590,10 @@ SET period_from = $1, period_to = $2,
     group_names = COALESCE($4::text[], '{}'::text[]), host_count = $5,
     smtp_destination_id = $6, mail_from = $7,
     report_name = $8, language = $9, customer_mode = $10,
-    recipients = COALESCE($11::text[], '{}'::text[]),
-    subject = $12, html = $13, csv = $14,
-    pdf = $15, pdf_size = $16, pdf_sha256 = $17
-WHERE id = $18
+    recipients = COALESCE($11::text[], '{}'::text[]), delivery_enabled = $12,
+    subject = $13, html = $14, csv = $15,
+    pdf = $16, pdf_size = $17, pdf_sha256 = $18
+WHERE id = $19
 `
 
 type ForkSnapshotReportArchiveParams struct {
@@ -608,6 +608,7 @@ type ForkSnapshotReportArchiveParams struct {
 	Language          string     `json:"language"`
 	CustomerMode      bool       `json:"customer_mode"`
 	Recipients        []string   `json:"recipients"`
+	DeliveryEnabled   bool       `json:"delivery_enabled"`
 	Subject           string     `json:"subject"`
 	Html              *string    `json:"html"`
 	Csv               *string    `json:"csv"`
@@ -630,6 +631,7 @@ func (q *Queries) ForkSnapshotReportArchive(ctx context.Context, arg ForkSnapsho
 		arg.Language,
 		arg.CustomerMode,
 		arg.Recipients,
+		arg.DeliveryEnabled,
 		arg.Subject,
 		arg.Html,
 		arg.Csv,

@@ -519,7 +519,7 @@ func archiveKeepOrError(v *int, fallback int32) (int32, error) {
 		return fallback, nil
 	}
 	if err := reports.ValidateArchiveKeep(*v); err != nil {
-		return 0, deliveryError{msg: strings.Replace(err.Error(), "archive_keep: ", "archive_keep ", 1)}
+		return 0, fmt.Errorf("archive_keep must be between %d and %d runs", reports.MinArchiveKeep, reports.MaxArchiveKeep)
 	}
 	return int32(*v), nil //nolint:gosec // bounded by ValidateArchiveKeep
 }
@@ -763,7 +763,11 @@ func (h *NotificationsHandler) CreateScheduledReport(w http.ResponseWriter, r *h
 		// Absent = reports.DefaultArchiveKeep; otherwise 1..MaxArchiveKeep.
 		ArchiveKeep *int `json:"archive_keep"`
 	}
-	if err := decodeJSON(r, &req); err != nil || req.Name == "" {
+	if err := decodeJSON(r, &req); err != nil {
+		Error(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+	if req.Name == "" {
 		Error(w, http.StatusBadRequest, "name required")
 		return
 	}

@@ -257,7 +257,9 @@ const ReportArchiveDialog = ({ report, onClose }) => {
 					)}
 				</div>
 				<div className="px-6 py-3 border-t border-secondary-200 dark:border-secondary-600 text-xs text-secondary-500">
-					The 24 most recent runs are kept.
+					{Number.isInteger(report.archive_keep)
+						? `The ${report.archive_keep} most recent runs are kept.`
+						: "Older runs are deleted when a run finishes."}
 				</div>
 			</div>
 		</div>
