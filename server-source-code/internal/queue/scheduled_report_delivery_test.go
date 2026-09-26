@@ -1,12 +1,14 @@
 package queue
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/textproto"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -159,5 +161,84 @@ func TestCheckCustomerSMTP(t *testing.T) {
 	}
 	if err := CheckCustomerSMTPConfig(nil, "{not json"); !errors.Is(err, ErrCustomerSMTPUnreadable) {
 		t.Fatalf("unreadable: %v", err)
+	}
+}
+
+// scriptedSMTPServer is a minimal plaintext SMTP server that records the
+// RCPT TO lines it receives.
+func scriptedSMTPServer(t *testing.T) (host string, port int, rcpts <-chan string) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	out := make(chan string, 4)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		r := bufio.NewReader(c)
+		write := func(s string) { _, _ = c.Write([]byte(s + "\r\n")) }
+		write("220 localhost ESMTP")
+		inData := false
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			line = strings.TrimRight(line, "\r\n")
+			if inData {
+				if line == "." {
+					inData = false
+					write("250 queued")
+				}
+				continue
+			}
+			upper := strings.ToUpper(line)
+			switch {
+			case strings.HasPrefix(upper, "EHLO"), strings.HasPrefix(upper, "HELO"):
+				write("250 localhost") // no STARTTLS, no AUTH
+			case strings.HasPrefix(upper, "MAIL FROM:"):
+				write("250 ok")
+			case strings.HasPrefix(upper, "RCPT TO:"):
+				out <- line[len("RCPT TO:"):]
+				write("250 ok")
+			case upper == "DATA":
+				inData = true
+				write("354 go ahead")
+			case upper == "QUIT":
+				write("221 bye")
+				return
+			default:
+				write("250 ok")
+			}
+		}
+	}()
+	h, p, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ = strconv.Atoi(p)
+	return h, port, out
+}
+
+// RCPT TO carries the bare parsed address, never the raw input with a
+// display name.
+func TestSendReportEmailSMTPRcptIsBareAddress(t *testing.T) {
+	host, port, rcpts := scriptedSMTPServer(t)
+	cfg := scheduledEmailConfig{SMTPHost: host, SMTPPort: port, UseTLS: false, From: "Reports <reports@example.com>"}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := sendReportEmailSMTP(ctx, cfg, "Kunde <Kunde@Example.com>", []byte("Subject: x\r\n\r\nbody\r\n")); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	select {
+	case got := <-rcpts:
+		if got != "<kunde@example.com>" {
+			t.Fatalf("RCPT TO argument %q, want <kunde@example.com>", got)
+		}
+	default:
+		t.Fatal("no RCPT TO recorded")
 	}
 }

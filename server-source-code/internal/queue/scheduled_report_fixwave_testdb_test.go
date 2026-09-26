@@ -201,6 +201,49 @@ func TestReportLastAttemptCancelledContextFinalizes(t *testing.T) {
 	if st, code, _ := deliveryState(t, d, "b@example.com"); st != "failed" || code != reports.CodeAbandoned || rec.count("b@example.com") != 0 {
 		t.Fatalf("b: %s %s", st, code)
 	}
+
+	// A row that already failed keeps its own code; only pending rows become
+	// abandoned. x (pending) is sent and ends the context, y failed earlier
+	// with smtp_timeout, z is pending.
+	sendReportEmail = func(_ context.Context, _ scheduledEmailConfig, to string, _ []byte) error {
+		switch to {
+		case "y@example.com":
+			return timeoutErr{}
+		default:
+			return errors.New("dial tcp: connection refused")
+		}
+	}
+	reportRetryState = func(context.Context) (int, int) { return 0, 3 }
+	rep3 := insertReport(t, d, "Quarterly", slot, insertEmailDestination(t, d, "SMTP3"), []string{"x@example.com", "y@example.com", "z@example.com"})
+	if err := h.ProcessTask(context.Background(), scheduledTask(rep3, slot)); err == nil {
+		t.Fatal("first attempt must ask for a retry")
+	}
+	if _, err := d.Exec(context.Background(), `UPDATE fork_report_deliveries SET status = 'pending', error_code = NULL, error_message = NULL WHERE recipient IN ('x@example.com', 'z@example.com')`); err != nil {
+		t.Fatal(err)
+	}
+	ctx3, stop3 := context.WithCancel(context.Background())
+	defer stop3()
+	sendReportEmail = func(_ context.Context, _ scheduledEmailConfig, to string, msg []byte) error {
+		rec.sent[to] = append(rec.sent[to], msg)
+		stop3()
+		return nil
+	}
+	reportRetryState = func(context.Context) (int, int) { return 3, 3 }
+	if err := h.ProcessTask(ctx3, scheduledTask(rep3, slot)); err != nil {
+		t.Fatalf("last attempt must finalize: %v", err)
+	}
+	if st, code, n := deliveryState(t, d, "y@example.com"); st != "failed" || code != reports.CodeSMTPTimeout || n != 1 || rec.count("y@example.com") != 0 {
+		t.Fatalf("pre-failed y must keep smtp_timeout: %s %s attempts=%d", st, code, n)
+	}
+	if st, code, _ := deliveryState(t, d, "z@example.com"); st != "failed" || code != reports.CodeAbandoned {
+		t.Fatalf("pending z: %s %s", st, code)
+	}
+	if st, _, _ := deliveryState(t, d, "x@example.com"); st != "sent" {
+		t.Fatalf("x: %s", st)
+	}
+	if status, _, _ := archiveRow(t, d, rep3); status != "partial" {
+		t.Fatalf("archive %q", status)
+	}
 }
 
 // A report disabled between attempts ends its pending run as failed/abandoned.

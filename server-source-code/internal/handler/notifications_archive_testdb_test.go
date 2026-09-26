@@ -229,8 +229,32 @@ func TestUpdateReportRecipientsAndStaleSlot(t *testing.T) {
 		t.Fatalf("internal destination: %d %s", w.Code, w.Body.String())
 	}
 
+	storedNext := func() string {
+		t.Helper()
+		var v string
+		if err := d.RawQueryRow(context.Background(), `SELECT next_run_at::text FROM scheduled_reports WHERE id = $1`, id).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	// Enabled report, past slot, name-only PUT: the slot stays as stored so
+	// the worker claims it late, once.
+	if w := putReport(h, id, `{"name":"renamed"}`); w.Code != 200 {
+		t.Fatalf("rename: %d %s", w.Code, w.Body.String())
+	}
+	if got := storedNext(); got != "2020-01-01 00:00:00" {
+		t.Fatalf("a name-only PUT must keep the past slot, got %s", got)
+	}
+	// Disabled report with a past slot, enabled via PUT: the slot moves forward.
+	if w := putReport(h, id, `{"enabled":false}`); w.Code != 200 {
+		t.Fatalf("disable: %d %s", w.Code, w.Body.String())
+	}
+	if got := storedNext(); got != "2020-01-01 00:00:00" {
+		t.Fatalf("disabling must keep the slot, got %s", got)
+	}
+
 	w = httptest.NewRecorder()
-	h.UpdateScheduledReport(w, routedRequest(http.MethodPut, "/", `{"email_recipients":null,"destination_ids":["`+email+`"]}`, map[string]string{"id": id}))
+	h.UpdateScheduledReport(w, routedRequest(http.MethodPut, "/", `{"enabled":true,"email_recipients":null,"destination_ids":["`+email+`"]}`, map[string]string{"id": id}))
 	if w.Code != 200 {
 		t.Fatalf("update: %d %s", w.Code, w.Body.String())
 	}
@@ -241,7 +265,7 @@ func TestUpdateReportRecipientsAndStaleSlot(t *testing.T) {
 	}
 	next, _ := time.Parse(time.RFC3339, resp["next_run_at"].(string))
 	if !next.After(time.Now()) {
-		t.Fatalf("a stale next_run_at must move to the next cron slot: %v", resp["next_run_at"])
+		t.Fatalf("enabling with a stale next_run_at must move it to the next cron slot: %v", resp["next_run_at"])
 	}
 }
 

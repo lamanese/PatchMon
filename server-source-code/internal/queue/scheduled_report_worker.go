@@ -633,7 +633,15 @@ func (h *ScheduledReportRunHandler) deliverArchive(ctx context.Context, d *datab
 				// pending and asynq requeues the task.
 				return err
 			}
-			// Last attempt: record the delivery as not sent and finalize.
+			// Last attempt: a row that already failed keeps its own code;
+			// only a never-attempted (pending) row becomes abandoned.
+			if del.Status == "failed" {
+				failed++
+				if firstCode == "" && del.ErrorCode != nil {
+					firstCode = *del.ErrorCode
+				}
+				continue
+			}
 			code, msg := reports.CodeAbandoned, "run ended before this delivery was sent"
 			markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reportMarkTimeout)
 			err := d.Queries.ForkMarkReportDelivery(markCtx, db.ForkMarkReportDeliveryParams{ID: del.ID, Status: "failed", ErrorCode: &code, ErrorMessage: &msg})

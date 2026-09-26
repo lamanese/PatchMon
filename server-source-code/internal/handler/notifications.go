@@ -921,7 +921,7 @@ func (h *NotificationsHandler) UpdateScheduledReport(w http.ResponseWriter, r *h
 	}
 	dest, _ := json.Marshal(plan.DestinationIDs)
 	// next_run_at comes from the locked row; it is recomputed only when the
-	// schedule changed or an enabled report points at a past (or no) slot.
+	// schedule changed or the report is being enabled with a past (or no) slot.
 	now := time.Now()
 	nextAt := ex.NextRunAt
 	if cron != ex.CronExpr {
@@ -929,7 +929,10 @@ func (h *NotificationsHandler) UpdateScheduledReport(w http.ResponseWriter, r *h
 			nextAt = pgtime.From(n)
 		}
 	}
-	if en && (!nextAt.Valid || nextAt.Time.Before(now)) {
+	// Enabling a report whose slot passed (or is missing) must not fire at
+	// once. A past slot of a report that stays enabled is kept: the worker
+	// claims it late, once.
+	if en && !ex.Enabled && (!nextAt.Valid || nextAt.Time.Before(now)) {
 		if n, err := notifications.NextCronRun(cron, tz, now); err == nil {
 			nextAt = pgtime.From(n)
 		}
