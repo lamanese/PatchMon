@@ -320,7 +320,13 @@ export const AuthProvider = ({ children }) => {
 			if (response.ok) {
 				// Check if TFA is required
 				if (data.requiresTfa) {
-					return { success: true, requiresTfa: true };
+					// tfaTicket proves the password was just verified; the
+					// verify-tfa endpoint refuses to issue a session without it.
+					return {
+						success: true,
+						requiresTfa: true,
+						tfaTicket: data.tfaTicket,
+					};
 				}
 
 				// Regular successful login
@@ -668,6 +674,7 @@ export const AuthProvider = ({ children }) => {
 	const canManageAlerts = () => hasPermission("can_manage_alerts");
 	const canManageAutomation = () => hasPermission("can_manage_automation");
 	const canUseRemoteAccess = () => hasPermission("can_use_remote_access");
+	const canRebootHosts = () => hasPermission("can_reboot_hosts");
 
 	// Module feature flagging (multi-context). `tenant.modules` is a comma-separated
 	// string, or "*" for wildcard (all modules). In single-context (self-hosted)
@@ -881,6 +888,7 @@ export const AuthProvider = ({ children }) => {
 		canManageAlerts,
 		canManageAutomation,
 		canUseRemoteAccess,
+		canRebootHosts,
 		acceptReleaseNotes,
 		// Multi-context module feature flags
 		tenant,

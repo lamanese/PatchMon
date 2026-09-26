@@ -1050,7 +1050,7 @@ const SshTerminal = ({ host, isOpen, onClose, embedded = false }) => {
 										Proxy via Agent
 									</span>
 									<a
-										href="https://patchmon.net/docs/link/31#bkmrk-ssh-proxy-%28ssh-proxy"
+										href="https://github.com/lamanese/PatMan/blob/feat/remote-reboot/docs/patchmon-admin-guide.md#terminal"
 										target="_blank"
 										rel="noopener noreferrer"
 										title="SSH Proxy documentation"

@@ -2,13 +2,19 @@
 SELECT * FROM hosts ORDER BY friendly_name;
 
 -- name: ListHostsPaginated :many
-SELECT id, friendly_name, hostname, ip, os_type, os_version, architecture, last_update, status, api_id, agent_version, auto_update, created_at, notes, system_uptime, needs_reboot, docker_enabled, compliance_enabled
+SELECT id, friendly_name, hostname, ip, os_type, os_version, architecture, last_update, status, api_id, agent_version, auto_update, created_at, notes, system_uptime, fork_boot_time, needs_reboot, allow_reboot, docker_enabled, compliance_enabled
 FROM hosts
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2;
 
 -- name: CountHosts :one
 SELECT COUNT(*) FROM hosts WHERE status = 'active';
+
+-- name: CountHostsByStatus :one
+SELECT
+    COUNT(*) FILTER (WHERE status = 'active')::int AS active_count,
+    COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count
+FROM hosts;
 
 -- name: GetHostByID :one
 SELECT * FROM hosts WHERE id = $1;
@@ -75,6 +81,9 @@ UPDATE hosts SET api_id = $1, api_key = $2, updated_at = NOW() WHERE id = $3;
 -- name: UpdateHostRebootStatus :exec
 UPDATE hosts SET needs_reboot = $2, reboot_reason = $3, updated_at = NOW() WHERE id = $1;
 
+-- name: UpdateHostsAllowReboot :exec
+UPDATE hosts SET allow_reboot = $1, updated_at = NOW() WHERE id = ANY(sqlc.arg('ids')::text[]);
+
 -- name: UpdateHostPing :exec
 UPDATE hosts SET last_update = NOW(), updated_at = NOW(), status = 'active' WHERE id = $1;
 
@@ -91,3 +100,26 @@ WHERE NOT EXISTS (SELECT 1 FROM compliance_scans cs WHERE cs.host_id = h.id);
 
 -- name: SetHostAwaitingPostPatchReport :exec
 UPDATE hosts SET awaiting_post_patch_report_run_id = $1, updated_at = NOW() WHERE id = $2;
+
+-- name: ForkUpdateHostPackageState :exec
+-- Fork: "package manager is in a broken state" hint reported by agents 2.0.15+.
+-- Kept out of UpdateHostFromReport so that upstream query stays untouched.
+UPDATE hosts
+SET fork_pkg_broken = sqlc.arg('broken'), fork_pkg_broken_detail = sqlc.narg('detail')
+WHERE id = sqlc.arg('id');
+
+-- name: ForkUpdateHostBootTime :exec
+-- Fork: last boot instant reported by agents 2.0.20+. Kept out of
+-- UpdateHostFromReport so that upstream query stays untouched. The caller only
+-- invokes it with a plausible value; a missing value never clears the column.
+-- Derived boot times (containers: now-uptime; Windows: now-tick count) jitter
+-- by about a second between reports; differences below 10s are treated as the
+-- same boot so the displayed minute never flaps. Two real boots can never be
+-- less than 10s apart, so no genuine reboot is suppressed. The write is
+-- skipped unless the new value differs from the stored one by at least 10s
+-- (or none is stored yet).
+UPDATE hosts
+SET fork_boot_time = sqlc.arg('boot_time')::timestamptz
+WHERE id = sqlc.arg('id')
+  AND (fork_boot_time IS NULL
+       OR ABS(EXTRACT(EPOCH FROM (fork_boot_time - sqlc.arg('boot_time')::timestamptz))) >= 10);

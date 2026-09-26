@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/db"
@@ -119,6 +121,11 @@ type ReportPayload struct {
 	NeedsReboot            bool               `json:"needsReboot"`
 	RebootReason           string             `json:"rebootReason"`
 	PackageManager         string             `json:"packageManager"`
+	// Fork: nil for agents older than 2.0.15, which do not report it.
+	PackageStateBroken *bool  `json:"packageStateBroken,omitempty"`
+	PackageStateDetail string `json:"packageStateDetail,omitempty"`
+	// Fork: nil for agents older than 2.0.20, which do not report it.
+	BootTime *time.Time `json:"bootTime,omitempty"`
 }
 
 // ProcessReportResult is the result of processing a host report.
@@ -172,6 +179,12 @@ func (s *ReportStore) ProcessReport(ctx context.Context, hostID string, payload 
 			securityCount++
 		}
 	}
+
+	// Strip NUL and invalid UTF-8 before anything touches a query parameter.
+	// Postgres cannot store either, and one bad byte from one Windows host
+	// aborts that host's whole report. See sanitizeReportPayload for why this
+	// sits here and not at the decode boundary.
+	sanitizeReportPayload(payload)
 
 	// Deterministic ordering eliminates cross-transaction lock-order
 	// inversion that caused 40P01 deadlocks. See sortReportInputs.
@@ -325,6 +338,34 @@ func (s *ReportStore) ProcessReport(ctx context.Context, hostID string, payload 
 
 	if err := q.UpdateHostFromReport(ctx, params); err != nil {
 		return nil, fmt.Errorf("UpdateHostFromReport: %w", err)
+	}
+	// Fork: package-state hint. Agents that do not report it leave the stored
+	// value alone; a reporting agent always overwrites it, so the flag clears
+	// itself once the administrator has repaired the host.
+	if payload.PackageStateBroken != nil {
+		var detail *string
+		if *payload.PackageStateBroken && payload.PackageStateDetail != "" {
+			if len(payload.PackageStateDetail) > 1000 {
+				payload.PackageStateDetail = payload.PackageStateDetail[:1000]
+			}
+			detail = &payload.PackageStateDetail
+		}
+		if err := q.ForkUpdateHostPackageState(ctx, db.ForkUpdateHostPackageStateParams{
+			ID: hostID, Broken: *payload.PackageStateBroken, Detail: detail,
+		}); err != nil {
+			return nil, fmt.Errorf("ForkUpdateHostPackageState: %w", err)
+		}
+	}
+	// Fork: last boot instant. Missing or implausible values leave the stored
+	// one alone, so an old agent or a host with a broken clock cannot erase it.
+	if bootTime, ok := plausibleBootTime(payload.BootTime, time.Now()); ok {
+		if err := q.ForkUpdateHostBootTime(ctx, db.ForkUpdateHostBootTimeParams{
+			ID: hostID, BootTime: bootTime,
+		}); err != nil {
+			return nil, fmt.Errorf("ForkUpdateHostBootTime: %w", err)
+		}
+	} else if payload.BootTime != nil {
+		slog.Warn("ignoring implausible boot time from agent", "host_id", hostID, "boot_time", payload.BootTime.UTC())
 	}
 
 	if err := q.DeleteHostPackagesByHostID(ctx, hostID); err != nil {

@@ -1,8 +1,10 @@
 module github.com/PatchMon/PatchMon/server-source-code
 
-go 1.26.2
+go 1.26.6
 
 require (
+	codeberg.org/go-pdf/fpdf v0.12.0
+	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -19,6 +21,7 @@ require (
 	github.com/swaggo/http-swagger v1.3.4
 	github.com/wwt/guac v1.3.2
 	golang.org/x/crypto v0.50.0
+	golang.org/x/image v0.40.0
 	golang.org/x/oauth2 v0.36.0
 )
 
@@ -48,6 +51,7 @@ require (
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/swaggo/files v1.0.1 // indirect
 	github.com/swaggo/swag v1.16.6 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.opentelemetry.io/otel/metric v1.39.0 // indirect
 	go.opentelemetry.io/otel/trace v1.39.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
@@ -56,7 +60,7 @@ require (
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
-	golang.org/x/text v0.36.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect

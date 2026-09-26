@@ -173,6 +173,11 @@ type ProcessedScan struct {
 // SubmitScan processes and stores scan results from an agent.
 // All DB writes are wrapped in a transaction to prevent partial/orphaned data.
 func (s *ComplianceStore) SubmitScan(ctx context.Context, hostID string, openscapEnabled, dockerBenchEnabled bool, scans []SubmittedScan) ([]ProcessedScan, error) {
+	// Strip NUL before anything touches a query parameter. The handler has
+	// already run the canonical compliance-hash check by this point, so
+	// cleaning here cannot cause a hash mismatch.
+	sanitizeComplianceScans(scans)
+
 	d := s.db.DB(ctx)
 
 	tx, err := d.BeginLong(ctx)
@@ -667,6 +672,27 @@ func (s *ComplianceStore) GetTrends(ctx context.Context, hostID string, days int
 	return d.Queries.GetComplianceScansForTrends(ctx, db.GetComplianceScansForTrendsParams{
 		HostID:      hostID,
 		CompletedAt: pgtime.From(since),
+	})
+}
+
+// DeleteRunningScans removes all "running" placeholder scans for a host.
+// Used when the scan command could not be delivered to the agent - the
+// placeholders must not linger for a scan that never started.
+func (s *ComplianceStore) DeleteRunningScans(ctx context.Context, hostID string) error {
+	d := s.db.DB(ctx)
+	return d.Queries.DeleteRunningComplianceScansByHost(ctx, hostID)
+}
+
+// FailRunningScans marks all running scans for a host as failed. Used when
+// the agent reports a terminal scan failure/cancel over its WebSocket before
+// any results were produced (e.g. OpenSCAP unavailable on the host) - without
+// this the "running" placeholder rows linger until the nightly stalled-scan
+// cleanup.
+func (s *ComplianceStore) FailRunningScans(ctx context.Context, hostID, errorMessage string) error {
+	d := s.db.DB(ctx)
+	return d.Queries.FailRunningComplianceScansByHost(ctx, db.FailRunningComplianceScansByHostParams{
+		HostID:       hostID,
+		ErrorMessage: &errorMessage,
 	})
 }
 

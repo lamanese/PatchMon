@@ -1,5 +1,7 @@
 package models
 
+import "time"
+
 // Package represents a software package
 type Package struct {
 	Name             string `json:"name"`
@@ -32,10 +34,11 @@ type Repository struct {
 
 // SystemInfo represents system information
 type SystemInfo struct {
-	KernelVersion string    `json:"kernelVersion"`
-	SELinuxStatus string    `json:"selinuxStatus"`
-	SystemUptime  string    `json:"systemUptime"`
-	LoadAverage   []float64 `json:"loadAverage"`
+	KernelVersion string     `json:"kernelVersion"`
+	SELinuxStatus string     `json:"selinuxStatus"`
+	SystemUptime  string     `json:"systemUptime"`
+	BootTime      *time.Time `json:"bootTime,omitempty"`
+	LoadAverage   []float64  `json:"loadAverage"`
 }
 
 // HardwareInfo represents hardware information
@@ -96,6 +99,7 @@ type ReportPayload struct {
 	InstalledKernelVersion string             `json:"installedKernelVersion,omitempty"`
 	SELinuxStatus          string             `json:"selinuxStatus"`
 	SystemUptime           string             `json:"systemUptime"`
+	BootTime               *time.Time         `json:"bootTime,omitempty"`
 	LoadAverage            []float64          `json:"loadAverage"`
 	CPUModel               string             `json:"cpuModel"`
 	CPUCores               int                `json:"cpuCores"`
@@ -109,6 +113,9 @@ type ReportPayload struct {
 	NeedsReboot            bool               `json:"needsReboot"`
 	RebootReason           string             `json:"rebootReason,omitempty"`
 	PackageManager         string             `json:"packageManager,omitempty"`
+	// Fork: set only on dpkg hosts where the state could be determined.
+	PackageStateBroken *bool  `json:"packageStateBroken,omitempty"`
+	PackageStateDetail string `json:"packageStateDetail,omitempty"`
 }
 
 // PingResponse represents server ping response
@@ -270,9 +277,10 @@ type Config struct {
 	LogFile                   string                 `yaml:"log_file" mapstructure:"log_file"`
 	LogLevel                  string                 `yaml:"log_level" mapstructure:"log_level"`
 	SkipSSLVerify             bool                   `yaml:"skip_ssl_verify" mapstructure:"skip_ssl_verify"`
-	UpdateInterval            int                    `yaml:"update_interval" mapstructure:"update_interval"`                             // Interval in minutes
-	ReportOffset              int                    `yaml:"report_offset" mapstructure:"report_offset"`                                 // Offset in seconds
-	PackageCacheRefreshMode   string                 `yaml:"package_cache_refresh_mode" mapstructure:"package_cache_refresh_mode"`       // always, if_stale, never
-	PackageCacheRefreshMaxAge int                    `yaml:"package_cache_refresh_max_age" mapstructure:"package_cache_refresh_max_age"` // minutes
-	Integrations              map[string]interface{} `yaml:"integrations" mapstructure:"integrations"`                                   // Supports bool for simple integrations, string for compliance mode
+	AllowRebootInsecure       bool                   `yaml:"allow_reboot_insecure_transport" mapstructure:"allow_reboot_insecure_transport"` // Opt-in: execute remote reboots over plain ws:// or with skip_ssl_verify (lab environments)
+	UpdateInterval            int                    `yaml:"update_interval" mapstructure:"update_interval"`                                 // Interval in minutes
+	ReportOffset              int                    `yaml:"report_offset" mapstructure:"report_offset"`                                     // Offset in seconds
+	PackageCacheRefreshMode   string                 `yaml:"package_cache_refresh_mode" mapstructure:"package_cache_refresh_mode"`           // always, if_stale, never
+	PackageCacheRefreshMaxAge int                    `yaml:"package_cache_refresh_max_age" mapstructure:"package_cache_refresh_max_age"`     // minutes
+	Integrations              map[string]interface{} `yaml:"integrations" mapstructure:"integrations"`                                       // Supports bool for simple integrations, string for compliance mode
 }

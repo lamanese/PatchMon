@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { Link } from "react-router-dom";
+import { PRODUCT_NAME_SHORT } from "../../constants/branding";
 import api, { dashboardAPI, formatDate, settingsAPI } from "../../utils/api";
 
 // Checkmk CSV export: format per https://docs.checkmk.com/latest/en/hosts_setup.html#import
@@ -857,7 +858,7 @@ const Integrations = () => {
 										Proxmox hosts.
 									</p>
 									<a
-										href="https://patchmon.net/docs/patchmon-api-integrations-guide#proxmox-lxc-auto-enrollment-guide"
+										href="https://github.com/lamanese/PatMan/blob/feat/remote-reboot/docs/patchmon-api-integrations-guide.md#proxmox-lxc-auto-enrollment-guide"
 										target="_blank"
 										rel="noopener noreferrer"
 										className="inline-flex items-center gap-2 px-3 py-2 bg-primary-600 hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600 text-white rounded-lg text-sm transition-colors"
@@ -1066,7 +1067,7 @@ const Integrations = () => {
 										infrastructure.
 									</p>
 									<a
-										href="https://patchmon.net/docs/patchmon-api-integrations-guide#proxmox-lxc-auto-enrollment-guide"
+										href="https://github.com/lamanese/PatMan/blob/feat/remote-reboot/docs/patchmon-api-integrations-guide.md#proxmox-lxc-auto-enrollment-guide"
 										target="_blank"
 										rel="noopener noreferrer"
 										className="inline-flex items-center gap-2 px-3 py-2 bg-primary-600 hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600 text-white rounded-lg text-sm transition-colors"
@@ -1261,12 +1262,12 @@ const Integrations = () => {
 										</h4>
 									</div>
 									<p className="text-sm text-secondary-600 dark:text-white mb-3">
-										Programmatic access to PatchMon data with granular
-										scope-based permissions.
+										Programmatic access to {PRODUCT_NAME_SHORT} data with
+										granular scope-based permissions.
 									</p>
 									<div className="flex flex-wrap gap-2">
 										<a
-											href="https://patchmon.net/docs/patchmon-api-integrations-guide#integration-api-documentation"
+											href="https://github.com/lamanese/PatMan/blob/feat/remote-reboot/docs/patchmon-api-integrations-guide.md#integration-api-documentation"
 											target="_blank"
 											rel="noopener noreferrer"
 											className="inline-flex items-center gap-2 px-3 py-2 bg-primary-600 hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600 text-white rounded-lg text-sm transition-colors"
@@ -1303,8 +1304,8 @@ const Integrations = () => {
 											GetHomepage Widget Integration
 										</h3>
 										<p className="text-xs md:text-sm text-secondary-600 dark:text-white">
-											Create API keys to display PatchMon statistics in your
-											GetHomepage dashboard
+											Create API keys to display {PRODUCT_NAME_SHORT} statistics
+											in your GetHomepage dashboard
 										</p>
 									</div>
 								</div>
@@ -1440,7 +1441,7 @@ const Integrations = () => {
 										How to Use GetHomepage Integration
 									</h3>
 									<a
-										href="https://patchmon.net/docs/patchmon-api-integrations-guide#gethomepage-dashboard-card"
+										href="https://github.com/lamanese/PatMan/blob/feat/remote-reboot/docs/patchmon-api-integrations-guide.md#gethomepage-dashboard-card"
 										target="_blank"
 										rel="noopener noreferrer"
 										className="px-4 py-2 bg-primary-600 hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600 text-white rounded-lg flex items-center gap-2 transition-colors w-full sm:w-auto justify-center sm:justify-start"
@@ -1701,7 +1702,7 @@ const Integrations = () => {
 
 							<div className="bg-secondary-50 dark:bg-secondary-800/50 rounded-lg border border-secondary-200 dark:border-secondary-700 p-4 md:p-6">
 								<p className="text-sm text-secondary-600 dark:text-white mb-4">
-									Export your PatchMon host list in the{" "}
+									Export your {PRODUCT_NAME_SHORT} host list in the{" "}
 									<a
 										href="https://docs.checkmk.com/latest/en/hosts_setup.html#import"
 										target="_blank"

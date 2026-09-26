@@ -17,6 +17,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { useSettings } from "../../contexts/SettingsContext";
 import {
 	adminUsersAPI,
+	formatDate,
 	formatDateOnly,
 	permissionsAPI,
 	settingsAPI,
@@ -28,7 +29,10 @@ const UsersTab = () => {
 	const [editingUser, setEditingUser] = useState(null);
 	const [resetPasswordUser, setResetPasswordUser] = useState(null);
 	const queryClient = useQueryClient();
-	const { user: currentUser } = useAuth();
+	const { user: currentUser, canManageUsers, canManageSettings } = useAuth();
+	// The server enforces both permissions; the UI only offers what will work.
+	const canEditUsers = canManageUsers();
+	const canEditSettings = canManageSettings();
 	const { settings: publicSettings } = useSettings();
 	const isAdminMode = publicSettings?.admin_mode;
 	const signupEnabledId = useId();
@@ -86,7 +90,12 @@ const UsersTab = () => {
 	const { data: settings, isLoading: settingsLoading } = useQuery({
 		queryKey: ["settings"],
 		queryFn: () => settingsAPI.get().then((res) => res.data),
+		enabled: canEditSettings,
 	});
+	// PM_DISABLE_SIGNUP on the server hard-disables self-registration; the
+	// toggle is hidden because the server strips the field anyway.
+	// Fail closed: without loaded settings the lock state is unknown.
+	const isSignupLocked = !settings || settings.signup_locked === true;
 
 	// Update signup form data when settings are loaded
 	useEffect(() => {
@@ -306,60 +315,63 @@ const UsersTab = () => {
 											</span>
 											<span className="text-secondary-900 dark:text-white">
 												{user.last_login
-													? formatDateOnly(user.last_login)
+													? formatDate(user.last_login)
 													: "Never"}
 											</span>
 										</div>
 									</div>
 
 									{/* Actions */}
-									<div className="flex items-center justify-end gap-3 pt-2 border-t border-secondary-200 dark:border-secondary-600">
-										<button
-											type="button"
-											onClick={() => handleEditUser(user)}
-											className="text-secondary-400 hover:text-secondary-600 dark:text-white dark:hover:text-secondary-300 inline-flex items-center gap-1 text-sm"
-											title="Edit user"
-										>
-											<Edit className="h-4 w-4" />
-											Edit
-										</button>
-										<button
-											type="button"
-											onClick={() => handleResetPassword(user)}
-											className="text-blue-400 hover:text-blue-600 dark:text-blue-500 dark:hover:text-blue-300 disabled:text-gray-300 disabled:cursor-not-allowed inline-flex items-center gap-1 text-sm"
-											title={
-												!user.is_active
-													? "Cannot reset password for inactive user"
-													: "Reset password"
-											}
-											disabled={!user.is_active}
-										>
-											<Key className="h-4 w-4" />
-											Reset
-										</button>
-										<button
-											type="button"
-											onClick={() => handleDeleteUser(user.id, user.username)}
-											className="text-danger-400 hover:text-danger-600 dark:text-danger-500 dark:hover:text-danger-400 disabled:text-gray-300 disabled:cursor-not-allowed inline-flex items-center gap-1 text-sm"
-											title={
-												user.id === currentUser?.id
-													? "Cannot delete your own account"
-													: user.role === "admin" &&
-															users.filter((u) => u.role === "admin").length ===
-																1
-														? "Cannot delete the last admin user"
-														: "Delete user"
-											}
-											disabled={
-												user.id === currentUser?.id ||
-												(user.role === "admin" &&
-													users.filter((u) => u.role === "admin").length === 1)
-											}
-										>
-											<Trash2 className="h-4 w-4" />
-											Delete
-										</button>
-									</div>
+									{canEditUsers && (
+										<div className="flex items-center justify-end gap-3 pt-2 border-t border-secondary-200 dark:border-secondary-600">
+											<button
+												type="button"
+												onClick={() => handleEditUser(user)}
+												className="text-secondary-400 hover:text-secondary-600 dark:text-white dark:hover:text-secondary-300 inline-flex items-center gap-1 text-sm"
+												title="Edit user"
+											>
+												<Edit className="h-4 w-4" />
+												Edit
+											</button>
+											<button
+												type="button"
+												onClick={() => handleResetPassword(user)}
+												className="text-blue-400 hover:text-blue-600 dark:text-blue-500 dark:hover:text-blue-300 disabled:text-gray-300 disabled:cursor-not-allowed inline-flex items-center gap-1 text-sm"
+												title={
+													!user.is_active
+														? "Cannot reset password for inactive user"
+														: "Reset password"
+												}
+												disabled={!user.is_active}
+											>
+												<Key className="h-4 w-4" />
+												Reset
+											</button>
+											<button
+												type="button"
+												onClick={() => handleDeleteUser(user.id, user.username)}
+												className="text-danger-400 hover:text-danger-600 dark:text-danger-500 dark:hover:text-danger-400 disabled:text-gray-300 disabled:cursor-not-allowed inline-flex items-center gap-1 text-sm"
+												title={
+													user.id === currentUser?.id
+														? "Cannot delete your own account"
+														: user.role === "admin" &&
+																users.filter((u) => u.role === "admin")
+																	.length === 1
+															? "Cannot delete the last admin user"
+															: "Delete user"
+												}
+												disabled={
+													user.id === currentUser?.id ||
+													(user.role === "admin" &&
+														users.filter((u) => u.role === "admin").length ===
+															1)
+												}
+											>
+												<Trash2 className="h-4 w-4" />
+												Delete
+											</button>
+										</div>
+									)}
 								</div>
 							))}
 						</div>
@@ -475,59 +487,61 @@ const UsersTab = () => {
 											</td>
 											<td className="px-6 py-4 whitespace-nowrap text-sm text-secondary-500 dark:text-white">
 												{user.last_login ? (
-													formatDateOnly(user.last_login)
+													formatDate(user.last_login)
 												) : (
 													<span className="text-secondary-400">Never</span>
 												)}
 											</td>
 											<td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-												<div className="flex items-center justify-end space-x-2">
-													<button
-														type="button"
-														onClick={() => handleEditUser(user)}
-														className="text-secondary-400 hover:text-secondary-600 dark:text-white dark:hover:text-secondary-300"
-														title="Edit user"
-													>
-														<Edit className="h-4 w-4" />
-													</button>
-													<button
-														type="button"
-														onClick={() => handleResetPassword(user)}
-														className="text-blue-400 hover:text-blue-600 dark:text-blue-500 dark:hover:text-blue-300 disabled:text-gray-300 disabled:cursor-not-allowed"
-														title={
-															!user.is_active
-																? "Cannot reset password for inactive user"
-																: "Reset password"
-														}
-														disabled={!user.is_active}
-													>
-														<Key className="h-4 w-4" />
-													</button>
-													<button
-														type="button"
-														onClick={() =>
-															handleDeleteUser(user.id, user.username)
-														}
-														className="text-danger-400 hover:text-danger-600 dark:text-danger-500 dark:hover:text-danger-400 disabled:text-gray-300 disabled:cursor-not-allowed"
-														title={
-															user.id === currentUser?.id
-																? "Cannot delete your own account"
-																: user.role === "admin" &&
-																		users.filter((u) => u.role === "admin")
-																			.length === 1
-																	? "Cannot delete the last admin user"
-																	: "Delete user"
-														}
-														disabled={
-															user.id === currentUser?.id ||
-															(user.role === "admin" &&
-																users.filter((u) => u.role === "admin")
-																	.length === 1)
-														}
-													>
-														<Trash2 className="h-4 w-4" />
-													</button>
-												</div>
+												{canEditUsers && (
+													<div className="flex items-center justify-end space-x-2">
+														<button
+															type="button"
+															onClick={() => handleEditUser(user)}
+															className="text-secondary-400 hover:text-secondary-600 dark:text-white dark:hover:text-secondary-300"
+															title="Edit user"
+														>
+															<Edit className="h-4 w-4" />
+														</button>
+														<button
+															type="button"
+															onClick={() => handleResetPassword(user)}
+															className="text-blue-400 hover:text-blue-600 dark:text-blue-500 dark:hover:text-blue-300 disabled:text-gray-300 disabled:cursor-not-allowed"
+															title={
+																!user.is_active
+																	? "Cannot reset password for inactive user"
+																	: "Reset password"
+															}
+															disabled={!user.is_active}
+														>
+															<Key className="h-4 w-4" />
+														</button>
+														<button
+															type="button"
+															onClick={() =>
+																handleDeleteUser(user.id, user.username)
+															}
+															className="text-danger-400 hover:text-danger-600 dark:text-danger-500 dark:hover:text-danger-400 disabled:text-gray-300 disabled:cursor-not-allowed"
+															title={
+																user.id === currentUser?.id
+																	? "Cannot delete your own account"
+																	: user.role === "admin" &&
+																			users.filter((u) => u.role === "admin")
+																				.length === 1
+																		? "Cannot delete the last admin user"
+																		: "Delete user"
+															}
+															disabled={
+																user.id === currentUser?.id ||
+																(user.role === "admin" &&
+																	users.filter((u) => u.role === "admin")
+																		.length === 1)
+															}
+														>
+															<Trash2 className="h-4 w-4" />
+														</button>
+													</div>
+												)}
 											</td>
 										</tr>
 									))}
@@ -562,7 +576,7 @@ const UsersTab = () => {
 					user={editingUser}
 					isOpen={!!editingUser}
 					onClose={() => setEditingUser(null)}
-					onUpdateUser={updateUserMutation.mutate}
+					onUpdateUser={updateUserMutation.mutateAsync}
 					isLoading={updateUserMutation.isPending}
 					roles={roles}
 				/>
@@ -574,7 +588,7 @@ const UsersTab = () => {
 					user={resetPasswordUser}
 					isOpen={!!resetPasswordUser}
 					onClose={() => setResetPasswordUser(null)}
-					onPasswordReset={resetPasswordMutation.mutate}
+					onPasswordReset={resetPasswordMutation.mutateAsync}
 					isLoading={resetPasswordMutation.isPending}
 				/>
 			)}
@@ -599,140 +613,150 @@ const UsersTab = () => {
 				</div>
 			)}
 
-			{/* User Registration Settings - hidden in managed/multi-context mode or when OIDC sync roles is active */}
-			{!isAdminMode && !isOIDCSyncRoles && (
-				<div className="bg-white dark:bg-secondary-800 shadow overflow-hidden sm:rounded-lg">
-					<div className="px-6 py-4 border-b border-secondary-200 dark:border-secondary-600">
-						<h3 className="text-lg font-medium text-secondary-900 dark:text-white">
-							User Registration Settings
-						</h3>
-					</div>
-					<div className="px-6 py-4 space-y-4">
-						{/* User Signup Setting */}
-						<div>
-							<label className="block text-sm font-medium text-secondary-700 dark:text-secondary-200 mb-2">
-								<div className="flex items-center gap-2">
-									<input
-										id={signupEnabledId}
-										type="checkbox"
-										checked={signupFormData.signupEnabled}
-										onChange={(e) =>
-											handleSignupInputChange("signupEnabled", e.target.checked)
-										}
-										className="rounded border-secondary-300 text-primary-600 shadow-sm focus:border-primary-300 focus:ring focus:ring-primary-200 focus:ring-opacity-50"
-										disabled={settingsLoading}
-									/>
-									<label htmlFor={signupEnabledId}>
-										Enable User Self-Registration
-									</label>
-								</div>
-							</label>
-
-							{/* Default User Role Dropdown */}
-							{signupFormData.signupEnabled && (
-								<div className="mt-3 ml-6">
-									<label
-										htmlFor={defaultRoleId}
-										className="block text-sm font-medium text-secondary-700 dark:text-secondary-200 mb-2"
-									>
-										Default Role for New Users
-									</label>
-									<select
-										id={defaultRoleId}
-										value={signupFormData.defaultUserRole}
-										onChange={(e) =>
-											handleSignupInputChange("defaultUserRole", e.target.value)
-										}
-										className="w-full max-w-xs border-secondary-300 dark:border-secondary-600 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 bg-white dark:bg-secondary-700 text-secondary-900 dark:text-white"
-										disabled={rolesLoading}
-									>
-										{rolesLoading ? (
-											<option>Loading roles...</option>
-										) : roles && Array.isArray(roles) ? (
-											roles.map((role) => (
-												<option key={role.role} value={role.role}>
-													{role.role.charAt(0).toUpperCase() +
-														role.role.slice(1)}
-												</option>
-											))
-										) : (
-											<option value="user">User</option>
-										)}
-									</select>
-									<p className="mt-1 text-xs text-secondary-500 dark:text-white">
-										New users will be assigned this role when they register.
-									</p>
-								</div>
-							)}
-
-							<p className="mt-1 text-sm text-secondary-500 dark:text-white">
-								When enabled, users can create their own accounts through the
-								signup page. When disabled, only administrators can create user
-								accounts.
-							</p>
+			{/* User Registration Settings - hidden in managed/multi-context mode,
+			    when OIDC sync roles is active, or when PM_DISABLE_SIGNUP locks it */}
+			{canEditSettings &&
+				!isAdminMode &&
+				!isOIDCSyncRoles &&
+				!isSignupLocked && (
+					<div className="bg-white dark:bg-secondary-800 shadow overflow-hidden sm:rounded-lg">
+						<div className="px-6 py-4 border-b border-secondary-200 dark:border-secondary-600">
+							<h3 className="text-lg font-medium text-secondary-900 dark:text-white">
+								User Registration Settings
+							</h3>
 						</div>
+						<div className="px-6 py-4 space-y-4">
+							{/* User Signup Setting */}
+							<div>
+								<label className="block text-sm font-medium text-secondary-700 dark:text-secondary-200 mb-2">
+									<div className="flex items-center gap-2">
+										<input
+											id={signupEnabledId}
+											type="checkbox"
+											checked={signupFormData.signupEnabled}
+											onChange={(e) =>
+												handleSignupInputChange(
+													"signupEnabled",
+													e.target.checked,
+												)
+											}
+											className="rounded border-secondary-300 text-primary-600 shadow-sm focus:border-primary-300 focus:ring focus:ring-primary-200 focus:ring-opacity-50"
+											disabled={settingsLoading}
+										/>
+										<label htmlFor={signupEnabledId}>
+											Enable User Self-Registration
+										</label>
+									</div>
+								</label>
 
-						{/* Security Notice */}
-						<div className="bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-md p-4">
-							<div className="flex">
-								<Shield className="h-5 w-5 text-blue-400 dark:text-blue-300" />
-								<div className="ml-3">
-									<h3 className="text-sm font-medium text-blue-800 dark:text-blue-200">
-										Security Notice
-									</h3>
-									<p className="mt-1 text-sm text-blue-700 dark:text-blue-300">
-										When enabling user self-registration, exercise caution on
-										internal networks. Consider restricting access to trusted
-										networks only and ensure proper role assignments to prevent
-										unauthorized access to sensitive systems.
-									</p>
-								</div>
-							</div>
-						</div>
-
-						{/* Save Button */}
-						<div className="flex justify-end">
-							<button
-								type="button"
-								onClick={handleSignupSave}
-								disabled={
-									!isSignupDirty || updateSignupSettingsMutation.isPending
-								}
-								className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white ${
-									!isSignupDirty || updateSignupSettingsMutation.isPending
-										? "bg-secondary-400 cursor-not-allowed"
-										: "bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-								}`}
-							>
-								{updateSignupSettingsMutation.isPending ? (
-									<>
-										<div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-										Saving...
-									</>
-								) : (
-									<>
-										<Save className="h-4 w-4 mr-2" />
-										Save Settings
-									</>
+								{/* Default User Role Dropdown */}
+								{signupFormData.signupEnabled && (
+									<div className="mt-3 ml-6">
+										<label
+											htmlFor={defaultRoleId}
+											className="block text-sm font-medium text-secondary-700 dark:text-secondary-200 mb-2"
+										>
+											Default Role for New Users
+										</label>
+										<select
+											id={defaultRoleId}
+											value={signupFormData.defaultUserRole}
+											onChange={(e) =>
+												handleSignupInputChange(
+													"defaultUserRole",
+													e.target.value,
+												)
+											}
+											className="w-full max-w-xs border-secondary-300 dark:border-secondary-600 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 bg-white dark:bg-secondary-700 text-secondary-900 dark:text-white"
+											disabled={rolesLoading}
+										>
+											{rolesLoading ? (
+												<option>Loading roles...</option>
+											) : roles && Array.isArray(roles) ? (
+												roles.map((role) => (
+													<option key={role.role} value={role.role}>
+														{role.role.charAt(0).toUpperCase() +
+															role.role.slice(1)}
+													</option>
+												))
+											) : (
+												<option value="user">User</option>
+											)}
+										</select>
+										<p className="mt-1 text-xs text-secondary-500 dark:text-white">
+											New users will be assigned this role when they register.
+										</p>
+									</div>
 								)}
-							</button>
-						</div>
 
-						{updateSignupSettingsMutation.isSuccess && (
-							<div className="bg-green-50 dark:bg-green-900 border border-green-200 dark:border-green-700 rounded-md p-4">
+								<p className="mt-1 text-sm text-secondary-500 dark:text-white">
+									When enabled, users can create their own accounts through the
+									signup page. When disabled, only administrators can create
+									user accounts.
+								</p>
+							</div>
+
+							{/* Security Notice */}
+							<div className="bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-md p-4">
 								<div className="flex">
-									<CheckCircle className="h-5 w-5 text-green-400 dark:text-green-300" />
+									<Shield className="h-5 w-5 text-blue-400 dark:text-blue-300" />
 									<div className="ml-3">
-										<p className="text-sm text-green-700 dark:text-green-300">
-											Settings saved successfully!
+										<h3 className="text-sm font-medium text-blue-800 dark:text-blue-200">
+											Security Notice
+										</h3>
+										<p className="mt-1 text-sm text-blue-700 dark:text-blue-300">
+											When enabling user self-registration, exercise caution on
+											internal networks. Consider restricting access to trusted
+											networks only and ensure proper role assignments to
+											prevent unauthorized access to sensitive systems.
 										</p>
 									</div>
 								</div>
 							</div>
-						)}
+
+							{/* Save Button */}
+							<div className="flex justify-end">
+								<button
+									type="button"
+									onClick={handleSignupSave}
+									disabled={
+										!isSignupDirty || updateSignupSettingsMutation.isPending
+									}
+									className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white ${
+										!isSignupDirty || updateSignupSettingsMutation.isPending
+											? "bg-secondary-400 cursor-not-allowed"
+											: "bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+									}`}
+								>
+									{updateSignupSettingsMutation.isPending ? (
+										<>
+											<div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+											Saving...
+										</>
+									) : (
+										<>
+											<Save className="h-4 w-4 mr-2" />
+											Save Settings
+										</>
+									)}
+								</button>
+							</div>
+
+							{updateSignupSettingsMutation.isSuccess && (
+								<div className="bg-green-50 dark:bg-green-900 border border-green-200 dark:border-green-700 rounded-md p-4">
+									<div className="flex">
+										<CheckCircle className="h-5 w-5 text-green-400 dark:text-green-300" />
+										<div className="ml-3">
+											<p className="text-sm text-green-700 dark:text-green-300">
+												Settings saved successfully!
+											</p>
+										</div>
+									</div>
+								</div>
+							)}
+						</div>
 					</div>
-				</div>
-			)}
+				)}
 		</div>
 	);
 };

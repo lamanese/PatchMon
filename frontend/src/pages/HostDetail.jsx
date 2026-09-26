@@ -43,6 +43,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import InlineEdit from "../components/InlineEdit";
 import InlineMultiGroupEdit from "../components/InlineMultiGroupEdit";
 import { PackageListDisplay } from "../components/PackageListDisplay";
+import { CopyCommandButton } from "../components/PatchRunHelp";
 import { PatchRunStatusBadge } from "../components/PatchRunStatusBadge";
 import PatchWizard from "../components/PatchWizard";
 import RdpViewer from "../components/RdpViewer";
@@ -96,7 +97,10 @@ const HostDetail = () => {
 	const location = useLocation();
 	const queryClient = useQueryClient();
 	const toast = useToast();
-	const { canManageHosts, hasModule } = useAuth();
+	const { canManageHosts, canUseRemoteAccess, hasModule } = useAuth();
+	// Terminal/RDP are only offered with can_use_remote_access; the server
+	// enforces the same permission on the ticket endpoints.
+	const remoteAccessAllowed = canUseRemoteAccess();
 	const [showCredentialsModal, setShowCredentialsModal] = useState(false);
 
 	// Get plaintext API key from navigation state (only available immediately after host creation)
@@ -315,6 +319,15 @@ const HostDetail = () => {
 	const isWindowsHost = (host?.os_type || host?.expected_platform || "")
 		.toLowerCase()
 		.includes("windows");
+
+	// fork: PM_IGNORE_DEFINITION_UPDATES - show a hint under the update counters
+	// when this host has pending Windows Defender definition updates that the
+	// server is not counting as outstanding.
+	const hasUncountedDefinitionUpdates =
+		settings?.ignore_definition_updates === true &&
+		(host?.host_packages || []).some(
+			(pkg) => pkg.is_definition_update && pkg.needs_update,
+		);
 	const isFreeBSDHost =
 		(host?.package_manager || "").toLowerCase() === "pkg" ||
 		(host?.os_type || host?.expected_platform || "")
@@ -1245,6 +1258,15 @@ const HostDetail = () => {
 									Reboot Required
 								</span>
 							)}
+							{host.pkg_broken && (
+								<span
+									className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+									title={`Affected packages: ${host.pkg_broken_detail || "unknown"}. An earlier package installation was interrupted. An administrator has to run "sudo dpkg --configure -a" and "sudo apt-get -f install" in a terminal on the host. PatchMon does not repair this.`}
+								>
+									<AlertTriangle className="h-3 w-3" />
+									Package installation incomplete
+								</span>
+							)}
 							{host.awaiting_post_patch_report_run_id && (
 								<Link
 									to={`/patching/runs/${host.awaiting_post_patch_report_run_id}`}
@@ -1256,6 +1278,34 @@ const HostDetail = () => {
 								</Link>
 							)}
 						</div>
+						{host.pkg_broken && (
+							<div className="max-w-2xl rounded-md border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/30 px-3 py-2 text-xs text-red-900 dark:text-red-100">
+								<p className="font-medium">
+									An earlier package installation on this host was interrupted
+									{host.pkg_broken_detail ? ` (${host.pkg_broken_detail})` : ""}
+									. Patch runs will fail until an administrator finishes it in a
+									terminal on the host. PatchMon does not repair this.
+								</p>
+								<div className="mt-1 flex items-start gap-2">
+									<CopyCommandButton
+										text={
+											"sudo dpkg --configure -a\nsudo apt-get -f install\nsudo dpkg --audit"
+										}
+										className="flex-shrink-0"
+									/>
+									<pre className="select-all whitespace-pre-wrap font-mono">
+										{
+											"sudo dpkg --configure -a\nsudo apt-get -f install\nsudo dpkg --audit"
+										}
+									</pre>
+								</div>
+								<p className="mt-1">
+									If dpkg asks about a modified configuration file, keeping the
+									local version (N, the default) leaves the current settings
+									untouched. The notice disappears with the next agent report.
+								</p>
+							</div>
+						)}
 						{/* Info row with uptime and last updated */}
 						<div className="flex items-center gap-4 text-sm text-secondary-600 dark:text-white">
 							{host.system_uptime && (
@@ -1263,6 +1313,12 @@ const HostDetail = () => {
 									<Clock className="h-3.5 w-3.5" />
 									<span className="text-xs font-medium">Uptime:</span>
 									<span className="text-xs">{host.system_uptime}</span>
+								</div>
+							)}
+							{host.boot_time && (
+								<div className="flex items-center gap-1">
+									<span className="text-xs font-medium">Last boot:</span>
+									<span className="text-xs">{formatDate(host.boot_time)}</span>
 								</div>
 							)}
 							<div className="flex items-center gap-1">
@@ -1312,7 +1368,7 @@ const HostDetail = () => {
 							<span className="hidden sm:inline">Fetch Report</span>
 							<span className="sm:hidden">Fetch</span>
 						</button>
-						{canManageHosts() && !isWindowsHost && (
+						{canManageHosts() && (
 							<button
 								type="button"
 								onClick={() => setShowPatchConfirmModal(true)}
@@ -1451,6 +1507,12 @@ const HostDetail = () => {
 					</div>
 				</button>
 			</div>
+
+			{hasUncountedDefinitionUpdates && (
+				<p className="text-xs text-secondary-500 dark:text-white -mt-4 mb-6">
+					Definition updates are not counted (PM_IGNORE_DEFINITION_UPDATES)
+				</p>
+			)}
 
 			{/* Main Content - Full Width */}
 			<div className="flex-1 md:overflow-hidden">
@@ -1886,7 +1948,7 @@ const HostDetail = () => {
 											</div>
 										)}
 
-										{host.selinux_status && (
+										{host.selinux_status && !isWindowsHost && (
 											<div>
 												<p className="text-xs text-secondary-500 dark:text-white">
 													SELinux Status
@@ -1935,6 +1997,11 @@ const HostDetail = () => {
 												<p className="font-medium text-secondary-900 dark:text-white text-sm">
 													{host.system_uptime}
 												</p>
+												{host.boot_time && (
+													<p className="text-xs text-secondary-500 dark:text-white mt-1">
+														Last boot: {formatDate(host.boot_time)}
+													</p>
+												)}
 											</div>
 										)}
 
@@ -2633,21 +2700,23 @@ const HostDetail = () => {
 								)}
 							</button>
 						)}
-						<button
-							type="button"
-							onClick={() => handleTabChange("terminal")}
-							className={`px-4 py-2 text-sm font-medium inline-flex items-center gap-2 ${
-								activeTab === "terminal"
-									? "text-primary-600 dark:text-primary-400 border-b-2 border-primary-500"
-									: "text-secondary-500 dark:text-white hover:text-secondary-700 dark:hover:text-primary-400"
-							}`}
-						>
-							Terminal
-							{!hasModule("ssh_terminal") && (
-								<TierBadge tier={getRequiredTier("ssh_terminal")} />
-							)}
-						</button>
-						{isWindowsHost && (
+						{remoteAccessAllowed && (
+							<button
+								type="button"
+								onClick={() => handleTabChange("terminal")}
+								className={`px-4 py-2 text-sm font-medium inline-flex items-center gap-2 ${
+									activeTab === "terminal"
+										? "text-primary-600 dark:text-primary-400 border-b-2 border-primary-500"
+										: "text-secondary-500 dark:text-white hover:text-secondary-700 dark:hover:text-primary-400"
+								}`}
+							>
+								Terminal
+								{!hasModule("ssh_terminal") && (
+									<TierBadge tier={getRequiredTier("ssh_terminal")} />
+								)}
+							</button>
+						)}
+						{remoteAccessAllowed && isWindowsHost && (
 							<button
 								type="button"
 								onClick={() => handleTabChange("rdp")}
@@ -3135,7 +3204,7 @@ const HostDetail = () => {
 												</div>
 											)}
 
-											{host.selinux_status && (
+											{host.selinux_status && !isWindowsHost && (
 												<div>
 													<p className="text-xs text-secondary-500 dark:text-white">
 														SELinux Status
@@ -3201,6 +3270,11 @@ const HostDetail = () => {
 													<p className="font-medium text-secondary-900 dark:text-white text-sm">
 														{host.system_uptime}
 													</p>
+													{host.boot_time && (
+														<p className="text-xs text-secondary-500 dark:text-white mt-1">
+															Last boot: {formatDate(host.boot_time)}
+														</p>
+													)}
 												</div>
 											)}
 
@@ -3638,7 +3712,7 @@ const HostDetail = () => {
 						    isn't in the tenant's plan, render the upgrade content
 						    instead so the tab is discoverable rather than silently
 						    broken. Backend ticket endpoints still return 403. */}
-						{host && hasModule("ssh_terminal") && (
+						{host && remoteAccessAllowed && hasModule("ssh_terminal") && (
 							<div className={activeTab === "terminal" ? "" : "hidden"}>
 								<SshTerminal
 									host={host}
@@ -3653,11 +3727,14 @@ const HostDetail = () => {
 						)}
 
 						{/* RDP - Windows hosts only. Gated by the rdp module (Max tier). */}
-						{host && isWindowsHost && hasModule("rdp") && (
-							<div className={activeTab === "rdp" ? "" : "hidden"}>
-								<RdpViewer host={host} isOpen={activeTab === "rdp"} />
-							</div>
-						)}
+						{host &&
+							remoteAccessAllowed &&
+							isWindowsHost &&
+							hasModule("rdp") && (
+								<div className={activeTab === "rdp" ? "" : "hidden"}>
+									<RdpViewer host={host} isOpen={activeTab === "rdp"} />
+								</div>
+							)}
 						{activeTab === "rdp" && isWindowsHost && !hasModule("rdp") && (
 							<UpgradeRequiredContent module="rdp" variant="inline" />
 						)}
@@ -5593,7 +5670,16 @@ const HostDetail = () => {
 														<RefreshCw className="h-4 w-4" />
 														Refresh status
 													</button>
-													{complianceSetupStatus?.status?.status !== "ready" &&
+													{isWindowsHost && (
+														<span
+															className="text-xs text-secondary-500 dark:text-white"
+															title="The compliance scanner is OpenSCAP-based and requires a Debian-, RHEL- or SUSE-family Linux system"
+														>
+															Not available on Windows (OpenSCAP is Linux-only)
+														</span>
+													)}
+													{!isWindowsHost &&
+														complianceSetupStatus?.status?.status !== "ready" &&
 														complianceSetupStatus?.status?.status !==
 															"partial" &&
 														wsStatus?.connected &&
@@ -6072,6 +6158,7 @@ const HostDetail = () => {
 							id: hostId,
 							friendly_name: host?.friendly_name,
 							hostname: host?.hostname,
+							os_type: host?.os_type,
 						},
 					]}
 					onSuccess={handlePatchWizardSuccess}

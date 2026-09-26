@@ -124,6 +124,15 @@ func (d *DB) Health(ctx context.Context) error {
 	return d.pool.Ping(ctx)
 }
 
+// IgnoreDefinitionUpdates reports whether PM_IGNORE_DEFINITION_UPDATES is
+// enabled (fork feature: server-wide, so identical for the default pool and
+// every per-host pool since both are constructed from the same *config.Config).
+// Stores/handlers read this instead of re-reading the environment themselves.
+// fork: PM_IGNORE_DEFINITION_UPDATES
+func (d *DB) IgnoreDefinitionUpdates() bool {
+	return d.cfg != nil && d.cfg.IgnoreDefinitionUpdates
+}
+
 // Close closes the pool.
 func (d *DB) Close() {
 	d.pool.Close()

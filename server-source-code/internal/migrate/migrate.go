@@ -17,11 +17,11 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// Run applies all pending migrations using embedded SQL files.
+// runUpstream applies all pending upstream migrations using embedded SQL files.
 // Logs to the provided logger and always prints migration status to stdout.
 // Returns an error if migrations fail.
 // ErrNoChange is treated as success (already up to date).
-func Run(databaseURL string, log *slog.Logger) error {
+func runUpstream(databaseURL string, log *slog.Logger) error {
 	if databaseURL == "" {
 		return fmt.Errorf("DATABASE_URL is required for migrations")
 	}

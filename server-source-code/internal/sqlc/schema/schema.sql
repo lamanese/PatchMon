@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS role_permissions (
     can_manage_automation BOOLEAN NOT NULL DEFAULT false,
     can_use_remote_access BOOLEAN NOT NULL DEFAULT false,
     can_manage_billing BOOLEAN NOT NULL DEFAULT false,
+    can_reboot_hosts BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP(3) NOT NULL
 );
@@ -123,7 +124,10 @@ CREATE TABLE IF NOT EXISTS settings (
     agent_rate_limit_max INTEGER,
     password_rate_limit_window_ms INTEGER,
     password_rate_limit_max INTEGER,
-    auth_browser_session_cookies BOOLEAN
+    auth_browser_session_cookies BOOLEAN,
+    license_max_hosts INTEGER,
+    license_enforce BOOLEAN NOT NULL DEFAULT false,
+    license_package TEXT
 );
 
 -- host_groups
@@ -228,6 +232,10 @@ CREATE TABLE IF NOT EXISTS hosts (
     notes TEXT,
     needs_reboot BOOLEAN DEFAULT false,
     reboot_reason TEXT,
+    allow_reboot BOOLEAN NOT NULL DEFAULT false,
+    fork_pkg_broken BOOLEAN NOT NULL DEFAULT false,
+    fork_pkg_broken_detail TEXT,
+    fork_boot_time TIMESTAMPTZ,
     docker_enabled BOOLEAN NOT NULL DEFAULT false,
     compliance_enabled BOOLEAN NOT NULL DEFAULT false,
     compliance_on_demand_only BOOLEAN NOT NULL DEFAULT true,
@@ -773,7 +781,10 @@ CREATE TABLE IF NOT EXISTS scheduled_reports (
     next_run_at TIMESTAMP(3),
     last_run_at TIMESTAMP(3),
     created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    fork_email_recipients TEXT[],
+    fork_deliver BOOLEAN NOT NULL DEFAULT true,
+    fork_archive_keep INTEGER NOT NULL DEFAULT 24 CHECK (fork_archive_keep BETWEEN 1 AND 200)
 );
 
 -- scheduled_report_runs
@@ -786,3 +797,124 @@ CREATE TABLE IF NOT EXISTS scheduled_report_runs (
     summary_hash TEXT,
     created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- fork_report_archive
+CREATE TABLE fork_report_archive (
+    id                  TEXT PRIMARY KEY,
+    scheduled_report_id TEXT NOT NULL REFERENCES scheduled_reports(id) ON DELETE CASCADE,
+    run_key             TEXT NOT NULL UNIQUE,
+    trigger_kind        TEXT NOT NULL CHECK (trigger_kind IN ('scheduled', 'manual')),
+    slot_at             TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at         TIMESTAMPTZ,
+    status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'partial', 'failed')),
+    error_code          TEXT,
+    error_message       TEXT,
+    report_name         TEXT NOT NULL,
+    language            TEXT NOT NULL DEFAULT 'en',
+    period_from         TIMESTAMPTZ,
+    period_to           TIMESTAMPTZ,
+    group_ids           TEXT[] NOT NULL DEFAULT '{}',
+    group_names         TEXT[] NOT NULL DEFAULT '{}',
+    host_count          INTEGER NOT NULL DEFAULT 0,
+    customer_mode       BOOLEAN NOT NULL DEFAULT false,
+    smtp_destination_id TEXT,
+    mail_from           TEXT,
+    recipients          TEXT[] NOT NULL DEFAULT '{}',
+    subject             TEXT NOT NULL DEFAULT '',
+    html                TEXT,
+    csv                 TEXT,
+    pdf                 BYTEA,
+    pdf_size            INTEGER NOT NULL DEFAULT 0,
+    pdf_sha256          TEXT,
+    delivery_enabled    BOOLEAN NOT NULL DEFAULT true
+);
+CREATE INDEX fork_report_archive_report_created_idx
+    ON fork_report_archive (scheduled_report_id, created_at DESC);
+
+-- fork_report_deliveries
+CREATE TABLE fork_report_deliveries (
+    id               TEXT PRIMARY KEY,
+    archive_id       TEXT NOT NULL REFERENCES fork_report_archive(id) ON DELETE CASCADE,
+    destination_id   TEXT NOT NULL,
+    destination_name TEXT NOT NULL DEFAULT '',
+    channel          TEXT NOT NULL,
+    recipient        TEXT NOT NULL DEFAULT '',
+    status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
+    error_code       TEXT,
+    error_message    TEXT,
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    sent_at          TIMESTAMPTZ,
+    UNIQUE (archive_id, destination_id, recipient)
+);
+
+-- reboot_schedules
+CREATE TABLE IF NOT EXISTS reboot_schedules (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    host_group_id TEXT NOT NULL REFERENCES host_groups(id) ON DELETE CASCADE,
+    schedule_type TEXT NOT NULL,          -- 'once' | 'weekly'
+    run_at TIMESTAMP(3),                  -- for 'once'
+    weekday INTEGER,                      -- 0 (Sunday) - 6 for 'weekly'
+    time_of_day TEXT,                     -- 'HH:MM' for 'weekly'
+    timezone TEXT NOT NULL DEFAULT 'UTC',
+    only_if_required BOOLEAN NOT NULL DEFAULT true,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    last_run_at TIMESTAMP(3),
+    missed_at TIMESTAMP(3),
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- patch_schedules
+CREATE TABLE IF NOT EXISTS patch_schedules (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    host_group_id TEXT NOT NULL REFERENCES host_groups(id) ON DELETE CASCADE,
+    schedule_type TEXT NOT NULL,          -- 'once' | 'weekly'
+    run_at TIMESTAMP(3),                  -- for 'once'
+    weekday INTEGER,                      -- 0 (Sunday) - 6 for 'weekly'
+    time_of_day TEXT,                     -- 'HH:MM' for 'weekly'
+    timezone TEXT NOT NULL DEFAULT 'UTC',
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    last_run_at TIMESTAMP(3),
+    missed_at TIMESTAMP(3),
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =============================================================================
+-- Fork additions (functions) - kept together here so sqlc can see them.
+-- Source of truth / migration: internal/migrate/migrations_fork/*_fork_is_definition_update_function.up.sql
+-- =============================================================================
+
+-- fork_is_definition_update: see the migration file above for the full
+-- rationale (localised WUA category names + KB2267602 fallback).
+CREATE OR REPLACE FUNCTION fork_is_definition_update(categories jsonb, kb text)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT COALESCE(
+        jsonb_typeof(categories) = 'array'
+        AND categories ?| ARRAY[
+            'Definition Updates',                  -- en
+            'Definitionsupdates',                  -- de
+            'Mises à jour de définitions',          -- fr
+            'Aggiornamenti delle definizioni'       -- it
+        ],
+        false
+    )
+    OR COALESCE(
+        kb IS NOT NULL
+        AND EXISTS (
+            SELECT 1
+            FROM regexp_split_to_table(upper(kb), '\s*,\s*') AS t(tok)
+            WHERE regexp_replace(t.tok, '^KB', '') = '2267602'
+        ),
+        false
+    );
+$$;

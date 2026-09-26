@@ -263,7 +263,7 @@ const ProtocolUrlTab = () => {
 						<p className="text-sm text-blue-800 dark:text-blue-200">
 							<strong>Note:</strong> This URL will be used in installation
 							scripts and agent communications. Change this in order for the
-							agents to communicate with PatchMon, usually the
+							agents to communicate with the server, usually the
 							&quot;outside&quot; port and CORS_Origin url.
 						</p>
 					</div>

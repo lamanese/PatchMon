@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/PatchMon/PatchMon/server-source-code/internal/branding"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/models"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/util"
 )
@@ -233,7 +234,7 @@ func callOpenRouter(apiKey, model string, messages []Message, opts *callOptions)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("HTTP-Referer", "https://patchmon.app")
-	req.Header.Set("X-Title", "PatchMon Terminal Assistant")
+	req.Header.Set("X-Title", branding.ProductNameShort+" Terminal Assistant")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

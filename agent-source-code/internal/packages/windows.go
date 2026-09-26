@@ -1,13 +1,13 @@
 package packages
 
 import (
-	"encoding/json"
 	"os/exec"
 	"regexp"
 	"runtime"
 	"strings"
 
 	"patchmon-agent/internal/logutil"
+	"patchmon-agent/internal/utils"
 	"patchmon-agent/pkg/models"
 
 	"github.com/sirupsen/logrus"
@@ -226,15 +226,10 @@ $result | ConvertTo-Json -Compress -Depth 3
 	}
 
 	outputStr := strings.TrimSpace(string(output))
-	if outputStr == "" || outputStr == "null" || outputStr == "[]" {
-		return nil
-	}
 
-	// PowerShell outputs a single object (not array) when there is exactly one result
-	if !strings.HasPrefix(outputStr, "[") {
-		outputStr = "[" + outputStr + "]"
-	}
-
+	// PowerShell's ConvertTo-Json outputs a bare object (not an array) when
+	// there is exactly one result; UnmarshalPSJSONArray normalizes that
+	// (and "null"/empty output) before decoding.
 	var raw []struct {
 		Name        string `json:"Name"`
 		Version     string `json:"Version"`
@@ -242,8 +237,11 @@ $result | ConvertTo-Json -Compress -Depth 3
 		InstallDate string `json:"InstallDate"`
 		Size        string `json:"Size"`
 	}
-	if err := json.Unmarshal([]byte(outputStr), &raw); err != nil {
+	if err := utils.UnmarshalPSJSONArray([]byte(outputStr), &raw); err != nil {
 		m.logger.WithError(err).Warn("Failed to parse registry JSON")
+		return nil
+	}
+	if len(raw) == 0 {
 		return nil
 	}
 
@@ -282,6 +280,41 @@ func buildAppDescription(publisher, installDate, size string) string {
 		parts = append(parts, size)
 	}
 	return strings.Join(parts, " | ")
+}
+
+// unknownVersionPlaceholders lists the strings winget (and this agent's own
+// registry collection) use in place of an installed version it could not
+// determine. Comparison via isUnknownVersion is case-insensitive.
+// "Unbekannt" is winget's localized placeholder on German-language Windows.
+var unknownVersionPlaceholders = map[string]bool{
+	"":          true,
+	"unknown":   true,
+	"unbekannt": true,
+}
+
+// isUnknownVersion reports whether v is a placeholder used instead of an
+// actual installed version number (case-insensitive; trims whitespace).
+func isUnknownVersion(v string) bool {
+	return unknownVersionPlaceholders[strings.ToLower(strings.TrimSpace(v))]
+}
+
+// wingetNeedsUpdate decides whether a winget-discovered package should be
+// flagged as NeedsUpdate. winget list --upgrade-available (inUpgradeMap) is
+// authoritative and deliberately excludes packages whose installed version
+// it cannot determine (winget's own "N package(s) have version numbers that
+// cannot be determined" skip), so a hit there always wins. When winget did
+// NOT list the package as upgradable, only flag it if the installed version
+// is actually known and differs from the available one — an unknown
+// installed version must never be treated as outdated just because it
+// doesn't string-match the catalogue's "Available" column.
+func wingetNeedsUpdate(installed, available string, inUpgradeMap bool) bool {
+	if inUpgradeMap {
+		return true
+	}
+	if isUnknownVersion(installed) {
+		return false
+	}
+	return available != "" && available != installed
 }
 
 // getPackagesFromWinget runs winget list and parses the text-table output.
@@ -358,16 +391,12 @@ if ($out) { $out | Out-String }
 			version = "unknown"
 		}
 		avail := strings.TrimSpace(stripEllipsis(e.Available))
-		needsUpdate := false
 		id := strings.TrimSpace(stripEllipsis(e.ID))
-		if up, ok := upgradeMap[id]; ok {
-			needsUpdate = true
-			if avail == "" {
-				avail = up
-			}
-		} else if avail != "" && avail != version {
-			needsUpdate = true
+		up, inUpgradeMap := upgradeMap[id]
+		if inUpgradeMap && avail == "" {
+			avail = up
 		}
+		needsUpdate := wingetNeedsUpdate(version, avail, inUpgradeMap)
 		// Forward WinGet source as SourceRepository
 		source := strings.TrimSpace(e.Source)
 		if source == "" {
@@ -744,15 +773,10 @@ $result | ConvertTo-Json -Compress -Depth 4
 		}
 	}
 
-	if outputStr == "" || outputStr == "null" || outputStr == "[]" {
-		return nil
-	}
-
-	// PowerShell may output a single object (not array) when there is exactly one result
-	if !strings.HasPrefix(outputStr, "[") {
-		outputStr = "[" + outputStr + "]"
-	}
-
+	// PowerShell's ConvertTo-Json outputs a bare object (not an array) when
+	// there is exactly one result; UnmarshalPSJSONArray normalizes that
+	// (and "null"/empty output, from either the happy path above or the
+	// COM-error extraction) before decoding.
 	var raw []struct {
 		Name              string   `json:"Name"`
 		CurrentVersion    string   `json:"CurrentVersion"`
@@ -766,8 +790,11 @@ $result | ConvertTo-Json -Compress -Depth 4
 		WUASupportURL     string   `json:"WUASupportURL"`
 		WUARevisionNumber int32    `json:"WUARevisionNumber"`
 	}
-	if err := json.Unmarshal([]byte(outputStr), &raw); err != nil {
+	if err := utils.UnmarshalPSJSONArray([]byte(outputStr), &raw); err != nil {
 		m.logger.WithError(err).Warn("Failed to parse Windows updates JSON")
+		return nil
+	}
+	if len(raw) == 0 {
 		return nil
 	}
 

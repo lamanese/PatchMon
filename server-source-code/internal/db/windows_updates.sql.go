@@ -13,12 +13,17 @@ import (
 
 const countWindowsUpdatesByHostID = `-- name: CountWindowsUpdatesByHostID :one
 SELECT
-    COUNT(*) FILTER (WHERE needs_update = true)::int                          AS pending_count,
-    COUNT(*) FILTER (WHERE needs_update = true AND is_security_update = true)::int AS security_count,
+    COUNT(*) FILTER (WHERE needs_update = true AND NOT ($1::boolean AND fork_is_definition_update(wua_categories, wua_kb)))::int AS pending_count,
+    COUNT(*) FILTER (WHERE needs_update = true AND is_security_update = true AND NOT ($1::boolean AND fork_is_definition_update(wua_categories, wua_kb)))::int AS security_count,
     COUNT(*) FILTER (WHERE needs_update = false)::int                         AS installed_count
 FROM host_packages
-WHERE host_id = $1 AND wua_guid IS NOT NULL
+WHERE host_id = $2 AND wua_guid IS NOT NULL
 `
+
+type CountWindowsUpdatesByHostIDParams struct {
+	IgnoreDefinitionUpdates bool   `json:"ignore_definition_updates"`
+	HostID                  string `json:"host_id"`
+}
 
 type CountWindowsUpdatesByHostIDRow struct {
 	PendingCount   int32 `json:"pending_count"`
@@ -27,8 +32,9 @@ type CountWindowsUpdatesByHostIDRow struct {
 }
 
 // Counts pending Windows Updates for a host (for dashboard/stats).
-func (q *Queries) CountWindowsUpdatesByHostID(ctx context.Context, hostID string) (CountWindowsUpdatesByHostIDRow, error) {
-	row := q.db.QueryRow(ctx, countWindowsUpdatesByHostID, hostID)
+// fork: PM_IGNORE_DEFINITION_UPDATES (pending/security exclude Definition Updates when the flag is on; installed_count is untouched)
+func (q *Queries) CountWindowsUpdatesByHostID(ctx context.Context, arg CountWindowsUpdatesByHostIDParams) (CountWindowsUpdatesByHostIDRow, error) {
+	row := q.db.QueryRow(ctx, countWindowsUpdatesByHostID, arg.IgnoreDefinitionUpdates, arg.HostID)
 	var i CountWindowsUpdatesByHostIDRow
 	err := row.Scan(&i.PendingCount, &i.SecurityCount, &i.InstalledCount)
 	return i, err
@@ -71,7 +77,9 @@ SELECT hp.id, hp.host_id, hp.package_id, hp.current_version, hp.available_versio
     hp.wua_guid, hp.wua_kb, hp.wua_severity, hp.wua_categories,
     hp.wua_description, hp.wua_support_url, hp.wua_revision_number,
     hp.wua_date_installed, hp.wua_install_result, hp.last_checked,
-    p.name AS pkg_name, p.description AS pkg_description
+    p.name AS pkg_name, p.description AS pkg_description,
+    -- fork: PM_IGNORE_DEFINITION_UPDATES (list stays complete; this only flags rows for the frontend badge)
+    fork_is_definition_update(hp.wua_categories, hp.wua_kb) AS is_definition_update
 FROM host_packages hp
 JOIN packages p ON p.id = hp.package_id
 WHERE hp.host_id = $1
@@ -80,25 +88,26 @@ ORDER BY hp.needs_update DESC, hp.is_security_update DESC, p.name ASC
 `
 
 type GetHostWindowsUpdatesRow struct {
-	ID                string           `json:"id"`
-	HostID            string           `json:"host_id"`
-	PackageID         string           `json:"package_id"`
-	CurrentVersion    string           `json:"current_version"`
-	AvailableVersion  *string          `json:"available_version"`
-	NeedsUpdate       bool             `json:"needs_update"`
-	IsSecurityUpdate  bool             `json:"is_security_update"`
-	WuaGuid           *string          `json:"wua_guid"`
-	WuaKb             *string          `json:"wua_kb"`
-	WuaSeverity       *string          `json:"wua_severity"`
-	WuaCategories     []byte           `json:"wua_categories"`
-	WuaDescription    *string          `json:"wua_description"`
-	WuaSupportUrl     *string          `json:"wua_support_url"`
-	WuaRevisionNumber *int32           `json:"wua_revision_number"`
-	WuaDateInstalled  pgtype.Timestamp `json:"wua_date_installed"`
-	WuaInstallResult  *string          `json:"wua_install_result"`
-	LastChecked       pgtype.Timestamp `json:"last_checked"`
-	PkgName           string           `json:"pkg_name"`
-	PkgDescription    *string          `json:"pkg_description"`
+	ID                 string           `json:"id"`
+	HostID             string           `json:"host_id"`
+	PackageID          string           `json:"package_id"`
+	CurrentVersion     string           `json:"current_version"`
+	AvailableVersion   *string          `json:"available_version"`
+	NeedsUpdate        bool             `json:"needs_update"`
+	IsSecurityUpdate   bool             `json:"is_security_update"`
+	WuaGuid            *string          `json:"wua_guid"`
+	WuaKb              *string          `json:"wua_kb"`
+	WuaSeverity        *string          `json:"wua_severity"`
+	WuaCategories      []byte           `json:"wua_categories"`
+	WuaDescription     *string          `json:"wua_description"`
+	WuaSupportUrl      *string          `json:"wua_support_url"`
+	WuaRevisionNumber  *int32           `json:"wua_revision_number"`
+	WuaDateInstalled   pgtype.Timestamp `json:"wua_date_installed"`
+	WuaInstallResult   *string          `json:"wua_install_result"`
+	LastChecked        pgtype.Timestamp `json:"last_checked"`
+	PkgName            string           `json:"pkg_name"`
+	PkgDescription     *string          `json:"pkg_description"`
+	IsDefinitionUpdate bool             `json:"is_definition_update"`
 }
 
 // Windows Update (WUA) specific queries
@@ -133,6 +142,7 @@ func (q *Queries) GetHostWindowsUpdates(ctx context.Context, hostID string) ([]G
 			&i.LastChecked,
 			&i.PkgName,
 			&i.PkgDescription,
+			&i.IsDefinitionUpdate,
 		); err != nil {
 			return nil, err
 		}
@@ -168,6 +178,47 @@ func (q *Queries) GetPendingWindowsUpdateGUIDs(ctx context.Context, hostID strin
 			return nil, err
 		}
 		items = append(items, wua_guid)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getWUAGuidsByPackageNames = `-- name: GetWUAGuidsByPackageNames :many
+SELECT p.name, hp.wua_guid
+FROM host_packages hp
+JOIN packages p ON p.id = hp.package_id
+WHERE hp.host_id = $1
+  AND p.name = ANY($2::text[])
+  AND hp.wua_guid IS NOT NULL
+`
+
+type GetWUAGuidsByPackageNamesParams struct {
+	HostID string   `json:"host_id"`
+	Names  []string `json:"names"`
+}
+
+type GetWUAGuidsByPackageNamesRow struct {
+	Name    string  `json:"name"`
+	WuaGuid *string `json:"wua_guid"`
+}
+
+// Resolves package (update) names to their WUA GUIDs for one host. Used when
+// dispatching per-package patch runs to Windows agents, which install by GUID.
+func (q *Queries) GetWUAGuidsByPackageNames(ctx context.Context, arg GetWUAGuidsByPackageNamesParams) ([]GetWUAGuidsByPackageNamesRow, error) {
+	rows, err := q.db.Query(ctx, getWUAGuidsByPackageNames, arg.HostID, arg.Names)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetWUAGuidsByPackageNamesRow
+	for rows.Next() {
+		var i GetWUAGuidsByPackageNamesRow
+		if err := rows.Scan(&i.Name, &i.WuaGuid); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

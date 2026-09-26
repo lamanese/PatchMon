@@ -8,7 +8,9 @@ SELECT hp.id, hp.host_id, hp.package_id, hp.current_version, hp.available_versio
     hp.wua_guid, hp.wua_kb, hp.wua_severity, hp.wua_categories,
     hp.wua_description, hp.wua_support_url, hp.wua_revision_number,
     hp.wua_date_installed, hp.wua_install_result, hp.last_checked,
-    p.name AS pkg_name, p.description AS pkg_description
+    p.name AS pkg_name, p.description AS pkg_description,
+    -- fork: PM_IGNORE_DEFINITION_UPDATES (list stays complete; this only flags rows for the frontend badge)
+    fork_is_definition_update(hp.wua_categories, hp.wua_kb) AS is_definition_update
 FROM host_packages hp
 JOIN packages p ON p.id = hp.package_id
 WHERE hp.host_id = $1
@@ -43,11 +45,22 @@ WHERE host_id = $1
   AND (wua_install_result IS NULL OR wua_install_result = 'failed')
 ORDER BY is_security_update DESC, last_checked ASC;
 
+-- name: GetWUAGuidsByPackageNames :many
+-- Resolves package (update) names to their WUA GUIDs for one host. Used when
+-- dispatching per-package patch runs to Windows agents, which install by GUID.
+SELECT p.name, hp.wua_guid
+FROM host_packages hp
+JOIN packages p ON p.id = hp.package_id
+WHERE hp.host_id = sqlc.arg('host_id')
+  AND p.name = ANY(sqlc.arg('names')::text[])
+  AND hp.wua_guid IS NOT NULL;
+
 -- name: CountWindowsUpdatesByHostID :one
 -- Counts pending Windows Updates for a host (for dashboard/stats).
+-- fork: PM_IGNORE_DEFINITION_UPDATES (pending/security exclude Definition Updates when the flag is on; installed_count is untouched)
 SELECT
-    COUNT(*) FILTER (WHERE needs_update = true)::int                          AS pending_count,
-    COUNT(*) FILTER (WHERE needs_update = true AND is_security_update = true)::int AS security_count,
+    COUNT(*) FILTER (WHERE needs_update = true AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(wua_categories, wua_kb)))::int AS pending_count,
+    COUNT(*) FILTER (WHERE needs_update = true AND is_security_update = true AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(wua_categories, wua_kb)))::int AS security_count,
     COUNT(*) FILTER (WHERE needs_update = false)::int                         AS installed_count
 FROM host_packages
-WHERE host_id = $1 AND wua_guid IS NOT NULL;
+WHERE host_id = sqlc.arg('host_id') AND wua_guid IS NOT NULL;

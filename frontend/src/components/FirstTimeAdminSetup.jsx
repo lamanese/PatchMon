@@ -1,6 +1,7 @@
 import { AlertCircle, CheckCircle, Shield, UserPlus } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { PRODUCT_NAME } from "../constants/branding";
 import { useAuth } from "../contexts/AuthContext";
 import { isCorsError } from "../utils/api";
 
@@ -398,7 +399,7 @@ const FirstTimeAdminSetup = () => {
 							</div>
 						</div>
 						<h1 className="text-2xl font-bold text-secondary-900 dark:text-white mb-2">
-							Welcome to PatchMon
+							Welcome to {PRODUCT_NAME}
 						</h1>
 						<p className="text-secondary-600 dark:text-white">
 							Let's set up your admin account to get started

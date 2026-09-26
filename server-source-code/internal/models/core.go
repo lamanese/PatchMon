@@ -92,6 +92,7 @@ type RolePermission struct {
 	CanManageAutomation     bool      `db:"can_manage_automation"`
 	CanUseRemoteAccess      bool      `db:"can_use_remote_access"`
 	CanManageBilling        bool      `db:"can_manage_billing"`
+	CanRebootHosts          bool      `db:"can_reboot_hosts"`
 	CreatedAt               time.Time `db:"created_at"`
 	UpdatedAt               time.Time `db:"updated_at"`
 }
@@ -191,4 +192,7 @@ type Settings struct {
 	PasswordRateLimitWindowMs       *int       `db:"password_rate_limit_window_ms"`
 	PasswordRateLimitMax            *int       `db:"password_rate_limit_max"`
 	AuthBrowserSessionCookies       *bool      `db:"auth_browser_session_cookies"`
+	LicenseMaxHosts                 *int       `db:"license_max_hosts"`
+	LicenseEnforce                  bool       `db:"license_enforce"`
+	LicensePackage                  *string    `db:"license_package"`
 }

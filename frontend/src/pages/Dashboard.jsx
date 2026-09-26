@@ -79,6 +79,7 @@ import {
 	PatchRunStatusBoxes,
 	PatchRunsByType,
 } from "../components/patching/widgets";
+import { PRODUCT_NAME, PRODUCT_NAME_SHORT } from "../constants/branding";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../contexts/ToastContext";
@@ -246,7 +247,7 @@ const Dashboard = () => {
 				spread: 70,
 				origin: { y: 0.6 },
 			});
-			toast.success("Welcome to PatchMon!");
+			toast.success(`Welcome to ${PRODUCT_NAME}!`);
 		}
 	}, [toast]);
 
@@ -942,6 +943,22 @@ const Dashboard = () => {
 								<p className="text-xl font-semibold text-secondary-900 dark:text-white">
 									{stats.cards.totalHosts}
 								</p>
+								{stats.license && (
+									<p
+										className={`text-xs truncate ${
+											stats.license.status === "over_tolerance"
+												? "text-red-600 dark:text-red-400"
+												: stats.license.status === "over_limit"
+													? "text-yellow-600 dark:text-yellow-400"
+													: "text-secondary-500 dark:text-secondary-300"
+										}`}
+										title={`${stats.license.active_count} active / ${stats.license.pending_count} pending / ${stats.license.max_hosts} licensed`}
+									>
+										{stats.license.active_count} active /{" "}
+										{stats.license.pending_count} pending /{" "}
+										{stats.license.max_hosts} licensed
+									</p>
+								)}
 							</div>
 						</div>
 					</button>
@@ -2328,7 +2345,7 @@ const Dashboard = () => {
 						Welcome back, {user?.first_name || user?.username || "User"} 👋
 					</h1>
 					<p className="text-sm text-secondary-600 dark:text-white/80 mt-1">
-						Overview of your PatchMon infrastructure
+						Overview of your {PRODUCT_NAME_SHORT} infrastructure
 					</p>
 				</div>
 				<div className="flex items-center gap-3">

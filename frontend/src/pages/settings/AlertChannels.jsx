@@ -1,14 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-	Bell,
+	Archive,
 	Check,
 	ChevronLeft,
 	ChevronRight,
 	Clock,
+	Copy,
 	Edit2,
-	Globe,
+	FileText,
 	Loader2,
-	Mail,
 	Play,
 	Plus,
 	RefreshCw,
@@ -17,7 +17,6 @@ import {
 	X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { SiDiscord, SiNtfy, SiSlack } from "react-icons/si";
 import { Link } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import { useToast } from "../../contexts/ToastContext";
@@ -27,6 +26,21 @@ import {
 	hostGroupsAPI,
 	notificationsAPI,
 } from "../../utils/api";
+import {
+	downloadBlob,
+	errorFromBlobResponse,
+	filenameFromDisposition,
+} from "../../utils/downloadBlob";
+import ReportArchiveDialog from "./ReportArchiveDialog";
+import ReportModal, {
+	buildReportSummary,
+	CHANNEL_TYPES,
+	channelIcon,
+	describeSchedule,
+	INPUT,
+	ReportConfirmDialog,
+	SELECT,
+} from "./ReportModal";
 
 /* ───────────────────── Constants ───────────────────── */
 
@@ -76,139 +90,6 @@ const SEVERITIES = [
 	{ value: "error", label: "Error" },
 	{ value: "critical", label: "Critical" },
 ];
-
-const REPORT_SECTIONS = [
-	{ id: "executive_summary", label: "Executive summary" },
-	{ id: "compliance_summary", label: "Compliance summary" },
-	{ id: "recent_patch_runs", label: "Recent patch runs" },
-	{ id: "hosts_offline", label: "Hosts / status" },
-	{ id: "open_alerts", label: "Open alerts" },
-	{ id: "hosts_by_updates", label: "Hosts by outstanding updates" },
-	{ id: "top_security_packages", label: "Top outdated security packages" },
-];
-
-const CHANNEL_TYPES = [
-	{
-		value: "webhook",
-		label: "Webhook",
-		description: "Generic, Discord, or Slack",
-		icon: Globe,
-		brandIcons: { discord: SiDiscord, slack: SiSlack },
-	},
-	{
-		value: "email",
-		label: "Email",
-		description: "SMTP delivery",
-		icon: Mail,
-	},
-	{
-		value: "ntfy",
-		label: "ntfy",
-		description: "Push notifications via ntfy.sh",
-		icon: SiNtfy,
-	},
-	{
-		value: "internal",
-		label: "Internal Alerts",
-		description: "Alert records in the Alerts tab",
-		icon: Bell,
-	},
-];
-
-const FREQUENCY_OPTIONS = [
-	{ value: "daily", label: "Daily" },
-	{ value: "weekdays", label: "Weekdays (Mon-Fri)" },
-	{ value: "weekly", label: "Weekly" },
-	{ value: "monthly", label: "Monthly" },
-];
-
-const MONTH_DAY_PRESETS = [
-	{ value: "1", label: "1st" },
-	{ value: "15", label: "15th" },
-	{ value: "L", label: "Last day" },
-];
-
-const DAY_LABELS = [
-	{ value: "1", short: "Mon" },
-	{ value: "2", short: "Tue" },
-	{ value: "3", short: "Wed" },
-	{ value: "4", short: "Thu" },
-	{ value: "5", short: "Fri" },
-	{ value: "6", short: "Sat" },
-	{ value: "0", short: "Sun" },
-];
-
-const buildCron = (frequency, time, days, monthDay) => {
-	const [h, m] = (time || "08:00").split(":");
-	const hour = Number.parseInt(h, 10) || 0;
-	const minute = Number.parseInt(m, 10) || 0;
-	switch (frequency) {
-		case "weekdays":
-			return `${minute} ${hour} * * 1-5`;
-		case "weekly":
-			return `${minute} ${hour} * * ${days.length > 0 ? days.join(",") : "1"}`;
-		case "monthly":
-			return `${minute} ${hour} ${monthDay || "1"} * *`;
-		default:
-			return `${minute} ${hour} * * *`;
-	}
-};
-
-const describeSchedule = (expr) => {
-	if (!expr) return "";
-	const parts = expr.trim().split(/\s+/);
-	if (parts.length !== 5) return expr;
-	const [min, hour, dom, , dow] = parts;
-	const h = Number.parseInt(hour, 10);
-	const m = Number.parseInt(min, 10);
-	const time =
-		!Number.isNaN(h) && !Number.isNaN(m)
-			? `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`
-			: null;
-	if (!time) return expr;
-	if (dom === "*" && dow === "*") return `Daily at ${time}`;
-	if (dom === "*" && dow === "1-5") return `Weekdays at ${time}`;
-	if (dom !== "*" && dow === "*") {
-		if (dom === "L") return `Last day of month at ${time}`;
-		const ordinal =
-			dom === "1" || dom === "21" || dom === "31"
-				? "st"
-				: dom === "2" || dom === "22"
-					? "nd"
-					: dom === "3" || dom === "23"
-						? "rd"
-						: "th";
-		return `${dom}${ordinal} of month at ${time}`;
-	}
-	if (dom === "*" && dow && dow !== "*") {
-		const dayNames = {
-			0: "Sun",
-			1: "Mon",
-			2: "Tue",
-			3: "Wed",
-			4: "Thu",
-			5: "Fri",
-			6: "Sat",
-		};
-		const days = dow
-			.split(",")
-			.map((d) => dayNames[d] || d)
-			.join(", ");
-		return `${days} at ${time}`;
-	}
-	return expr;
-};
-
-const channelIcon = (type) => {
-	const ct = CHANNEL_TYPES.find((c) => c.value === type);
-	if (!ct) return null;
-	const Icon = ct.icon;
-	return <Icon className="h-4 w-4" />;
-};
-
-const INPUT =
-	"w-full px-3 py-2 bg-white dark:bg-secondary-900 border border-secondary-300 dark:border-secondary-600 rounded-md text-sm text-secondary-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 placeholder-secondary-400";
-const SELECT = `${INPUT} appearance-none`;
 
 const statusBadge = (status) => {
 	const ok = status === "sent";
@@ -387,7 +268,7 @@ const DestinationModal = ({
 						<label className="flex items-center gap-2 text-sm text-secondary-700 dark:text-white">
 							<input
 								type="checkbox"
-								checked={config.use_tls !== false}
+								checked={Boolean(config.use_tls)}
 								onChange={(e) => updateConfig("use_tls", e.target.checked)}
 							/>
 							Use TLS
@@ -508,7 +389,16 @@ const DestinationModal = ({
 													? "border-primary-500 bg-primary-50 dark:bg-primary-900/30"
 													: "border-secondary-300 dark:border-secondary-600 hover:border-primary-400"
 											}`}
-											onClick={() => setChannelType(ct.value)}
+											onClick={() => {
+												// New e-mail destinations store use_tls explicitly, so
+												// the saved config matches the ticked checkbox.
+												if (ct.value !== channelType) {
+													setConfig(
+														ct.value === "email" ? { use_tls: true } : {},
+													);
+												}
+												setChannelType(ct.value);
+											}}
 										>
 											<Icon className="h-10 w-10 text-secondary-700 dark:text-secondary-200 mb-2" />
 											<span className="text-sm font-medium text-secondary-900 dark:text-white">
@@ -860,363 +750,6 @@ const RouteModal = ({
 	);
 };
 
-/* ───────────────── Report Modal ───────────────── */
-
-const ReportModal = ({
-	isOpen,
-	onClose,
-	onSave,
-	editingReport,
-	destinations,
-	hostGroups,
-	isPending,
-}) => {
-	const defRow = editingReport?.definition || {};
-
-	// Parse existing cron on init
-	const parseCronInit = () => {
-		let frequency = "daily";
-		let time = "08:00";
-		let days = ["1"];
-		let monthDay = "1";
-		if (editingReport?.cron_expr) {
-			const parts = editingReport.cron_expr.trim().split(/\s+/);
-			if (parts.length === 5) {
-				const [min, hour, dom, , dow] = parts;
-				const h = Number.parseInt(hour, 10);
-				const m = Number.parseInt(min, 10);
-				if (!Number.isNaN(h) && !Number.isNaN(m)) {
-					time = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-				}
-				if (dow === "1-5") frequency = "weekdays";
-				else if (dom !== "*") {
-					frequency = "monthly";
-					monthDay = dom;
-				} else if (dow && dow !== "*") {
-					frequency = "weekly";
-					days = dow.split(",");
-				}
-			}
-		}
-		return { frequency, time, days, monthDay };
-	};
-	const cronInit = parseCronInit();
-
-	const [form, setForm] = useState({
-		name: editingReport?.name || "",
-		frequency: cronInit.frequency,
-		time: cronInit.time,
-		days: cronInit.days,
-		monthDay: cronInit.monthDay,
-		enabled: editingReport?.enabled !== false,
-		destination_ids: Array.isArray(editingReport?.destination_ids)
-			? editingReport.destination_ids
-			: [],
-		sections:
-			Array.isArray(defRow.sections) && defRow.sections.length > 0
-				? defRow.sections
-				: ["executive_summary", "compliance_summary", "recent_patch_runs"],
-		host_group_ids: Array.isArray(defRow.host_group_ids)
-			? defRow.host_group_ids
-			: [],
-		top_hosts: defRow.limits?.top_hosts ?? 20,
-	});
-	const toast = useToast();
-
-	if (!isOpen) return null;
-
-	const upd = (key, value) => setForm((p) => ({ ...p, [key]: value }));
-	const toggleArr = (key, id) =>
-		setForm((p) => ({
-			...p,
-			[key]: p[key].includes(id)
-				? p[key].filter((x) => x !== id)
-				: [...p[key], id],
-		}));
-
-	const toggleDay = (d) =>
-		setForm((p) => ({
-			...p,
-			days: p.days.includes(d) ? p.days.filter((x) => x !== d) : [...p.days, d],
-		}));
-
-	const handleSave = () => {
-		if (!form.name.trim()) {
-			toast.warning("Report name is required");
-			return;
-		}
-		if (form.frequency === "weekly" && form.days.length === 0) {
-			toast.warning("Select at least one day");
-			return;
-		}
-		const cronExpr = buildCron(
-			form.frequency,
-			form.time,
-			form.days,
-			form.monthDay,
-		);
-		onSave({
-			name: form.name.trim(),
-			cron_expr: cronExpr,
-			enabled: form.enabled,
-			definition: {
-				version: 1,
-				sections: form.sections,
-				host_group_ids: form.host_group_ids,
-				limits: { top_hosts: Number(form.top_hosts) || 20 },
-			},
-			destination_ids: form.destination_ids,
-		});
-	};
-
-	return (
-		<div
-			className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-			onClick={onClose}
-		>
-			<div
-				className="bg-white dark:bg-secondary-800 rounded-lg shadow-xl max-w-lg w-full mx-4 relative z-10 max-h-[90vh] overflow-y-auto"
-				onClick={(e) => e.stopPropagation()}
-			>
-				<div className="px-6 py-4 border-b border-secondary-200 dark:border-secondary-600 flex items-center justify-between sticky top-0 bg-white dark:bg-secondary-800 z-10">
-					<h3 className="text-lg font-semibold text-secondary-900 dark:text-white">
-						{editingReport ? "Edit report" : "New scheduled report"}
-					</h3>
-					<button
-						type="button"
-						onClick={onClose}
-						className="text-secondary-400 hover:text-secondary-600 dark:hover:text-white"
-					>
-						<X className="h-5 w-5" />
-					</button>
-				</div>
-				<div className="px-6 py-5 space-y-5">
-					<div>
-						<label className="block text-sm font-medium text-secondary-700 dark:text-white mb-1">
-							Report name <span className="text-danger-500">*</span>
-						</label>
-						<input
-							className={INPUT}
-							placeholder="Weekly ops report"
-							value={form.name}
-							onChange={(e) => upd("name", e.target.value)}
-						/>
-					</div>
-
-					<div>
-						<label className="block text-sm font-medium text-secondary-700 dark:text-white mb-2">
-							Schedule
-						</label>
-						<div className="flex flex-wrap gap-3 items-center">
-							<select
-								className={`${SELECT} w-auto`}
-								value={form.frequency}
-								onChange={(e) => upd("frequency", e.target.value)}
-							>
-								{FREQUENCY_OPTIONS.map((p) => (
-									<option key={p.value} value={p.value}>
-										{p.label}
-									</option>
-								))}
-							</select>
-							<span className="text-sm text-secondary-500">at</span>
-							<input
-								type="time"
-								className={`${INPUT} w-auto`}
-								value={form.time}
-								onChange={(e) => upd("time", e.target.value)}
-							/>
-						</div>
-						{form.frequency === "weekly" && (
-							<div className="flex gap-1.5 mt-3">
-								{DAY_LABELS.map((d) => (
-									<button
-										key={d.value}
-										type="button"
-										className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-colors ${
-											form.days.includes(d.value)
-												? "bg-primary-600 text-white border-primary-600"
-												: "bg-white dark:bg-secondary-900 text-secondary-700 dark:text-secondary-300 border-secondary-300 dark:border-secondary-600 hover:border-primary-400"
-										}`}
-										onClick={() => toggleDay(d.value)}
-									>
-										{d.short}
-									</button>
-								))}
-							</div>
-						)}
-						{form.frequency === "monthly" && (
-							<div className="mt-3 space-y-2">
-								<div className="flex gap-1.5 flex-wrap">
-									{MONTH_DAY_PRESETS.map((p) => (
-										<button
-											key={p.value}
-											type="button"
-											className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-colors ${
-												form.monthDay === p.value
-													? "bg-primary-600 text-white border-primary-600"
-													: "bg-white dark:bg-secondary-900 text-secondary-700 dark:text-secondary-300 border-secondary-300 dark:border-secondary-600 hover:border-primary-400"
-											}`}
-											onClick={() => upd("monthDay", p.value)}
-										>
-											{p.label}
-										</button>
-									))}
-									<span className="text-sm text-secondary-500 self-center px-1">
-										or
-									</span>
-									<input
-										type="number"
-										min={1}
-										max={31}
-										placeholder="Day"
-										className={`${INPUT} w-20 text-center`}
-										value={
-											!["1", "15", "L"].includes(form.monthDay)
-												? form.monthDay
-												: ""
-										}
-										onChange={(e) => {
-											const v = e.target.value;
-											if (v === "") return;
-											const n = Math.max(1, Math.min(31, Number(v) || 1));
-											upd("monthDay", String(n));
-										}}
-										onFocus={() => {
-											if (["1", "15", "L"].includes(form.monthDay))
-												upd("monthDay", "");
-										}}
-									/>
-								</div>
-							</div>
-						)}
-						<p className="mt-2 text-xs text-secondary-500 flex items-center gap-1">
-							<Clock className="h-3 w-3" /> Server timezone
-						</p>
-					</div>
-
-					<div>
-						<label className="block text-sm font-medium text-secondary-700 dark:text-white mb-2">
-							Sections
-						</label>
-						<div className="grid grid-cols-2 gap-2">
-							{REPORT_SECTIONS.map((s) => (
-								<label
-									key={s.id}
-									className="flex items-center gap-2 text-sm text-secondary-700 dark:text-white"
-								>
-									<input
-										type="checkbox"
-										checked={form.sections.includes(s.id)}
-										onChange={() => toggleArr("sections", s.id)}
-									/>
-									{s.label}
-								</label>
-							))}
-						</div>
-					</div>
-
-					<div>
-						<label className="block text-sm font-medium text-secondary-700 dark:text-white mb-2">
-							Deliver to
-						</label>
-						{destinations.length === 0 ? (
-							<p className="text-xs text-secondary-500">
-								Add a destination first.
-							</p>
-						) : (
-							<div className="space-y-1.5">
-								{destinations.map((d) => (
-									<label
-										key={d.id}
-										className="flex items-center gap-2 text-sm text-secondary-700 dark:text-white"
-									>
-										<input
-											type="checkbox"
-											checked={form.destination_ids.includes(d.id)}
-											onChange={() => toggleArr("destination_ids", d.id)}
-										/>
-										{channelIcon(d.channel_type)}
-										{d.display_name}
-									</label>
-								))}
-							</div>
-						)}
-					</div>
-
-					{hostGroups.length > 0 && (
-						<div>
-							<label className="block text-sm font-medium text-secondary-700 dark:text-white mb-2">
-								Scope to host groups
-							</label>
-							<div className="space-y-1.5">
-								{hostGroups.map((g) => (
-									<label
-										key={g.id}
-										className="flex items-center gap-2 text-sm text-secondary-700 dark:text-white"
-									>
-										<input
-											type="checkbox"
-											checked={form.host_group_ids.includes(g.id)}
-											onChange={() => toggleArr("host_group_ids", g.id)}
-										/>
-										{g.name || g.id}
-									</label>
-								))}
-							</div>
-						</div>
-					)}
-
-					<div className="grid grid-cols-2 gap-4">
-						<div>
-							<label className="block text-sm font-medium text-secondary-700 dark:text-white mb-1">
-								Top rows per section
-							</label>
-							<input
-								className={INPUT}
-								type="number"
-								min={1}
-								value={form.top_hosts}
-								onChange={(e) => upd("top_hosts", e.target.value)}
-							/>
-						</div>
-						<div className="flex items-end pb-1">
-							<label className="flex items-center gap-2 text-sm text-secondary-700 dark:text-white">
-								<input
-									type="checkbox"
-									checked={form.enabled}
-									onChange={(e) => upd("enabled", e.target.checked)}
-								/>
-								Enabled
-							</label>
-						</div>
-					</div>
-				</div>
-				<div className="px-6 py-4 border-t border-secondary-200 dark:border-secondary-600 flex justify-end gap-2 sticky bottom-0 bg-white dark:bg-secondary-800">
-					<button type="button" className="btn-outline" onClick={onClose}>
-						Cancel
-					</button>
-					<button
-						type="button"
-						className="btn-primary flex items-center gap-1"
-						disabled={isPending}
-						onClick={handleSave}
-					>
-						{isPending ? (
-							<Loader2 className="h-4 w-4 animate-spin" />
-						) : (
-							<Check className="h-4 w-4" />
-						)}
-						{editingReport ? "Save" : "Create"}
-					</button>
-				</div>
-			</div>
-		</div>
-	);
-};
-
-/* ───────────────── Main Page ───────────────── */
-
 /** Renders notification management for a specific panel. Used by Reporting page tabs. */
 export const NotificationPanel = ({ panel }) => {
 	const queryClient = useQueryClient();
@@ -1226,6 +759,8 @@ export const NotificationPanel = ({ panel }) => {
 	const canManage = canManageNotifications();
 	const canLog = canViewNotificationLogs();
 	const canListHostGroups = hasPermission("can_view_hosts");
+	// /hosts/admin/list requires can_manage_hosts.
+	const canListAllHosts = hasPermission("can_manage_hosts");
 
 	// Modal states
 	const [destModal, setDestModal] = useState({ open: false, editing: null });
@@ -1233,9 +768,13 @@ export const NotificationPanel = ({ panel }) => {
 	const [reportModal, setReportModal] = useState({
 		open: false,
 		editing: null,
+		duplicate: false,
 	});
 	const [logPage, setLogPage] = useState(0);
 	const logPageSize = 50;
+	const [previewingId, setPreviewingId] = useState(null);
+	const [archiveReport, setArchiveReport] = useState(null);
+	const [runConfirm, setRunConfirm] = useState(null);
 
 	// Queries
 	const { data: destinations = [], isLoading: destLoading } = useQuery({
@@ -1270,6 +809,19 @@ export const NotificationPanel = ({ panel }) => {
 		queryKey: ["hosts-list"],
 		queryFn: () => adminHostsAPI.list().then((r) => r.data ?? []),
 		enabled: canManage && canListHostGroups,
+	});
+
+	// Scope check for customer reports: all hosts with their group
+	// memberships. null (loading, no permission, unexpected shape) shows
+	// the host count as "unknown" instead of a wrong number.
+	const { data: reportScopeHosts = null } = useQuery({
+		queryKey: ["report-scope-hosts"],
+		queryFn: () =>
+			adminHostsAPI
+				.list({ all: true })
+				.then((r) => (Array.isArray(r.data?.data) ? r.data.data : null)),
+		enabled: canManage && canListAllHosts && (!panel || panel === "reports"),
+		retry: false,
 	});
 
 	const hostGroupOptions = useMemo(
@@ -1359,7 +911,7 @@ export const NotificationPanel = ({ panel }) => {
 		onSuccess: () => {
 			invalidate();
 			toast.success("Report created");
-			setReportModal({ open: false, editing: null });
+			setReportModal({ open: false, editing: null, duplicate: false });
 		},
 		onError: (err) =>
 			toast.error(err.response?.data?.error || "Failed to create"),
@@ -1370,7 +922,7 @@ export const NotificationPanel = ({ panel }) => {
 		onSuccess: () => {
 			invalidate();
 			toast.success("Report updated");
-			setReportModal({ open: false, editing: null });
+			setReportModal({ open: false, editing: null, duplicate: false });
 		},
 		onError: (err) =>
 			toast.error(err.response?.data?.error || "Failed to update"),
@@ -1386,12 +938,58 @@ export const NotificationPanel = ({ panel }) => {
 	});
 	const runReportNow = useMutation({
 		mutationFn: (id) => notificationsAPI.runScheduledReportNow(id),
-		onSuccess: () => {
-			invalidate();
-			toast.success("Report scheduled for immediate delivery");
-		},
-		onError: (err) => toast.error(err.response?.data?.error || "Failed to run"),
 	});
+
+	const runNow = async (r) => {
+		try {
+			const res = await runReportNow.mutateAsync(r.id);
+			invalidate();
+			const runId =
+				typeof res?.data?.run_id === "string"
+					? res.data.run_id.slice(0, 8)
+					: "";
+			toast.success(runId ? `Report queued (run ${runId})` : "Report queued");
+		} catch (err) {
+			// 429 carries the cooldown text ("Please wait N seconds ...").
+			toast.error(err.response?.data?.error || "Failed to run");
+		}
+	};
+
+	// Customer reports leave the house: confirm scope and recipients first.
+	// With delivery off nothing is sent, so there is nothing to confirm.
+	const handleRunNow = (r) => {
+		if (
+			r.deliver !== false &&
+			(r.customer_mode || Array.isArray(r.email_recipients))
+		) {
+			setRunConfirm(r);
+			return;
+		}
+		runNow(r);
+	};
+
+	const previewReport = async (r) => {
+		setPreviewingId(r.id);
+		try {
+			const res = await notificationsAPI.previewScheduledReport(r.id);
+			downloadBlob(
+				res.data,
+				filenameFromDisposition(
+					res.headers?.["content-disposition"],
+					`report-${r.id}.pdf`,
+				),
+			);
+			if (res.headers?.["x-report-logo"] === "default") {
+				toast.info(
+					"The PDF uses the default logo. Upload a PNG or JPEG under Settings → Branding for your own logo.",
+				);
+			}
+		} catch (err) {
+			toast.error(await errorFromBlobResponse(err, "Preview failed"));
+		} finally {
+			setPreviewingId(null);
+		}
+	};
 
 	const sendTest = (id) => {
 		testNotify.mutate(id, {
@@ -1443,7 +1041,7 @@ export const NotificationPanel = ({ panel }) => {
 	};
 
 	const handleReportSave = (data) => {
-		if (reportModal.editing) {
+		if (reportModal.editing && !reportModal.duplicate) {
 			updateReport.mutate({ id: reportModal.editing.id, body: data });
 		} else {
 			createReport.mutate(data);
@@ -1746,7 +1344,9 @@ export const NotificationPanel = ({ panel }) => {
 						<button
 							type="button"
 							className="btn-primary flex items-center gap-2"
-							onClick={() => setReportModal({ open: true, editing: null })}
+							onClick={() =>
+								setReportModal({ open: true, editing: null, duplicate: false })
+							}
 							disabled={destinations.length === 0}
 						>
 							<Plus className="h-4 w-4" /> New report
@@ -1775,7 +1375,7 @@ export const NotificationPanel = ({ panel }) => {
 										<th className={TH}>Schedule</th>
 										<th className={TH}>Next run</th>
 										<th className={`${TH} ${W_STATUS}`}>Status</th>
-										<th className={`${TH} ${W_ACTIONS}`}>Actions</th>
+										<th className={`${TH} w-[22rem]`}>Actions</th>
 									</tr>
 								</thead>
 								<tbody className="bg-white dark:bg-secondary-800 divide-y divide-secondary-200 dark:divide-secondary-600">
@@ -1788,7 +1388,7 @@ export const NotificationPanel = ({ panel }) => {
 												<button
 													type="button"
 													className="inline-flex items-center justify-center w-6 h-6 rounded border border-transparent text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-40"
-													onClick={() => runReportNow.mutate(r.id)}
+													onClick={() => handleRunNow(r)}
 													disabled={runReportNow.isPending || !r.enabled}
 													title={
 														!r.enabled ? "Enable the report first" : "Run now"
@@ -1815,22 +1415,70 @@ export const NotificationPanel = ({ panel }) => {
 												>
 													{r.enabled ? "Active" : "Disabled"}
 												</span>
+												{r.deliver === false && (
+													<span
+														className="ml-1 px-2 py-0.5 text-xs font-medium rounded-md bg-secondary-100 text-secondary-600 dark:bg-secondary-700 dark:text-secondary-300"
+														title="Runs are rendered and archived only; nothing is sent."
+													>
+														Archive only
+													</span>
+												)}
 											</td>
 											<td className={`${TD} flex items-center gap-2`}>
 												<button
 													type="button"
 													className="text-primary-600 hover:text-primary-700 inline-flex items-center gap-1 text-xs"
 													onClick={() =>
-														setReportModal({ open: true, editing: r })
+														setReportModal({
+															open: true,
+															editing: r,
+															duplicate: false,
+														})
 													}
 												>
 													<Edit2 className="h-3.5 w-3.5" /> Edit
 												</button>
 												<button
 													type="button"
+													className="text-primary-600 hover:text-primary-700 inline-flex items-center gap-1 text-xs disabled:opacity-40"
+													onClick={() => previewReport(r)}
+													disabled={previewingId === r.id}
+													title="Download this report as PDF (nothing is sent)"
+												>
+													<FileText className="h-3.5 w-3.5" />{" "}
+													{previewingId === r.id ? "Rendering…" : "Preview"}
+												</button>
+												<button
+													type="button"
+													className="text-primary-600 hover:text-primary-700 inline-flex items-center gap-1 text-xs"
+													onClick={() => setArchiveReport(r)}
+													title="Past runs, delivery status and PDFs"
+												>
+													<Archive className="h-3.5 w-3.5" /> Archive
+												</button>
+												<button
+													type="button"
+													className="text-primary-600 hover:text-primary-700 inline-flex items-center gap-1 text-xs"
+													onClick={() =>
+														setReportModal({
+															open: true,
+															editing: r,
+															duplicate: true,
+														})
+													}
+													title="Copy as a new, disabled internal report"
+												>
+													<Copy className="h-3.5 w-3.5" /> Duplicate
+												</button>
+												<button
+													type="button"
 													className="text-red-600 hover:text-red-700 inline-flex items-center gap-1 text-xs"
 													onClick={() => {
-														if (confirm("Delete this report?"))
+														if (
+															confirm(
+																"Delete this report and its archived PDFs?",
+															)
+														)
 															deleteReport.mutate(r.id);
 													}}
 												>
@@ -1989,16 +1637,59 @@ export const NotificationPanel = ({ panel }) => {
 				hosts={Array.isArray(hostsList) ? hostsList : []}
 				isPending={createRoute.isPending || updateRoute.isPending}
 			/>
-			<ReportModal
-				key={reportModal.editing?.id || "new-report"}
-				isOpen={reportModal.open}
-				onClose={() => setReportModal({ open: false, editing: null })}
-				onSave={handleReportSave}
-				editingReport={reportModal.editing}
-				destinations={destinations}
-				hostGroups={hostGroupOptions}
-				isPending={createReport.isPending || updateReport.isPending}
+			{reportModal.open && (
+				<ReportModal
+					key={
+						reportModal.editing
+							? `${reportModal.duplicate ? "dup" : "edit"}-${reportModal.editing.id}`
+							: "new-report"
+					}
+					isOpen={reportModal.open}
+					onClose={() => {
+						// Closing is blocked while a save runs, so the save's onSuccess
+						// can only ever close the modal it belongs to.
+						if (createReport.isPending || updateReport.isPending) return;
+						setReportModal({ open: false, editing: null, duplicate: false });
+					}}
+					onSave={handleReportSave}
+					editingReport={reportModal.editing}
+					duplicate={reportModal.duplicate}
+					destinations={destinations}
+					hostGroups={hostGroupOptions}
+					hosts={reportScopeHosts}
+					isPending={createReport.isPending || updateReport.isPending}
+				/>
+			)}
+			<ReportConfirmDialog
+				open={runConfirm !== null}
+				title="Send this customer report now?"
+				summary={
+					runConfirm
+						? buildReportSummary({
+								groupIds: runConfirm.definition?.host_group_ids,
+								hostGroups: hostGroupOptions,
+								hosts: reportScopeHosts,
+								recipients: runConfirm.email_recipients,
+								destinations,
+								smtpId: runConfirm.destination_ids?.[0],
+								language: runConfirm.definition?.language,
+							})
+						: null
+				}
+				confirmLabel="Send now"
+				onConfirm={() => {
+					const r = runConfirm;
+					setRunConfirm(null);
+					runNow(r);
+				}}
+				onCancel={() => setRunConfirm(null)}
 			/>
+			{archiveReport && (
+				<ReportArchiveDialog
+					report={archiveReport}
+					onClose={() => setArchiveReport(null)}
+				/>
+			)}
 		</div>
 	);
 };

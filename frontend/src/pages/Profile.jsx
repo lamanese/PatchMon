@@ -29,6 +29,7 @@ import {
 import { useEffect, useId, useState } from "react";
 import DiscordIcon from "../components/DiscordIcon";
 import { FORM_INPUT_CLASS } from "../components/FormInput";
+import { PRODUCT_NAME } from "../constants/branding";
 import { useAuth } from "../contexts/AuthContext";
 import { THEME_PRESETS, useColorTheme } from "../contexts/ColorThemeContext";
 import { useSettings } from "../contexts/SettingsContext";
@@ -62,8 +63,10 @@ const Profile = () => {
 	const [message, setMessage] = useState({ type: "", text: "" });
 	const [newsletterLoading, setNewsletterLoading] = useState(false);
 
-	// Self-hosted only — hidden under SaaS/managed (admin_mode === true)
-	const showNewsletterSection = !publicSettings?.admin_mode;
+	// Self-hosted only — hidden under SaaS/managed (admin_mode) and when the
+	// server hides upstream community features (show_newsletter === false)
+	const showNewsletterSection =
+		!publicSettings?.admin_mode && publicSettings?.show_newsletter !== false;
 	const isNewsletterSubscribed = !!user?.newsletter_subscribed;
 	const newsletterSubscribedAt = user?.newsletter_subscribed_at;
 
@@ -1191,7 +1194,7 @@ const TfaTab = () => {
 	};
 
 	const downloadBackupCodes = () => {
-		const content = `PatchMon Backup Codes\n\n${backupCodes.map((code, index) => `${index + 1}. ${code}`).join("\n")}\n\nKeep these codes safe! Each code can only be used once.`;
+		const content = `${PRODUCT_NAME} Backup Codes\n\n${backupCodes.map((code, index) => `${index + 1}. ${code}`).join("\n")}\n\nKeep these codes safe! Each code can only be used once.`;
 		const blob = new Blob([content], { type: "text/plain" });
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement("a");

@@ -3,7 +3,10 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,6 +15,7 @@ import (
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/db"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/store"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/util"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/hibiken/asynq"
@@ -19,6 +23,7 @@ import (
 
 const (
 	TypeReportNow                = "report_now"
+	TypeReboot                   = "reboot"
 	TypeRefreshIntegrationStatus = "refresh_integration_status"
 	TypeDockerInventoryRefresh   = "docker_inventory_refresh"
 	TypeUpdateAgent              = "update_agent"
@@ -36,6 +41,8 @@ const (
 	TypeRunPatch                 = "run_patch"
 	TypeScheduledReportsDispatch = "scheduled_reports_dispatch"
 	TypeScheduledReportRun       = "scheduled_report_run"
+	TypeRebootSchedulesDispatch  = "reboot_schedules_dispatch"
+	TypePatchSchedulesDispatch   = "patch_schedules_dispatch"
 	QueueAgentCommands           = "agent-commands"
 	QueuePatching                = "patching"
 	QueueCompliance              = "compliance"
@@ -50,6 +57,8 @@ const (
 	QueueComplianceScanCleanup   = "compliance-scan-cleanup"
 	QueueSSGUpdateCheck          = "ssg-update-check"
 	QueueScheduledReports        = "scheduled-reports"
+	QueueRebootSchedules         = "reboot-schedules"
+	QueuePatchSchedules          = "patch-schedules"
 	TypeUpdateThresholdMonitor   = "update-threshold-monitor"
 	QueueUpdateThresholdMonitor  = "update-threshold-monitor"
 	TypePatchRunCleanup          = "patch-run-cleanup"
@@ -121,6 +130,11 @@ func NewSSGUpgradeTask(p SSGUpgradePayload) (*asynq.Task, error) {
 	), nil
 }
 
+// agentSafePackageNamePattern mirrors the agent's package-name allowlist
+// (validAptPackagePattern in the agent's serve.go). Names failing it would be
+// silently dropped by the agent - dispatch must not send them.
+var agentSafePackageNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.+-_]*$`)
+
 // RunPatchPayload is the payload for run_patch job.
 type RunPatchPayload struct {
 	HostID       string   `json:"hostId"`
@@ -145,6 +159,26 @@ func NewRunPatchTask(p RunPatchPayload) (*asynq.Task, error) {
 		asynq.TaskID("patch-run-" + p.PatchRunID),
 	}
 	return asynq.NewTask(TypeRunPatch, payload, opts...), nil
+}
+
+// OfflineRetryTaskIDs returns the two deterministic task IDs the offline-retry
+// chain of a patch run alternates between. Anything that cancels a run's
+// queued tasks must delete both.
+func OfflineRetryTaskIDs(patchRunID string) [2]string {
+	base := "patch-run-" + patchRunID + "-retry"
+	return [2]string{base, base + "-b"}
+}
+
+// nextOfflineRetryTaskID picks the ID for the next offline retry. It must never
+// be the ID of the task that is enqueuing it: asynq keeps a task's ID reserved
+// while the task is being processed, so re-using it fails with
+// ErrTaskIDConflict and the chain would end after a single retry.
+func nextOfflineRetryTaskID(patchRunID, currentTaskID string) string {
+	ids := OfflineRetryTaskIDs(patchRunID)
+	if currentTaskID == ids[0] {
+		return ids[1]
+	}
+	return ids[0]
 }
 
 // NewRunPatchRetryTask creates a run_patch task with a custom task ID so that
@@ -184,6 +218,43 @@ func NewReportNowTask(apiID, host string) (*asynq.Task, error) {
 		return nil, err
 	}
 	return asynq.NewTask(TypeReportNow, payload, asynq.Queue(QueueAgentCommands), asynq.MaxRetry(3)), nil
+}
+
+// RebootPayload is the payload for reboot job.
+type RebootPayload struct {
+	ApiID          string `json:"api_id"`
+	Host           string `json:"host,omitempty"`
+	OnlyIfRequired bool   `json:"only_if_required"`
+}
+
+// MaxRebootBatchSize caps the number of hosts a single reboot action may
+// target, shared by the bulk endpoint (per request) and the schedule
+// dispatcher (per run). Prevents an accidental select-all or an
+// over-broad host group from rebooting an entire fleet in one shot.
+const MaxRebootBatchSize = 100
+
+// rebootCooldown is how long a completed reboot task is retained in the queue
+// backend. While retained, its TaskID blocks re-enqueueing, giving each host a
+// per-host cooldown. Chosen to outlast the agent's 1-minute reboot delay so a
+// double submit cannot send a second shutdown command to a host that is about
+// to go down.
+const rebootCooldown = 2 * time.Minute
+
+// NewRebootTask creates a reboot task. MaxRetry is intentionally 0: a reboot
+// command must never be retried automatically. TaskID deduplicates reboot
+// requests for the same agent; Retention keeps the completed task around so
+// the dedupe acts as a cooldown rather than only covering the in-queue window.
+func NewRebootTask(p RebootPayload) (*asynq.Task, error) {
+	payload, err := json.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TypeReboot, payload,
+		asynq.Queue(QueueAgentCommands),
+		asynq.MaxRetry(0),
+		asynq.TaskID("reboot-"+p.ApiID),
+		asynq.Retention(rebootCooldown),
+	), nil
 }
 
 // NewRefreshIntegrationStatusTask creates a refresh_integration_status task.
@@ -401,6 +472,81 @@ func (h *ReportNowHandler) ProcessTask(ctx context.Context, t *asynq.Task) error
 	return nil
 }
 
+// RebootHandler handles reboot jobs.
+type RebootHandler struct {
+	registry *agentregistry.Registry
+	db       *database.DB
+	log      *slog.Logger
+}
+
+// NewRebootHandler creates a reboot handler.
+func NewRebootHandler(registry *agentregistry.Registry, db *database.DB, log *slog.Logger) *RebootHandler {
+	return &RebootHandler{registry: registry, db: db, log: log}
+}
+
+// ProcessTask implements asynq.Handler. Unlike report_now, the reboot command
+// carries a payload (only_if_required) and is never retried: the task has
+// MaxRetry(0), and write failures mark job_history as failed immediately.
+func (h *RebootHandler) ProcessTask(ctx context.Context, t *asynq.Task) error {
+	var p RebootPayload
+	if err := json.Unmarshal(t.Payload(), &p); err != nil {
+		return err
+	}
+
+	taskID, _ := asynq.GetTaskID(ctx)
+
+	// Log to job_history so the reboot shows up in the Agent Queue tab
+	if h.db != nil && taskID != "" {
+		host, err := h.db.Queries.GetHostByApiID(ctx, p.ApiID)
+		var hostID *string
+		if err == nil {
+			hostID = &host.ID
+		}
+		apiIDPtr := &p.ApiID
+		_ = h.db.Queries.InsertJobHistory(ctx, db.InsertJobHistoryParams{
+			ID:            uuid.New().String(),
+			JobID:         taskID,
+			QueueName:     QueueAgentCommands,
+			JobName:       TypeReboot,
+			HostID:        hostID,
+			ApiID:         apiIDPtr,
+			Status:        "active",
+			AttemptNumber: 1,
+		})
+	}
+
+	if !h.registry.IsConnected(p.ApiID) {
+		h.log.Warn("reboot: agent not connected", "api_id", p.ApiID)
+		if taskID != "" && h.db != nil {
+			msg := "Agent not connected"
+			_ = h.db.Queries.UpdateJobHistoryFailed(ctx, db.UpdateJobHistoryFailedParams{JobID: taskID, ErrorMessage: &msg})
+		}
+		return nil // Don't retry - a reboot must be re-triggered explicitly by the user
+	}
+
+	msg, err := json.Marshal(map[string]interface{}{
+		"type":             TypeReboot,
+		"only_if_required": p.OnlyIfRequired,
+	})
+	if err != nil {
+		return err
+	}
+	if err := h.registry.SendMessage(p.ApiID, websocket.TextMessage, msg); err != nil {
+		h.log.Warn("reboot: write failed", "api_id", p.ApiID, "error", err)
+		if taskID != "" && h.db != nil {
+			errMsg := "WebSocket write failed: " + err.Error()
+			_ = h.db.Queries.UpdateJobHistoryFailed(ctx, db.UpdateJobHistoryFailedParams{JobID: taskID, ErrorMessage: &errMsg})
+		}
+		return err // No retry (MaxRetry 0); task is archived
+	}
+
+	if taskID != "" && h.db != nil {
+		_ = h.db.Queries.UpdateJobHistoryCompleted(ctx, taskID)
+	}
+	h.log.Info("reboot sent", "api_id", p.ApiID, "only_if_required", p.OnlyIfRequired)
+	return nil
+}
+
 // sendAgentCommand is a helper that sends a JSON command to the agent and updates job_history.
 func sendAgentCommand(ctx context.Context, h *ReportNowHandler, p ReportNowPayload, msgType, taskID string, retryCount int) error {
 	taskIDVal, _ := asynq.GetTaskID(ctx)
@@ -580,6 +726,33 @@ func (h *UpdateAgentHandler) ProcessTask(ctx context.Context, t *asynq.Task) err
 	return nil
 }
 
+// terminalPatchRunStatuses are statuses from which a patch run is done -
+// dispatching it to an agent again would re-execute (or re-arm) a run that
+// has already finished, been rejected, or been cancelled (including by the
+// patch-run-cleanup reaper). A run_patch task can fire long after it was
+// enqueued (the deterministic 5-minute offline-retry task, or a task that
+// was already queued when the reaper cancelled the run and only fires once
+// the host reconnects), so this is checked unconditionally, before looking
+// at whether the agent is currently connected.
+var terminalPatchRunStatuses = map[string]bool{
+	"completed": true,
+	"failed":    true,
+	"cancelled": true,
+}
+
+// dispatchablePatchRunStatuses are the only statuses a run_patch task may
+// dispatch from. Every run that gets a task is created as "queued" (real and
+// scheduled runs) or "pending_validation" (dry runs) and leaves that status
+// the moment the agent has been told to start. A task that fires for any other
+// status is a duplicate: an asynq redelivery after the send, or a second task
+// for the same run (retry-validation while an offline-retry task was still
+// pending). Dispatching it would run the same patch twice on the host, or
+// reset a "validated" run back to "running".
+var dispatchablePatchRunStatuses = map[string]bool{
+	"queued":             true,
+	"pending_validation": true,
+}
+
 // RunPatchHandler handles run_patch jobs.
 type RunPatchHandler struct {
 	registry    *agentregistry.Registry
@@ -608,14 +781,30 @@ func (h *RunPatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		}
 	}
 
-	if !h.registry.IsConnected(p.ApiID) {
-		// Check if the patch run still exists in the DB (user may have deleted it).
-		run, runErr := h.patchRuns.GetByID(ctx, p.PatchRunID)
-		if runErr != nil || run == nil {
-			h.log.Info("run_patch: patch run deleted or not found, dropping task", "api_id", p.ApiID, "patch_run_id", p.PatchRunID)
-			return nil
-		}
+	// Load the run once, up front, and check its current DB status before
+	// doing anything else - see terminalPatchRunStatuses. A real lookup
+	// failure (DB blip, etc.) must not be treated the same as "not found":
+	// returning the error lets asynq retry the task (MaxRetry is set on
+	// every run_patch task), instead of silently dropping a dispatch.
+	run, runErr := h.patchRuns.GetByID(ctx, p.PatchRunID)
+	if runErr != nil {
+		return runErr
+	}
+	if run == nil {
+		h.log.Info("run_patch: patch run deleted or not found, dropping task", "api_id", p.ApiID, "patch_run_id", p.PatchRunID)
+		return nil
+	}
+	if terminalPatchRunStatuses[run.Status] {
+		h.log.Info("run_patch: run already in a terminal state, dropping task", "api_id", p.ApiID, "patch_run_id", p.PatchRunID, "status", run.Status)
+		return nil
+	}
 
+	if !dispatchablePatchRunStatuses[run.Status] {
+		h.log.Info("run_patch: run is not waiting for dispatch, dropping duplicate task", "api_id", p.ApiID, "patch_run_id", p.PatchRunID, "status", run.Status)
+		return nil
+	}
+
+	if !h.registry.IsConnected(p.ApiID) {
 		// Keep the correct status: pending_validation for dry runs, queued for real runs.
 		status := "queued"
 		if p.DryRun {
@@ -628,23 +817,97 @@ func (h *RunPatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 			return nil
 		}
 
-		_ = h.patchRuns.UpdateStatus(ctx, p.PatchRunID, status)
+		// Only write when the status actually changes. This run is re-checked
+		// every 5 minutes for as long as the host stays offline; if every
+		// pass stamped updated_at = NOW() regardless, the patch-run-cleanup
+		// reaper's 24h "host was not reachable" threshold (GREATEST(updated_at,
+		// scheduled_at) in ForkCancelStaleWaitingPatchRuns) would never see a
+		// row older than ~5 minutes and could never fire for exactly the case
+		// it exists for. updated_at must mean "last real transition".
+		if run.Status != status {
+			_ = h.patchRuns.UpdateStatus(ctx, p.PatchRunID, status)
+		}
 
 		// Use a deterministic retry task ID so only one retry can exist at a time
-		// and the delete handler can cancel it.
-		retryTaskID := "patch-run-" + p.PatchRunID + "-retry"
+		// and the delete handler can cancel it. The ID must differ from the one
+		// this task runs under, see nextOfflineRetryTaskID.
+		currentTaskID, _ := asynq.GetTaskID(ctx)
+		retryTaskID := nextOfflineRetryTaskID(p.PatchRunID, currentTaskID)
 		task, err := NewRunPatchRetryTask(p, retryTaskID)
 		if err != nil {
 			return err
 		}
 		_, err = h.queueClient.Enqueue(task, asynq.ProcessIn(5*time.Minute))
-		if err != nil {
-			// If a task with this ID already exists (pending), that's fine - skip.
-			h.log.Debug("run_patch: re-enqueue skipped or failed", "api_id", p.ApiID, "error", err)
-		} else {
+		switch {
+		case errors.Is(err, asynq.ErrTaskIDConflict):
+			// A retry with this ID is already pending, that's fine - skip.
+			h.log.Debug("run_patch: retry already pending, re-enqueue skipped", "api_id", p.ApiID, "patch_run_id", p.PatchRunID)
+		case err != nil:
+			// The chain ends here: the run stays queued until the patch-run
+			// reaper cancels it. Make that visible instead of hiding it at Debug.
+			h.log.Warn("run_patch: re-enqueue failed, offline retry chain interrupted", "api_id", p.ApiID, "patch_run_id", p.PatchRunID, "error", err)
+		default:
 			h.log.Info("run_patch: agent offline, re-queued in 5m", "api_id", p.ApiID, "patch_run_id", p.PatchRunID)
 		}
 		return nil
+	}
+
+	// Safety checks that need the target host's OS and agent version.
+	var isWindowsHost bool
+	var hostLookupErr error
+	if p.DryRun || len(p.PackageNames) > 0 {
+		osType, agentVersion, err := h.patchRuns.HostPatchTarget(ctx, p.HostID)
+		hostLookupErr = err
+		if err == nil {
+			isWindowsHost = strings.Contains(strings.ToLower(osType), "windows")
+		}
+		// Windows agents older than 2.0.5 ignore the dry_run flag in the WUA
+		// path and would REALLY install updates during a validation run.
+		// Fail closed: refuse dry runs when the target cannot be verified at
+		// all or the agent is known to be too old.
+		if p.DryRun {
+			msg := ""
+			switch {
+			case err != nil:
+				msg = "dry run refused: could not verify the target host's agent version"
+			case isWindowsHost && util.CompareVersions(agentVersion, "2.0.5") < 0:
+				msg = "dry run refused: Windows agents older than 2.0.5 would install updates during validation; wait for the agent self-update"
+			}
+			if msg != "" {
+				h.log.Warn("run_patch: "+msg, "host_id", p.HostID, "patch_run_id", p.PatchRunID, "agent_version", agentVersion, "lookup_error", err)
+				_ = h.patchRuns.UpdateOutput(ctx, p.PatchRunID, osType, "failed", "", msg)
+				return nil
+			}
+		}
+	}
+
+	// Windows agents install updates by WUA GUID, but per-package runs are
+	// triggered by package name (the update title) - resolve names to GUIDs
+	// here so every dispatch path (trigger, approve, retry) is covered.
+	packageNames := p.PackageNames
+	if len(packageNames) > 0 {
+		resolved, resolveErr := h.patchRuns.ResolveWindowsUpdateNames(ctx, p.HostID, packageNames)
+		if resolveErr != nil {
+			h.log.Warn("run_patch: failed to resolve Windows update GUIDs",
+				"host_id", p.HostID, "patch_run_id", p.PatchRunID, "error", resolveErr)
+		} else {
+			packageNames = resolved
+		}
+		// Names that still fail the agent's package-name allowlist (Windows
+		// update titles whose WUA row disappeared, or unresolved because of a
+		// lookup error) would be silently dropped by the agent, leaving the
+		// run stuck in "running". Fail the run up front instead. Checked for
+		// every host: non-Windows names already passed the same pattern at
+		// trigger time, so this cannot produce new false failures there.
+		for _, n := range packageNames {
+			if !agentSafePackageNamePattern.MatchString(n) {
+				msg := fmt.Sprintf("run refused: package %q could not be resolved to a Windows update GUID (the update may no longer be pending on this host)", n)
+				h.log.Warn("run_patch: "+msg, "host_id", p.HostID, "patch_run_id", p.PatchRunID,
+					"windows_host", isWindowsHost, "lookup_error", hostLookupErr)
+				_ = h.patchRuns.UpdateOutput(ctx, p.PatchRunID, "", "failed", "", msg)
+				return nil
+			}
+		}
 	}
 
 	// Build run_patch payload
@@ -657,8 +920,8 @@ func (h *RunPatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 	if p.PackageName != nil {
 		payload["package_name"] = *p.PackageName
 	}
-	if len(p.PackageNames) > 0 {
-		payload["package_names"] = p.PackageNames
+	if len(packageNames) > 0 {
+		payload["package_names"] = packageNames
 	}
 	msg, err := json.Marshal(payload)
 	if err != nil {

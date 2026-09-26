@@ -161,6 +161,17 @@ func (d *Detector) getFreeBSDInfo() (osType, osVersion string, err error) {
 	return osType, osVersion, nil
 }
 
+// gopsutil returns DisplayVersion as PlatformVersion, and it is absent before
+// Server 2022, so 2016 and 2019 LTSC need the ReleaseId fallback.
+func resolveWindowsOSVersion(platformVersion, releaseID, kernelVersion string) string {
+	for _, v := range []string{platformVersion, releaseID, kernelVersion} {
+		if v != "" {
+			return v
+		}
+	}
+	return "Unknown"
+}
+
 // DetectOS detects the operating system and version using /etc/os-release
 func (d *Detector) DetectOS() (osType, osVersion string, err error) {
 	// Check for Windows first (uses gopsutil)
@@ -171,11 +182,7 @@ func (d *Detector) DetectOS() (osType, osVersion string, err error) {
 		if infoErr != nil {
 			return "Windows", "Unknown", nil
 		}
-		osVer := info.PlatformVersion
-		if osVer == "" {
-			osVer = "Unknown"
-		}
-		return "Windows", osVer, nil
+		return "Windows", resolveWindowsOSVersion(info.PlatformVersion, windowsReleaseID(), info.KernelVersion), nil
 	}
 	// Check for FreeBSD first (doesn't have /etc/os-release)
 	if d.isFreeBSD() {
@@ -238,10 +245,18 @@ func (d *Detector) GetSystemInfo() models.SystemInfo {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	// Probed once so the uptime string and the boot time cannot disagree.
+	uptime, containerised := containerUptime()
+	// Taken right here, before the slower probes below (kernel version,
+	// getenforce), so the boot time is derived from a "now" that matches the
+	// instant uptime was read, not one skewed later by however long they took.
+	probedAt := time.Now()
+
 	info := models.SystemInfo{
 		KernelVersion: d.GetKernelVersion(),
 		SELinuxStatus: d.getSELinuxStatus(),
-		SystemUptime:  d.getSystemUptime(ctx),
+		SystemUptime:  d.getSystemUptime(ctx, uptime, containerised),
+		BootTime:      d.getBootTime(ctx, uptime, containerised, probedAt),
 		LoadAverage:   d.getLoadAverage(ctx),
 	}
 
@@ -372,15 +387,18 @@ func (d *Detector) getSELinuxStatus() string {
 	return constants.SELinuxDisabled
 }
 
-// getSystemUptime gets system uptime
-func (d *Detector) getSystemUptime(ctx context.Context) string {
-	info, err := host.InfoWithContext(ctx)
-	if err != nil {
-		d.logger.WithError(err).Warn("Failed to get uptime")
-		return "Unknown"
+// getSystemUptime gets system uptime. When containerised is set, uptime is the
+// container's own figure from containerUptime and is used in preference to the
+// host's, which is all gopsutil can report.
+func (d *Detector) getSystemUptime(ctx context.Context, uptime time.Duration, containerised bool) string {
+	if !containerised {
+		info, err := host.InfoWithContext(ctx)
+		if err != nil {
+			d.logger.WithError(err).Warn("Failed to get uptime")
+			return "Unknown"
+		}
+		uptime = time.Duration(info.Uptime) * time.Second
 	}
-
-	uptime := time.Duration(info.Uptime) * time.Second
 
 	days := int(uptime.Hours() / 24)
 	hours := int(uptime.Hours()) % 24
@@ -393,6 +411,52 @@ func (d *Detector) getSystemUptime(ctx context.Context) string {
 		return fmt.Sprintf("%d hours, %d minutes", hours, minutes)
 	}
 	return fmt.Sprintf("%d minutes", minutes)
+}
+
+// getBootTime returns the boot instant (UTC), or nil when it cannot be
+// established, so the server keeps its stored value instead of a sentinel.
+// probedAt is the "now" containerUptime's uptime figure was measured against;
+// passing it through (rather than taking a fresh time.Now here) keeps the
+// derived boot time from drifting by however long the caller's other probes
+// took to run.
+func (d *Detector) getBootTime(ctx context.Context, uptime time.Duration, containerised bool, probedAt time.Time) *time.Time {
+	if containerised {
+		return bootTimeFrom(uptime, true, false, 0, probedAt)
+	}
+	// containerUptime() couldn't establish a figure. If we are nonetheless
+	// inside a container, gopsutil's host boot time below is the hypervisor's
+	// (e.g. on Proxmox LXC), not ours, so it must not be used as a fallback.
+	if runningInContainer() {
+		return bootTimeFrom(0, false, true, 0, probedAt)
+	}
+	info, err := host.InfoWithContext(ctx)
+	if err != nil {
+		d.logger.WithError(err).Warn("Failed to get boot time")
+		return nil
+	}
+	return bootTimeFrom(0, false, false, info.BootTime, probedAt)
+}
+
+// bootTimeFrom holds the decision so it can be tested without gopsutil. Inside
+// a container gopsutil reports the host's boot time (on Proxmox: the
+// hypervisor's), so the instant is derived from the container's own uptime.
+// inContainer distinguishes "definitely in a container, but its own uptime
+// could not be established" from "not in a container at all": in the former
+// case hostBootUnix is the hypervisor's and must be discarded rather than
+// reported as our own.
+func bootTimeFrom(uptime time.Duration, containerised, inContainer bool, hostBootUnix uint64, now time.Time) *time.Time {
+	if containerised {
+		t := now.Add(-uptime).UTC()
+		return &t
+	}
+	if inContainer {
+		return nil
+	}
+	if hostBootUnix == 0 {
+		return nil
+	}
+	t := time.Unix(int64(hostBootUnix), 0).UTC()
+	return &t
 }
 
 // getLoadAverage gets system load average

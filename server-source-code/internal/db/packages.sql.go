@@ -111,12 +111,17 @@ func (q *Queries) GetCategories(ctx context.Context) ([]*string, error) {
 const getHostPackageStatsByHostIDs = `-- name: GetHostPackageStatsByHostIDs :many
 SELECT host_id,
     COUNT(*)::int AS total,
-    SUM(CASE WHEN needs_update THEN 1 ELSE 0 END)::int AS outdated,
-    SUM(CASE WHEN needs_update AND is_security_update THEN 1 ELSE 0 END)::int AS security
+    SUM(CASE WHEN needs_update AND NOT ($1::boolean AND fork_is_definition_update(wua_categories, wua_kb)) THEN 1 ELSE 0 END)::int AS outdated,
+    SUM(CASE WHEN needs_update AND is_security_update AND NOT ($1::boolean AND fork_is_definition_update(wua_categories, wua_kb)) THEN 1 ELSE 0 END)::int AS security
 FROM host_packages
-WHERE host_id = ANY($1::text[])
+WHERE host_id = ANY($2::text[])
 GROUP BY host_id
 `
+
+type GetHostPackageStatsByHostIDsParams struct {
+	IgnoreDefinitionUpdates bool     `json:"ignore_definition_updates"`
+	HostIds                 []string `json:"host_ids"`
+}
 
 type GetHostPackageStatsByHostIDsRow struct {
 	HostID   string `json:"host_id"`
@@ -125,8 +130,9 @@ type GetHostPackageStatsByHostIDsRow struct {
 	Security int32  `json:"security"`
 }
 
-func (q *Queries) GetHostPackageStatsByHostIDs(ctx context.Context, dollar_1 []string) ([]GetHostPackageStatsByHostIDsRow, error) {
-	rows, err := q.db.Query(ctx, getHostPackageStatsByHostIDs, dollar_1)
+// fork: PM_IGNORE_DEFINITION_UPDATES (same metric as GetHostPackageStats - keep them in agreement; total install count is untouched)
+func (q *Queries) GetHostPackageStatsByHostIDs(ctx context.Context, arg GetHostPackageStatsByHostIDsParams) ([]GetHostPackageStatsByHostIDsRow, error) {
+	rows, err := q.db.Query(ctx, getHostPackageStatsByHostIDs, arg.IgnoreDefinitionUpdates, arg.HostIds)
 	if err != nil {
 		return nil, err
 	}
@@ -339,8 +345,8 @@ func (q *Queries) GetPackageByID(ctx context.Context, id string) (Package, error
 const getPendingUpdateCountsPerHost = `-- name: GetPendingUpdateCountsPerHost :many
 SELECT
     hp.host_id,
-    SUM(CASE WHEN hp.needs_update THEN 1 ELSE 0 END)::int AS pending_count,
-    SUM(CASE WHEN hp.needs_update AND hp.is_security_update THEN 1 ELSE 0 END)::int AS security_count
+    SUM(CASE WHEN hp.needs_update AND NOT ($1::boolean AND fork_is_definition_update(hp.wua_categories, hp.wua_kb)) THEN 1 ELSE 0 END)::int AS pending_count,
+    SUM(CASE WHEN hp.needs_update AND hp.is_security_update AND NOT ($1::boolean AND fork_is_definition_update(hp.wua_categories, hp.wua_kb)) THEN 1 ELSE 0 END)::int AS security_count
 FROM host_packages hp
 JOIN hosts h ON h.id = hp.host_id AND h.status = 'active'
 GROUP BY hp.host_id
@@ -352,8 +358,9 @@ type GetPendingUpdateCountsPerHostRow struct {
 	SecurityCount int32  `json:"security_count"`
 }
 
-func (q *Queries) GetPendingUpdateCountsPerHost(ctx context.Context) ([]GetPendingUpdateCountsPerHostRow, error) {
-	rows, err := q.db.Query(ctx, getPendingUpdateCountsPerHost)
+// fork: PM_IGNORE_DEFINITION_UPDATES (used only by the update-threshold alert monitor)
+func (q *Queries) GetPendingUpdateCountsPerHost(ctx context.Context, ignoreDefinitionUpdates bool) ([]GetPendingUpdateCountsPerHostRow, error) {
+	rows, err := q.db.Query(ctx, getPendingUpdateCountsPerHost, ignoreDefinitionUpdates)
 	if err != nil {
 		return nil, err
 	}
@@ -672,19 +679,26 @@ func (q *Queries) ListOrphanedPackages(ctx context.Context) ([]ListOrphanedPacka
 }
 
 const listPackages = `-- name: ListPackages :many
-SELECT p.id, p.name, p.description, p.category, p.latest_version, p.created_at
+SELECT p.id, p.name, p.description, p.category, p.latest_version, p.created_at,
+    -- fork: PM_IGNORE_DEFINITION_UPDATES (informational only - does not filter rows or affect CountPackages)
+    EXISTS (
+        SELECT 1 FROM host_packages hp
+        WHERE hp.package_id = p.id
+        AND ($1::text IS NULL OR hp.host_id = $1)
+        AND fork_is_definition_update(hp.wua_categories, hp.wua_kb)
+    ) AS is_definition_update
 FROM packages p
-WHERE ($1::text IS NULL OR p.name ILIKE '%' || $1 || '%' OR p.description ILIKE '%' || $1 || '%')
-AND ($2::text IS NULL OR p.category = $2)
+WHERE ($2::text IS NULL OR p.name ILIKE '%' || $2 || '%' OR p.description ILIKE '%' || $2 || '%')
+AND ($3::text IS NULL OR p.category = $3)
 AND (
-    $3::text IS NULL
+    $1::text IS NULL
     AND $4::text IS NULL
     AND $5::text IS NULL
     AND $6::text IS NULL
     OR EXISTS (
         SELECT 1 FROM host_packages hp
         WHERE hp.package_id = p.id
-        AND ($3::text IS NULL OR hp.host_id = $3)
+        AND ($1::text IS NULL OR hp.host_id = $1)
         AND ($4::text IS NULL OR ($4 = 'true' AND hp.needs_update = true))
         AND ($5::text IS NULL OR ($5 = 'true' AND hp.needs_update = true AND hp.is_security_update = true))
         AND ($6::text IS NULL OR hp.source_repository_id = $6)
@@ -695,9 +709,9 @@ LIMIT $8 OFFSET $7
 `
 
 type ListPackagesParams struct {
+	HostID           *string `json:"host_id"`
 	Search           *string `json:"search"`
 	Category         *string `json:"category"`
-	HostID           *string `json:"host_id"`
 	NeedsUpdate      *string `json:"needs_update"`
 	IsSecurityUpdate *string `json:"is_security_update"`
 	RepositoryID     *string `json:"repository_id"`
@@ -706,19 +720,20 @@ type ListPackagesParams struct {
 }
 
 type ListPackagesRow struct {
-	ID            string           `json:"id"`
-	Name          string           `json:"name"`
-	Description   *string          `json:"description"`
-	Category      *string          `json:"category"`
-	LatestVersion *string          `json:"latest_version"`
-	CreatedAt     pgtype.Timestamp `json:"created_at"`
+	ID                 string           `json:"id"`
+	Name               string           `json:"name"`
+	Description        *string          `json:"description"`
+	Category           *string          `json:"category"`
+	LatestVersion      *string          `json:"latest_version"`
+	CreatedAt          pgtype.Timestamp `json:"created_at"`
+	IsDefinitionUpdate bool             `json:"is_definition_update"`
 }
 
 func (q *Queries) ListPackages(ctx context.Context, arg ListPackagesParams) ([]ListPackagesRow, error) {
 	rows, err := q.db.Query(ctx, listPackages,
+		arg.HostID,
 		arg.Search,
 		arg.Category,
-		arg.HostID,
 		arg.NeedsUpdate,
 		arg.IsSecurityUpdate,
 		arg.RepositoryID,
@@ -739,6 +754,7 @@ func (q *Queries) ListPackages(ctx context.Context, arg ListPackagesParams) ([]L
 			&i.Category,
 			&i.LatestVersion,
 			&i.CreatedAt,
+			&i.IsDefinitionUpdate,
 		); err != nil {
 			return nil, err
 		}

@@ -1,12 +1,12 @@
 package repositories
 
 import (
-	"encoding/json"
 	"os/exec"
 	"runtime"
 	"strings"
 
 	"patchmon-agent/internal/constants"
+	"patchmon-agent/internal/utils"
 	"patchmon-agent/pkg/models"
 
 	"github.com/sirupsen/logrus"
@@ -49,7 +49,10 @@ if ($useWUServer) {
   $sources += @{ Name = "Windows Server Update Services (WSUS)"; URL = $wsusServer; IsEnabled = $true; IsManaged = $true }
 }
 $sources += @{ Name = "Microsoft Update"; URL = "https://update.microsoft.com"; IsEnabled = $true; IsManaged = $false }
-$sources | ConvertTo-Json -Compress
+# -InputObject (not the pipeline) keeps this a JSON array even with exactly
+# one source; piping would unroll a single-element array and ConvertTo-Json
+# would emit a bare object instead (PS 5.1 has no -AsArray).
+ConvertTo-Json -InputObject @($sources) -Compress
 `
 
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
@@ -68,7 +71,13 @@ $sources | ConvertTo-Json -Compress
 	}
 
 	sourcesJSON := strings.TrimSpace(string(output))
-	if sourcesJSON == "" || sourcesJSON == "[]" {
+
+	// ConvertTo-Json collapses a single-element collection to a bare object
+	// instead of a one-element array — UnmarshalPSJSONArray normalizes that
+	// (and "null"/empty output) before decoding.
+	var sources []windowsUpdateSource
+	if err := utils.UnmarshalPSJSONArray([]byte(sourcesJSON), &sources); err != nil {
+		m.logger.WithError(err).Warn("Failed to parse Windows Update sources JSON")
 		return []models.Repository{{
 			Name:         "Microsoft Update",
 			URL:          "https://update.microsoft.com",
@@ -79,10 +88,7 @@ $sources | ConvertTo-Json -Compress
 			IsSecure:     true,
 		}}, nil
 	}
-
-	var sources []windowsUpdateSource
-	if err := json.Unmarshal([]byte(sourcesJSON), &sources); err != nil {
-		m.logger.WithError(err).Warn("Failed to parse Windows Update sources JSON")
+	if len(sources) == 0 {
 		return []models.Repository{{
 			Name:         "Microsoft Update",
 			URL:          "https://update.microsoft.com",

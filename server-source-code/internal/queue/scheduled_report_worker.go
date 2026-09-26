@@ -5,26 +5,26 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/smtp"
-	"strconv"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/PatchMon/PatchMon/server-source-code/internal/branding"
 	hostctx "github.com/PatchMon/PatchMon/server-source-code/internal/context"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/db"
-	"github.com/PatchMon/PatchMon/server-source-code/internal/notifications"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/pgtime"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/reports"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/util"
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/jackc/pgx/v5"
 )
 
 // ScheduledReportsDispatchHandler enqueues run jobs for due scheduled reports.
@@ -40,18 +40,37 @@ func NewScheduledReportsDispatchHandler(defaultDB *database.DB, poolCache *hostc
 	return &ScheduledReportsDispatchHandler{defaultDB: defaultDB, poolCache: poolCache, qc: qc, log: log}
 }
 
-func (h *ScheduledReportsDispatchHandler) resolveDB(ctx context.Context, payload []byte) *database.DB {
-	db := h.defaultDB
-	if len(payload) == 0 || h.poolCache == nil {
-		return db
+// resolveDB fails closed: a payload that names a tenant host must resolve
+// to that tenant's database, never to the default one.
+func (h *ScheduledReportsDispatchHandler) resolveDB(ctx context.Context, payload []byte) (*database.DB, error) {
+	if len(payload) == 0 {
+		return h.defaultDB, nil
 	}
 	var p AutomationPayload
-	if err := json.Unmarshal(payload, &p); err == nil && strings.TrimSpace(p.Host) != "" {
-		if resolved, err := h.poolCache.GetOrCreate(ctx, p.Host); err == nil && resolved != nil {
-			db = resolved
-		}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return nil, fmt.Errorf("scheduled_reports_dispatch: invalid payload: %w", err)
 	}
-	return db
+	return resolveTenantDB(ctx, h.defaultDB, h.poolCache, p.Host)
+}
+
+// resolveTenantDB returns the default DB for an empty host and the tenant DB
+// otherwise. Missing pool cache or a failed lookup is an error (fail-closed).
+func resolveTenantDB(ctx context.Context, defaultDB *database.DB, poolCache *hostctx.PoolCache, host string) (*database.DB, error) {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return defaultDB, nil
+	}
+	if poolCache == nil {
+		return nil, fmt.Errorf("tenant %q: no pool cache configured", host)
+	}
+	resolved, err := poolCache.GetOrCreate(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("tenant %q: %w", host, err)
+	}
+	if resolved == nil {
+		return nil, fmt.Errorf("tenant %q: no database", host)
+	}
+	return resolved, nil
 }
 
 func (h *ScheduledReportsDispatchHandler) processDB(ctx context.Context, d *database.DB, tenantHost string) {
@@ -64,13 +83,9 @@ func (h *ScheduledReportsDispatchHandler) processDB(ctx context.Context, d *data
 		return
 	}
 	for _, r := range rows {
-		// Use the same enqueue path as the event-driven chain so TaskIDs
-		// are consistent and duplicate runs are prevented.
-		if err := EnqueueScheduledReportAt(h.qc, r.ID, tenantHost, now); err != nil {
-			if h.log != nil {
-				h.log.Debug("scheduled_reports_dispatch: enqueue skipped", "report_id", r.ID, "error", err)
-			}
-		}
+		// Enqueue at the report's own stored slot (not "now") so the TaskID
+		// matches the event-driven chain and duplicate runs are prevented.
+		enqueueReportAtStoredSlot(ctx, d, h.qc, r, tenantHost, now, h.log)
 	}
 }
 
@@ -78,7 +93,13 @@ func (h *ScheduledReportsDispatchHandler) processDB(ctx context.Context, d *data
 func (h *ScheduledReportsDispatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error {
 	payload := t.Payload()
 	if len(payload) > 0 {
-		d := h.resolveDB(ctx, payload)
+		d, err := h.resolveDB(ctx, payload)
+		if err != nil {
+			if h.log != nil {
+				h.log.Error("scheduled_reports_dispatch: tenant resolution failed", "error", err)
+			}
+			return err
+		}
 		h.processDB(ctx, d, tenantHostFromPayload(payload))
 		return nil
 	}
@@ -98,46 +119,6 @@ func (h *ScheduledReportsDispatchHandler) ProcessTask(ctx context.Context, t *as
 	return nil
 }
 
-// ScheduledReportRunPayload is the payload for scheduled_report_run.
-type ScheduledReportRunPayload struct {
-	ReportID string `json:"report_id"`
-	Host     string `json:"host,omitempty"`
-}
-
-// NewScheduledReportRunTask enqueues report generation and delivery.
-// The TaskID includes a minute-bucket of the target run time so that each
-// scheduled execution is unique, self-enqueue doesn't collide with the
-// currently-active task, and "Run Now" can always enqueue.
-func NewScheduledReportRunTask(p ScheduledReportRunPayload, runAt time.Time) (*asynq.Task, error) {
-	b, err := json.Marshal(p)
-	if err != nil {
-		return nil, err
-	}
-	taskID := fmt.Sprintf("scheduled-report-run-%s-%d", p.ReportID, runAt.Unix()/60)
-	return asynq.NewTask(TypeScheduledReportRun, b,
-		asynq.Queue(QueueScheduledReports),
-		asynq.MaxRetry(3),
-		asynq.TaskID(taskID),
-	), nil
-}
-
-// EnqueueScheduledReportAt enqueues a scheduled report run to fire at a specific time.
-// Duplicate tasks for the same report+time bucket are silently ignored.
-func EnqueueScheduledReportAt(qc *asynq.Client, reportID, host string, runAt time.Time) error {
-	if qc == nil {
-		return nil
-	}
-	task, err := NewScheduledReportRunTask(ScheduledReportRunPayload{ReportID: reportID, Host: host}, runAt)
-	if err != nil {
-		return err
-	}
-	_, err = qc.Enqueue(task, asynq.ProcessAt(runAt))
-	if err == asynq.ErrDuplicateTask || err == asynq.ErrTaskIDConflict {
-		return nil
-	}
-	return err
-}
-
 // ScheduledReportRunHandler builds and sends a scheduled report.
 type ScheduledReportRunHandler struct {
 	defaultDB *database.DB
@@ -152,116 +133,658 @@ func NewScheduledReportRunHandler(defaultDB *database.DB, poolCache *hostctx.Poo
 	return &ScheduledReportRunHandler{defaultDB: defaultDB, poolCache: poolCache, qc: qc, enc: enc, log: log}
 }
 
-func (h *ScheduledReportRunHandler) resolveDB(ctx context.Context, payload []byte) *database.DB {
-	db := h.defaultDB
-	if len(payload) == 0 || h.poolCache == nil {
-		return db
-	}
+// resolveDB fails closed (see resolveTenantDB).
+func (h *ScheduledReportRunHandler) resolveDB(ctx context.Context, payload []byte) (*database.DB, error) {
 	var p ScheduledReportRunPayload
-	if err := json.Unmarshal(payload, &p); err == nil && strings.TrimSpace(p.Host) != "" {
-		if resolved, err := h.poolCache.GetOrCreate(ctx, p.Host); err == nil && resolved != nil {
-			db = resolved
-		}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return nil, fmt.Errorf("scheduled_report: invalid payload: %w", err)
 	}
-	return db
+	return resolveTenantDB(ctx, h.defaultDB, h.poolCache, p.Host)
 }
 
-// ProcessTask implements asynq.Handler.
+// Report delivery limits (spec §7). Archive retention is per report
+// (scheduled_reports.fork_archive_keep, see reports.DefaultArchiveKeep).
+const (
+	// ReportMailDeadline bounds one mail (dial, auth, data) end to end.
+	ReportMailDeadline = 60 * time.Second
+)
+
+// Seams for tests; production code never reassigns them.
+var (
+	sendReportEmail   = sendReportEmailSMTP
+	sendReportWebhook = sendScheduledWebhook
+	sendReportNtfy    = sendScheduledNtfy
+	reportRetryState  = asynqRetryState
+)
+
+// errNoDestinations: the report has nothing it could deliver to. Deterministic
+// like a config error; the run fails with destination_invalid.
+var errNoDestinations = errors.New(reports.CodeDestinationInvalid)
+
+// reportMarkTimeout bounds the status writes after a send. They run on a
+// context detached from the task's, so a confirmed send is recorded even when
+// the task context ends right after the SMTP server accepted the mail.
+const reportMarkTimeout = 10 * time.Second
+
+// asynqRetryState returns the task's retry count and limit. Outside an asynq
+// context there are no retries left, so the run finalizes.
+func asynqRetryState(ctx context.Context) (int, int) {
+	n, ok1 := asynq.GetRetryCount(ctx)
+	m, ok2 := asynq.GetMaxRetry(ctx)
+	if !ok1 || !ok2 {
+		return 0, 0
+	}
+	return n, m
+}
+
+func (h *ScheduledReportRunHandler) logInfo(msg string, args ...any) {
+	if h.log != nil {
+		h.log.Info(msg, args...)
+	}
+}
+
+func (h *ScheduledReportRunHandler) logWarn(msg string, args ...any) {
+	if h.log != nil {
+		h.log.Warn(msg, args...)
+	}
+}
+
+func (h *ScheduledReportRunHandler) logError(msg string, args ...any) {
+	if h.log != nil {
+		h.log.Error(msg, args...)
+	}
+}
+
+// ProcessTask implements asynq.Handler. One task is one run (RunKey): claim
+// the slot (scheduled runs), open the archive row, render and snapshot once,
+// then deliver. A retry resumes the pending archive row and only re-sends
+// deliveries that are not yet sent.
 func (h *ScheduledReportRunHandler) ProcessTask(ctx context.Context, t *asynq.Task) error {
 	var p ScheduledReportRunPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		return err
 	}
-	d := h.resolveDB(ctx, t.Payload())
-	rep, err := d.Queries.GetScheduledReportByID(ctx, p.ReportID)
-	if err != nil {
+	if p.Trigger == "" {
+		h.logInfo("scheduled_report: legacy task discarded", "report_id", p.ReportID)
 		return nil
 	}
-	if !rep.Enabled {
+	runKey, err := p.RunKey()
+	if err != nil {
+		h.logWarn("scheduled_report: malformed task discarded", "report_id", p.ReportID, "error", err)
 		return nil
 	}
-
-	// Build branding from settings for email template.
-	branding := notifications.ReportBranding{}
-	if settings, sErr := d.Queries.GetFirstSettings(ctx); sErr == nil {
-		baseURL := strings.TrimRight(settings.ServerUrl, "/")
-		branding.ServerURL = baseURL
-		if settings.LogoLight != nil && *settings.LogoLight != "" {
-			branding.LogoLightURL = baseURL + *settings.LogoLight
-		}
-		if settings.LogoDark != nil && *settings.LogoDark != "" {
-			branding.LogoDarkURL = baseURL + *settings.LogoDark
-		}
-	}
-
-	subject, htmlBody, csvBody, err := notifications.BuildScheduledReport(ctx, d, rep.Name, rep.Definition, branding)
+	d, err := h.resolveDB(ctx, t.Payload())
 	if err != nil {
-		h.insertRun(ctx, d, p.ReportID, "failed", err.Error(), "")
+		h.logError("scheduled_report: tenant resolution failed", "report_id", p.ReportID, "error", err)
 		return err
 	}
-	sum := sha256.Sum256([]byte(htmlBody + csvBody))
-	sumHex := hex.EncodeToString(sum[:])
-
-	var destIDs []string
-	if len(rep.DestinationIds) > 0 {
-		_ = json.Unmarshal(rep.DestinationIds, &destIDs)
+	rep, err := d.Queries.GetScheduledReportByID(ctx, p.ReportID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
 	}
-	if len(destIDs) == 0 {
-		h.insertRun(ctx, d, p.ReportID, "failed", "no destinations configured", sumHex)
-		return fmt.Errorf("no destinations")
+	if err != nil {
+		return err
+	}
+	if !rep.Enabled {
+		return h.abandonDisabledRun(ctx, d, rep.ID, runKey)
 	}
 
-	for _, did := range destIDs {
-		if strings.TrimSpace(did) == "" {
-			continue
-		}
-		dest, err := d.Queries.GetNotificationDestinationByID(ctx, did)
-		if err != nil || !dest.Enabled {
-			continue
-		}
-		plain, err := decryptNotifConfig(h.enc, dest.ConfigEncrypted)
+	arch, err := d.Queries.ForkGetReportArchiveByRunKey(ctx, runKey)
+	switch {
+	case err == nil && arch.Status != "pending":
+		return nil // already finished
+	case err == nil:
+		// A retry of this run: resume the pending archive row.
+	case errors.Is(err, pgx.ErrNoRows):
+		var claimed bool
+		arch, claimed, err = h.openArchive(ctx, d, rep, p, runKey)
 		if err != nil {
+			return err
+		}
+		if !claimed {
+			h.logInfo("scheduled_report: slot not claimable, task discarded", "report_id", rep.ID, "slot", p.SlotAt)
+			return nil
+		}
+	default:
+		return err
+	}
+
+	if !arch.HasPdf {
+		if err := h.renderAndSnapshot(ctx, d, rep, arch.ID); err != nil {
+			return h.handleRenderError(ctx, d, rep, arch.ID, err)
+		}
+	}
+	return h.deliverArchive(ctx, d, rep, arch.ID)
+}
+
+// abandonDisabledRun ends a run whose report was disabled between attempts:
+// a pending archive row for this run key is finalized as failed/abandoned
+// (its never-attempted deliveries too; failed ones keep their code) instead
+// of waiting for the 24 h rule. Nothing is sent.
+func (h *ScheduledReportRunHandler) abandonDisabledRun(ctx context.Context, d *database.DB, reportID, runKey string) error {
+	arch, err := d.Queries.ForkGetReportArchiveByRunKey(ctx, runKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if arch.Status != "pending" {
+		return nil
+	}
+	const msg = "report was disabled before the run finished"
+	if err := h.abandonUnsentDeliveries(ctx, d, arch.ID, msg); err != nil {
+		return err
+	}
+	h.logInfo("scheduled_report: report disabled, pending run abandoned", "report_id", reportID, "archive_id", arch.ID)
+	return h.finalizeRun(ctx, d, reportID, arch.ID, "failed", reports.CodeAbandoned, msg, "")
+}
+
+// abandonUnsentDeliveries marks every still pending delivery of the archive
+// as failed/abandoned (detached context, like every status write).
+func (h *ScheduledReportRunHandler) abandonUnsentDeliveries(ctx context.Context, d *database.DB, archiveID, msg string) error {
+	markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reportMarkTimeout)
+	defer cancel()
+	dels, err := d.Queries.ForkListReportDeliveries(markCtx, archiveID)
+	if err != nil {
+		return err
+	}
+	code := reports.CodeAbandoned
+	for _, del := range dels {
+		if del.Status != "pending" {
 			continue
 		}
-		switch strings.ToLower(dest.ChannelType) {
-		case "webhook":
-			err = sendScheduledWebhook(ctx, plain, subject, htmlBody, csvBody)
-		case "email":
-			err = sendScheduledEmail(plain, subject, htmlBody, csvBody)
-		case "ntfy":
-			err = sendScheduledNtfy(ctx, plain, subject, htmlBody, csvBody)
-		default:
-			err = fmt.Errorf("unknown channel %q", dest.ChannelType)
+		m := msg
+		if err := d.Queries.ForkMarkReportDelivery(markCtx, db.ForkMarkReportDeliveryParams{ID: del.ID, Status: "failed", ErrorCode: &code, ErrorMessage: &m}); err != nil {
+			return err
 		}
-		if err != nil && h.log != nil {
-			h.log.Error("scheduled_report: send failed", "destination_id", did, "error", err)
-		}
-	}
-
-	now := time.Now()
-	tz := rep.Timezone
-	if tz == "" {
-		tz = "UTC"
-	}
-	next, nerr := notifications.NextCronRun(rep.CronExpr, tz, now)
-	if nerr != nil {
-		next = now.Add(24 * time.Hour)
-	}
-	_ = d.Queries.UpdateScheduledReportRunTimes(ctx, db.UpdateScheduledReportRunTimesParams{
-		ID:        rep.ID,
-		LastRunAt: pgtime.From(now),
-		NextRunAt: pgtime.From(next),
-	})
-	h.insertRun(ctx, d, p.ReportID, "completed", "", sumHex)
-
-	// Self-enqueue the next run at the computed time (event-driven chain).
-	if err := EnqueueScheduledReportAt(h.qc, p.ReportID, p.Host, next); err != nil && h.log != nil {
-		h.log.Error("scheduled_report: failed to enqueue next run", "report_id", p.ReportID, "next", next, "error", err)
 	}
 	return nil
 }
 
-func (h *ScheduledReportRunHandler) insertRun(ctx context.Context, d *database.DB, reportID, status, errMsg, hash string) {
+// openArchive claims the slot (scheduled runs) and inserts the pending archive
+// row in one transaction, so a claimed slot always has its archive row and a
+// retry finds it. claimed is false when another task already took the slot.
+// The next slot is enqueued after the commit, independent of delivery.
+func (h *ScheduledReportRunHandler) openArchive(ctx context.Context, d *database.DB, rep db.ScheduledReport, p ScheduledReportRunPayload, runKey string) (db.ForkGetReportArchiveByRunKeyRow, bool, error) {
+	var none db.ForkGetReportArchiveByRunKeyRow
+	lang := reports.DefaultLanguage
+	var groupIDs []string
+	if def, derr := reports.ParseDefinition(rep.Definition); derr == nil {
+		lang, groupIDs = def.Language, def.HostGroupIDs
+	}
+	tx, err := d.Begin(ctx)
+	if err != nil {
+		return none, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := d.Queries.WithTx(tx)
+
+	var next time.Time
+	if p.Trigger == ReportTriggerScheduled {
+		now := time.Now()
+		next = nextReportSlot(rep.CronExpr, rep.Timezone, now)
+		rows, err := q.ForkClaimScheduledReportSlot(ctx, db.ForkClaimScheduledReportSlotParams{
+			ID: rep.ID, Slot: pgtime.From(*p.SlotAt), Now: pgtime.From(now), Next: pgtime.From(next),
+		})
+		if err != nil {
+			return none, false, err
+		}
+		if rows == 0 {
+			return none, false, nil
+		}
+	}
+	if err := q.ForkInsertReportArchive(ctx, db.ForkInsertReportArchiveParams{
+		ID:                uuid.NewString(),
+		ScheduledReportID: rep.ID,
+		RunKey:            runKey,
+		TriggerKind:       p.Trigger,
+		SlotAt:            p.SlotAt,
+		ReportName:        rep.Name,
+		Language:          lang,
+		CustomerMode:      rep.ForkEmailRecipients != nil,
+		GroupIds:          groupIDs,
+		Recipients:        rep.ForkEmailRecipients,
+		DeliveryEnabled:   rep.ForkDeliver,
+	}); err != nil {
+		return none, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return none, false, err
+	}
+	if p.Trigger == ReportTriggerScheduled {
+		if err := EnqueueScheduledReportAt(h.qc, rep.ID, p.Host, next); err != nil {
+			h.logError("scheduled_report: failed to enqueue next run", "report_id", rep.ID, "next", next, "error", err)
+		}
+	}
+	arch, err := d.Queries.ForkGetReportArchiveByRunKey(ctx, runKey)
+	if err != nil {
+		return none, false, err
+	}
+	return arch, true, nil
+}
+
+// runErrorCode classifies a render/plan failure. Recipient and destination
+// problems are delivery configuration, not rendering.
+func runErrorCode(err error) string {
+	if errors.Is(err, errNoDestinations) || errors.Is(err, reports.ErrRecipients) {
+		return reports.CodeDestinationInvalid
+	}
+	return reports.BuildErrorCode(err)
+}
+
+// handleRenderError finalizes deterministic failures (configuration, PDF too
+// large, nothing to deliver to) at once and returns nil. A transient failure
+// is returned for an asynq retry; on the last attempt the run is finalized as
+// failed instead of waiting for the 24 h abandon rule.
+func (h *ScheduledReportRunHandler) handleRenderError(ctx context.Context, d *database.DB, rep db.ScheduledReport, archiveID string, err error) error {
+	deterministic := reports.IsConfigError(err) || errors.Is(err, reports.ErrPDFTooLarge) || errors.Is(err, errNoDestinations)
+	if !deterministic {
+		// On the last attempt even a cancelled context finalizes (on a
+		// detached context) instead of leaving the row pending for 24 h.
+		retried, maxRetry := reportRetryState(ctx)
+		if retried < maxRetry {
+			h.logWarn("scheduled_report: render failed, retrying", "report_id", rep.ID, "archive_id", archiveID, "error", reports.RedactError(err))
+			return err
+		}
+	}
+	code, msg := runErrorCode(err), reports.RedactError(err)
+	h.logWarn("scheduled_report: run failed", "report_id", rep.ID, "archive_id", archiveID, "code", code)
+	return h.finalizeRun(ctx, d, rep.ID, archiveID, "failed", code, msg, "")
+}
+
+// plannedDelivery is one row of fork_report_deliveries before it exists.
+type plannedDelivery struct {
+	destID, destName, channel, recipient string
+}
+
+// deliveryPlan is who receives this run, frozen into the snapshot.
+type deliveryPlan struct {
+	deliveries []plannedDelivery
+	smtpDestID *string
+	mailFrom   *string
+	recipients []string // customer runs: the parsed list the deliveries were planned for
+}
+
+// planDeliveries resolves the report's destinations. Customer mode sends one
+// mail per recipient over exactly one enabled e-mail destination (its own To
+// is ignored); internal mode keeps one delivery per destination. Missing,
+// disabled and "internal" destinations are skipped.
+func (h *ScheduledReportRunHandler) planDeliveries(ctx context.Context, d *database.DB, rep db.ScheduledReport) (deliveryPlan, error) {
+	var plan deliveryPlan
+	customer := rep.ForkEmailRecipients != nil
+	var recipients []string
+	if customer {
+		var err error
+		if recipients, err = reports.ParseRecipients(rep.ForkEmailRecipients); err != nil {
+			return plan, err
+		}
+	}
+	var ids []string
+	if len(rep.DestinationIds) > 0 {
+		_ = json.Unmarshal(rep.DestinationIds, &ids)
+	}
+	seen := map[string]bool{}
+	var emailDests []db.NotificationDestination
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		dest, err := d.Queries.GetNotificationDestinationByID(ctx, id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			h.logDebug("scheduled_report: destination missing, skipped", "report_id", rep.ID, "destination_id", id)
+			continue
+		}
+		if err != nil {
+			return plan, err
+		}
+		channel := strings.ToLower(dest.ChannelType)
+		if !dest.Enabled || channel == "internal" {
+			h.logDebug("scheduled_report: destination disabled or internal, skipped", "report_id", rep.ID, "destination_id", id)
+			continue
+		}
+		switch {
+		case channel == "email":
+			emailDests = append(emailDests, dest)
+		case customer:
+			h.logDebug("scheduled_report: non-mail destination ignored in customer mode", "report_id", rep.ID, "destination_id", id)
+		default:
+			plan.deliveries = append(plan.deliveries, plannedDelivery{destID: dest.ID, destName: dest.DisplayName, channel: channel})
+		}
+	}
+
+	if customer {
+		if len(emailDests) != 1 {
+			return plan, fmt.Errorf("%w: customer report needs one enabled e-mail destination", reports.ErrRecipients)
+		}
+		dest := emailDests[0]
+		cfg, err := h.emailConfig(dest)
+		if err != nil {
+			return plan, fmt.Errorf("%w: e-mail destination config unreadable", errNoDestinations)
+		}
+		// Same rule as the API: customer mail only over TLS, valid sender.
+		if err := checkCustomerSMTP(cfg); err != nil {
+			return plan, fmt.Errorf("%w: %s", errNoDestinations, err.Error())
+		}
+		plan.smtpDestID, plan.mailFrom, plan.recipients = &dest.ID, &cfg.From, recipients
+		for _, addr := range recipients {
+			plan.deliveries = append(plan.deliveries, plannedDelivery{destID: dest.ID, destName: dest.DisplayName, channel: "email", recipient: addr})
+		}
+	} else {
+		for _, dest := range emailDests {
+			// An unreadable config still gets a delivery row: it fails as
+			// destination_invalid and stays visible in the archive.
+			to := ""
+			if cfg, err := h.emailConfig(dest); err == nil {
+				to = strings.TrimSpace(cfg.To)
+			}
+			plan.deliveries = append(plan.deliveries, plannedDelivery{destID: dest.ID, destName: dest.DisplayName, channel: "email", recipient: to})
+		}
+	}
+	if len(plan.deliveries) == 0 {
+		return plan, fmt.Errorf("%w: no enabled destinations", errNoDestinations)
+	}
+	return plan, nil
+}
+
+func (h *ScheduledReportRunHandler) logDebug(msg string, args ...any) {
+	if h.log != nil {
+		h.log.Debug(msg, args...)
+	}
+}
+
+// emailConfig decrypts and decodes an e-mail destination's config.
+func (h *ScheduledReportRunHandler) emailConfig(dest db.NotificationDestination) (scheduledEmailConfig, error) {
+	var cfg scheduledEmailConfig
+	plain, err := decryptNotifConfig(h.enc, dest.ConfigEncrypted)
+	if err != nil {
+		return cfg, err
+	}
+	err = json.Unmarshal([]byte(plain), &cfg)
+	return cfg, err
+}
+
+// renderAndSnapshot renders the report once (HTML, CSV, PDF) and stores the
+// output, the frozen scope and the planned deliveries in one transaction.
+func (h *ScheduledReportRunHandler) renderAndSnapshot(ctx context.Context, d *database.DB, rep db.ScheduledReport, archiveID string) error {
+	release, err := reports.DefaultGate.Acquire(ctx, 0)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	// Branding and the stale threshold come from the tenant's settings.
+	branding := reports.Branding{}
+	var staleAfter time.Duration
+	if settings, sErr := d.Queries.GetFirstSettings(ctx); sErr == nil {
+		branding, staleAfter = reports.BrandingFromSettings(settings)
+	}
+	out, err := reports.Build(ctx, d, reports.BuildInput{
+		ReportName:   rep.Name,
+		Definition:   rep.Definition,
+		Timezone:     rep.Timezone,
+		Now:          time.Now(),
+		StaleAfter:   staleAfter,
+		Branding:     branding,
+		CustomerMode: rep.ForkEmailRecipients != nil,
+		PDF:          true,
+	})
+	if err != nil {
+		return err
+	}
+	// Delivery off: the run is rendered and archived only. No destination
+	// is resolved, so a missing SMTP account never fails an archive-only run;
+	// the configured recipients are still recorded for the archive view.
+	plan := deliveryPlan{recipients: rep.ForkEmailRecipients}
+	if rep.ForkDeliver {
+		if plan, err = h.planDeliveries(ctx, d, rep); err != nil {
+			return err
+		}
+	} else if normalized, perr := reports.ParseRecipients(rep.ForkEmailRecipients); perr == nil {
+		// Same normalisation as the delivery path, so archive rows look alike.
+		plan.recipients = normalized
+	}
+
+	m := out.Model
+	groupIDs := make([]string, 0, len(m.Groups))
+	groupNames := make([]string, 0, len(m.Groups))
+	for _, g := range m.Groups {
+		groupIDs = append(groupIDs, g.ID)
+		groupNames = append(groupNames, g.Name)
+	}
+	sum := sha256.Sum256(out.PDF)
+	sumHex := hex.EncodeToString(sum[:])
+	periodFrom, periodTo := m.PeriodFrom, m.PeriodTo
+
+	tx, err := d.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := d.Queries.WithTx(tx)
+	if err := q.ForkSnapshotReportArchive(ctx, db.ForkSnapshotReportArchiveParams{
+		ID:                archiveID,
+		PeriodFrom:        &periodFrom,
+		PeriodTo:          &periodTo,
+		GroupIds:          groupIDs,
+		GroupNames:        groupNames,
+		HostCount:         int32(m.HostCount), //nolint:gosec // bounded by the scope limit
+		SmtpDestinationID: plan.smtpDestID,
+		MailFrom:          plan.mailFrom,
+		// Name, language, mode and recipients of THIS render: a retry after a
+		// transient render failure may render a changed report.
+		ReportName:      rep.Name,
+		Language:        m.Language,
+		CustomerMode:    rep.ForkEmailRecipients != nil,
+		Recipients:      plan.recipients,
+		DeliveryEnabled: rep.ForkDeliver,
+		Subject:         out.Subject,
+		Html:            &out.HTML,
+		Csv:             &out.CSV,
+		Pdf:             out.PDF,
+		PdfSize:         int32(len(out.PDF)), //nolint:gosec // bounded by the 10 MB PDF limit
+		PdfSha256:       &sumHex,
+	}); err != nil {
+		return err
+	}
+	for _, pd := range plan.deliveries {
+		if err := q.ForkInsertReportDelivery(ctx, db.ForkInsertReportDeliveryParams{
+			ID:              uuid.NewString(),
+			ArchiveID:       archiveID,
+			DestinationID:   pd.destID,
+			DestinationName: pd.destName,
+			Channel:         pd.channel,
+			Recipient:       pd.recipient,
+		}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// deliverArchive sends every delivery that is not yet sent, records each
+// result immediately and finalizes the run. It returns an error only when a
+// retryable delivery failed and asynq has retries left (archive stays pending).
+func (h *ScheduledReportRunHandler) deliverArchive(ctx context.Context, d *database.DB, rep db.ScheduledReport, archiveID string) error {
+	content, err := d.Queries.ForkGetReportArchiveContent(ctx, archiveID)
+	if err != nil {
+		return err
+	}
+	dels, err := d.Queries.ForkListReportDeliveries(ctx, archiveID)
+	if err != nil {
+		return err
+	}
+	loc, _ := reports.ResolveLocation(rep.Timezone)
+	retried, maxRetry := reportRetryState(ctx)
+	lastAttempt := retried >= maxRetry
+	var sent, failed int
+	anyRetryable := false
+	firstCode := ""
+	for _, del := range dels {
+		if del.Status == "sent" {
+			sent++
+			continue
+		}
+		// A failure that cannot succeed later stays failed; only pending and
+		// retryable-failed deliveries are attempted again.
+		if del.Status == "failed" && (del.ErrorCode == nil || !reports.RetryableCode(*del.ErrorCode)) {
+			failed++
+			if firstCode == "" && del.ErrorCode != nil {
+				firstCode = *del.ErrorCode
+			}
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			if !lastAttempt {
+				// Shutdown or timeout: stop sending; the archive stays
+				// pending and asynq requeues the task.
+				return err
+			}
+			// Last attempt: a row that already failed keeps its own code;
+			// only a never-attempted (pending) row becomes abandoned.
+			if del.Status == "failed" {
+				failed++
+				if firstCode == "" && del.ErrorCode != nil {
+					firstCode = *del.ErrorCode
+				}
+				continue
+			}
+			code, msg := reports.CodeAbandoned, "run ended before this delivery was sent"
+			markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reportMarkTimeout)
+			err := d.Queries.ForkMarkReportDelivery(markCtx, db.ForkMarkReportDeliveryParams{ID: del.ID, Status: "failed", ErrorCode: &code, ErrorMessage: &msg})
+			cancel()
+			if err != nil {
+				return err
+			}
+			failed++
+			if firstCode == "" {
+				firstCode = code
+			}
+			continue
+		}
+		sendErr := h.sendDelivery(ctx, d, rep, del, content, loc)
+		params := db.ForkMarkReportDeliveryParams{ID: del.ID, Status: "sent"}
+		if sendErr != nil {
+			code, msg := classifyDeliveryError(del.Channel, sendErr), redactDeliveryError(sendErr, del.Recipient)
+			params.Status, params.ErrorCode, params.ErrorMessage = "failed", &code, &msg
+			failed++
+			if firstCode == "" {
+				firstCode = code
+			}
+			if reports.RetryableCode(code) {
+				anyRetryable = true
+			}
+			h.logWarn("scheduled_report: delivery failed", "archive_id", archiveID, "delivery_id", del.ID, "channel", del.Channel, "code", code)
+		} else {
+			sent++
+		}
+		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reportMarkTimeout)
+		err := d.Queries.ForkMarkReportDelivery(markCtx, params)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
+
+	if anyRetryable && !lastAttempt {
+		return fmt.Errorf("scheduled_report: %d deliveries failed, retrying", failed)
+	}
+
+	status, code, msg := "completed", "", ""
+	switch {
+	case failed == 0:
+	case sent == 0:
+		status, code, msg = "failed", firstCode, "no delivery succeeded"
+	default:
+		status, msg = "partial", fmt.Sprintf("%d of %d deliveries failed", failed, sent+failed)
+	}
+	h.logInfo("scheduled_report: run finished", "report_id", rep.ID, "archive_id", archiveID, "status", status, "sent", sent, "failed", failed, "deliver", rep.ForkDeliver)
+	pdfSum := ""
+	if content.PdfSha256 != nil {
+		pdfSum = *content.PdfSha256
+	}
+	return h.finalizeRun(ctx, d, rep.ID, archiveID, status, code, msg, pdfSum)
+}
+
+// redactDeliveryError flattens a send error for storage: every occurrence of
+// the delivery's own recipient is masked first (also forms like
+// user@localhost that the generic address pattern misses), then RedactError.
+func redactDeliveryError(err error, recipient string) string {
+	if err == nil {
+		return ""
+	}
+	text := err.Error()
+	if r := strings.TrimSpace(recipient); r != "" {
+		text = regexp.MustCompile(`(?i)`+regexp.QuoteMeta(r)).ReplaceAllString(text, "***@***")
+	}
+	return reports.RedactError(errors.New(text))
+}
+
+// finalizeRun writes the archive's final status and the run row in one
+// transaction, then applies retention, on a context detached from the
+// task's, so a run that reached its end is recorded even when the task
+// context ends now. A failed write is returned so asynq retries; the retry
+// finds the archive still pending and finalizes again. Only the call that
+// moves the archive out of pending inserts the run row.
+func (h *ScheduledReportRunHandler) finalizeRun(ctx context.Context, d *database.DB, reportID, archiveID, status, code, msg, pdfSum string) error {
+	markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reportMarkTimeout)
+	defer cancel()
+	if err := h.finishArchive(markCtx, d, reportID, archiveID, status, code, msg, pdfSum); err != nil {
+		h.logError("scheduled_report: finish archive failed", "archive_id", archiveID, "error", err)
+		return fmt.Errorf("scheduled_report: finalize run: %w", err)
+	}
+	applyReportRetention(markCtx, d, reportID, h.log)
+	return nil
+}
+
+// finishArchive moves a pending archive row to its final status and, when
+// that transition happened, records the run row (ctx: see finalizeRun).
+func (h *ScheduledReportRunHandler) finishArchive(ctx context.Context, d *database.DB, reportID, archiveID, status, code, msg, pdfSum string) error {
+	var cp, mp *string
+	if code != "" {
+		cp = &code
+	}
+	if msg != "" {
+		mp = &msg
+	}
+	tx, err := d.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := d.Queries.WithTx(tx)
+	rows, err := q.ForkFinishReportArchive(ctx, db.ForkFinishReportArchiveParams{ID: archiveID, Status: status, ErrorCode: cp, ErrorMessage: mp})
+	if err != nil {
+		return err
+	}
+	if rows == 1 {
+		if err := insertRun(ctx, q, reportID, status, msg, pdfSum); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// applyReportRetention marks pending rows older than 24 h as abandoned and
+// keeps the report's newest fork_archive_keep rows (the query reads the
+// report's own value).
+func applyReportRetention(ctx context.Context, d *database.DB, reportID string, log *slog.Logger) {
+	abandoned, err := d.Queries.ForkAbandonStaleReportArchive(ctx, reportID)
+	if err != nil && log != nil {
+		log.Error("scheduled_report: abandon stale archive rows failed", "report_id", reportID, "error", err)
+	}
+	pruned, err := d.Queries.ForkPruneReportArchive(ctx, reportID)
+	if err != nil && log != nil {
+		log.Error("scheduled_report: prune archive failed", "report_id", reportID, "error", err)
+	}
+	if log != nil {
+		log.Debug("scheduled_report: archive retention", "report_id", reportID, "abandoned", abandoned, "pruned", pruned)
+	}
+}
+
+func insertRun(ctx context.Context, q *db.Queries, reportID, status, errMsg, hash string) error {
 	var em *string
 	if errMsg != "" {
 		em = &errMsg
@@ -270,16 +793,14 @@ func (h *ScheduledReportRunHandler) insertRun(ctx context.Context, d *database.D
 	if hash != "" {
 		sh = &hash
 	}
-	_, err := d.Queries.InsertScheduledReportRun(ctx, db.InsertScheduledReportRunParams{
+	_, err := q.InsertScheduledReportRun(ctx, db.InsertScheduledReportRunParams{
 		ID:                uuid.New().String(),
 		ScheduledReportID: reportID,
 		Status:            status,
 		ErrorMessage:      em,
 		SummaryHash:       sh,
 	})
-	if err != nil && h.log != nil {
-		h.log.Debug("scheduled_report: insert run failed", "error", err)
-	}
+	return err
 }
 
 func decryptNotifConfig(enc *util.Encryption, s string) (string, error) {
@@ -363,93 +884,6 @@ type scheduledEmailConfig struct {
 	UseTLS   bool   `json:"use_tls"`
 }
 
-func sendScheduledEmail(plain, subject, html, csv string) error {
-	var cfg scheduledEmailConfig
-	if err := json.Unmarshal([]byte(plain), &cfg); err != nil {
-		return err
-	}
-	if cfg.SMTPHost == "" || cfg.From == "" || cfg.To == "" {
-		return fmt.Errorf("email smtp_host, from, to required")
-	}
-	if cfg.SMTPPort == 0 {
-		cfg.SMTPPort = 587
-	}
-	// Sanitize subject to prevent SMTP header injection.
-	subject = strings.NewReplacer("\r", "", "\n", "").Replace(subject)
-	msg := []byte(fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n%s",
-		cfg.From, cfg.To, subject, html))
-	addr := cfg.SMTPHost + ":" + strconv.Itoa(cfg.SMTPPort)
-	var auth smtp.Auth
-	if cfg.Username != "" {
-		auth = smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.SMTPHost)
-	}
-	tlsCfg := &tls.Config{ServerName: cfg.SMTPHost, MinVersion: tls.VersionTLS12}
-
-	// use_tls controls STARTTLS: when false, do not upgrade even if the server advertises it
-	// (matches notification email delivery; see sendEmail in notification_worker.go).
-	c, conn, err := func() (*smtp.Client, net.Conn, error) {
-		plainConn, dialErr := net.DialTimeout("tcp", addr, 30*time.Second)
-		if dialErr != nil {
-			return nil, nil, dialErr
-		}
-		client, clientErr := smtp.NewClient(plainConn, cfg.SMTPHost)
-		if clientErr != nil {
-			_ = plainConn.Close()
-			return nil, nil, clientErr
-		}
-		startTLS, _ := client.Extension("STARTTLS")
-		if startTLS && cfg.UseTLS {
-			if tlsErr := client.StartTLS(tlsCfg); tlsErr != nil {
-				_ = client.Close()
-				return nil, nil, tlsErr
-			}
-			return client, plainConn, nil
-		}
-		if cfg.UseTLS && !startTLS {
-			_ = client.Close()
-			tlsConn, tlsErr := tls.DialWithDialer(&net.Dialer{Timeout: 30 * time.Second}, "tcp", addr, tlsCfg)
-			if tlsErr != nil {
-				return nil, nil, tlsErr
-			}
-			client, clientErr = smtp.NewClient(tlsConn, cfg.SMTPHost)
-			if clientErr != nil {
-				_ = tlsConn.Close()
-				return nil, nil, clientErr
-			}
-			return client, tlsConn, nil
-		}
-		return client, plainConn, nil
-	}()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = conn.Close() }()
-	defer func() { _ = c.Close() }()
-
-	if auth != nil {
-		if ok, _ := c.Extension("AUTH"); ok {
-			if err := c.Auth(auth); err != nil {
-				return err
-			}
-		}
-	}
-	if err := c.Mail(cfg.From); err != nil {
-		return err
-	}
-	if err := c.Rcpt(cfg.To); err != nil {
-		return err
-	}
-	w, err := c.Data()
-	if err != nil {
-		return err
-	}
-	_, err = w.Write(msg)
-	if err != nil {
-		return err
-	}
-	return w.Close()
-}
-
 func sendScheduledNtfy(ctx context.Context, plain, subject, html, csv string) error {
 	var cfg ntfyConfig
 	if err := json.Unmarshal([]byte(plain), &cfg); err != nil {
@@ -465,7 +899,7 @@ func sendScheduledNtfy(ctx context.Context, plain, subject, html, csv string) er
 
 	title := strings.TrimSpace(subject)
 	if title == "" {
-		title = "PatchMon scheduled report"
+		title = branding.ProductNameShort + " scheduled report"
 	}
 
 	// Build a plain-text excerpt from the HTML for ntfy

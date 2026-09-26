@@ -426,7 +426,7 @@ func (h *SystemStatisticsHandler) ProcessTask(ctx context.Context, t *asynq.Task
 }
 
 func (h *SystemStatisticsHandler) collectStats(ctx context.Context, d *database.DB) error {
-	stats, err := d.Queries.GetSystemStatsForInsert(ctx)
+	stats, err := d.Queries.GetSystemStatsForInsert(ctx, d.IgnoreDefinitionUpdates()) // fork: PM_IGNORE_DEFINITION_UPDATES
 	if err != nil {
 		return err
 	}
@@ -446,13 +446,14 @@ type VersionUpdateCheckHandler struct {
 	defaultDB     *database.DB
 	poolCache     *hostctx.PoolCache
 	serverVersion string
+	skipUpstream  bool
 	emit          *notifications.Emitter
 	log           *slog.Logger
 }
 
 // NewVersionUpdateCheckHandler creates a version update check handler.
-func NewVersionUpdateCheckHandler(defaultDB *database.DB, poolCache *hostctx.PoolCache, serverVersion string, emit *notifications.Emitter, log *slog.Logger) *VersionUpdateCheckHandler {
-	return &VersionUpdateCheckHandler{defaultDB: defaultDB, poolCache: poolCache, serverVersion: serverVersion, emit: emit, log: log}
+func NewVersionUpdateCheckHandler(defaultDB *database.DB, poolCache *hostctx.PoolCache, serverVersion string, skipUpstream bool, emit *notifications.Emitter, log *slog.Logger) *VersionUpdateCheckHandler {
+	return &VersionUpdateCheckHandler{defaultDB: defaultDB, poolCache: poolCache, serverVersion: serverVersion, skipUpstream: skipUpstream, emit: emit, log: log}
 }
 
 // ProcessTask implements asynq.Handler.
@@ -472,6 +473,12 @@ func (h *VersionUpdateCheckHandler) ProcessTask(ctx context.Context, t *asynq.Ta
 }
 
 func (h *VersionUpdateCheckHandler) checkVersions(ctx context.Context, d *database.DB, tenantHost string) error {
+	if h.skipUpstream {
+		// Fork mode (PM_HIDE_COMMUNITY_LINKS): updates ship via the fork's own
+		// image pipeline — no upstream DNS beacon, no upstream update alerts.
+		h.log.Debug("version update check skipped (upstream check disabled)")
+		return nil
+	}
 	if err := alerts.ProcessServerUpdate(ctx, d, h.serverVersion, tenantHost, h.emit, h.log); err != nil {
 		return err
 	}
@@ -515,6 +522,35 @@ func (h *ComplianceScanCleanupHandler) cleanupDB(ctx context.Context, d *databas
 	})
 }
 
+// Thresholds for the patch-run reaper (cleanupDB below). patch_runs can get
+// stuck in any non-terminal status forever - a host that never reconnects
+// leaves the offline-retry loop in RunPatchHandler.ProcessTask re-enqueuing
+// every 5 minutes indefinitely, and nothing ever revisits a run awaiting
+// human approval. These three named thresholds, plus the reference-time
+// choice per category, are the only knobs; keep them together so the
+// upstream-vs-fork behaviour difference (upstream's CancelStalledPatchRuns
+// only ever handled 'running' at a fixed 30 minutes) stays easy to compare.
+const (
+	// patchRunRunningStaleAfter: a 'running' patch run older than this is
+	// presumed dead (host crashed, agent killed, websocket dropped mid-run
+	// with no recovery), not just slow. Must clear legitimate Windows patch
+	// runs, which the agent allows to run up to 4 hours - hence 6h, not
+	// upstream's 30 minutes.
+	patchRunRunningStaleAfter = 6 * time.Hour
+
+	// patchRunWaitingStaleAfter: how long a run may sit 'queued' or
+	// 'pending_validation' waiting for its host to come back online.
+	patchRunWaitingStaleAfter = 24 * time.Hour
+
+	// patchRunApprovalStaleAfter: how long a run may sit 'pending_approval',
+	// 'validated' or 'approved' waiting for a human to act on it.
+	patchRunApprovalStaleAfter = 7 * 24 * time.Hour
+
+	patchRunRunningStaleMessage  = "Automatically cancelled: still marked running after more than 6 hours"
+	patchRunWaitingStaleMessage  = "Automatically cancelled: host was not reachable within 24 hours"
+	patchRunApprovalStaleMessage = "Automatically cancelled: not approved or executed within 7 days"
+)
+
 // PatchRunCleanupHandler handles patch-run-cleanup jobs.
 type PatchRunCleanupHandler struct {
 	defaultDB *database.DB
@@ -542,19 +578,52 @@ func (h *PatchRunCleanupHandler) ProcessTask(ctx context.Context, t *asynq.Task)
 	return nil
 }
 
+// cleanupDB reaps patch_runs stuck in any non-terminal status. It supersedes
+// upstream's CancelStalledPatchRuns (status='running' older than 30 minutes,
+// NULL started_at never matches) with three fork queries covering every
+// non-terminal status; the upstream query is left in place, unused, so an
+// upstream sync never conflicts on its text - see patching.sql.
 func (h *PatchRunCleanupHandler) cleanupDB(ctx context.Context, d *database.DB) error {
-	pgThreshold := pgtime.From(time.Now().Add(-30 * time.Minute))
-	msg := "Automatically cancelled after running for more than 30 minutes"
-	cancelled, err := d.Queries.CancelStalledPatchRuns(ctx, db.CancelStalledPatchRunsParams{
-		StartedAt:    pgThreshold,
-		ErrorMessage: &msg,
+	now := time.Now()
+
+	runningMsg := patchRunRunningStaleMessage
+	cancelledRunning, err := d.Queries.ForkCancelStaleRunningPatchRuns(ctx, db.ForkCancelStaleRunningPatchRunsParams{
+		Threshold:    pgtime.From(now.Add(-patchRunRunningStaleAfter)),
+		ErrorMessage: &runningMsg,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("cancel stale running patch runs: %w", err)
 	}
-	if cancelled > 0 {
-		h.log.Info("patch run cleanup: cancelled stale runs", "count", cancelled)
+	if cancelledRunning > 0 {
+		h.log.Info("patch run cleanup: cancelled stale runs", "category", "running", "count", cancelledRunning)
 	}
+
+	waitingMsg := patchRunWaitingStaleMessage
+	cancelledWaiting, err := d.Queries.ForkCancelStaleWaitingPatchRuns(ctx, db.ForkCancelStaleWaitingPatchRunsParams{
+		Statuses:     []string{"queued", "pending_validation"},
+		Threshold:    pgtime.From(now.Add(-patchRunWaitingStaleAfter)),
+		ErrorMessage: &waitingMsg,
+	})
+	if err != nil {
+		return fmt.Errorf("cancel stale waiting patch runs: %w", err)
+	}
+	if cancelledWaiting > 0 {
+		h.log.Info("patch run cleanup: cancelled stale runs", "category", "waiting", "count", cancelledWaiting)
+	}
+
+	approvalMsg := patchRunApprovalStaleMessage
+	cancelledApproval, err := d.Queries.ForkCancelStaleWaitingPatchRuns(ctx, db.ForkCancelStaleWaitingPatchRunsParams{
+		Statuses:     []string{"pending_approval", "validated", "approved"},
+		Threshold:    pgtime.From(now.Add(-patchRunApprovalStaleAfter)),
+		ErrorMessage: &approvalMsg,
+	})
+	if err != nil {
+		return fmt.Errorf("cancel stale approval-pending patch runs: %w", err)
+	}
+	if cancelledApproval > 0 {
+		h.log.Info("patch run cleanup: cancelled stale runs", "category", "approval", "count", cancelledApproval)
+	}
+
 	return nil
 }
 
@@ -617,16 +686,23 @@ type MetricsSendHandler struct {
 	defaultDB     *database.DB
 	poolCache     *hostctx.PoolCache
 	serverVersion string
+	skipTelemetry bool
 	log           *slog.Logger
 }
 
 // NewMetricsSendHandler creates a metrics send handler.
-func NewMetricsSendHandler(defaultDB *database.DB, poolCache *hostctx.PoolCache, serverVersion string, log *slog.Logger) *MetricsSendHandler {
-	return &MetricsSendHandler{defaultDB: defaultDB, poolCache: poolCache, serverVersion: serverVersion, log: log}
+func NewMetricsSendHandler(defaultDB *database.DB, poolCache *hostctx.PoolCache, serverVersion string, skipTelemetry bool, log *slog.Logger) *MetricsSendHandler {
+	return &MetricsSendHandler{defaultDB: defaultDB, poolCache: poolCache, serverVersion: serverVersion, skipTelemetry: skipTelemetry, log: log}
 }
 
 // ProcessTask implements asynq.Handler.
 func (h *MetricsSendHandler) ProcessTask(ctx context.Context, t *asynq.Task) error {
+	if h.skipTelemetry {
+		// Fork mode (PM_HIDE_COMMUNITY_LINKS): never phone home to the
+		// upstream metrics API, regardless of the metrics_enabled DB setting.
+		h.log.Debug("metrics send skipped (telemetry disabled)")
+		return nil
+	}
 	forEachDB(ctx, h.defaultDB, h.poolCache, func(ctx context.Context, d *database.DB, host string) {
 		if err := h.sendMetrics(ctx, d, host); err != nil {
 			h.log.Warn("metrics send failed", "host", host, "error", err)

@@ -62,7 +62,7 @@ INSERT INTO users (
     discord_id, discord_username, discord_avatar, discord_linked_at
 ) VALUES (
     $1, $2, $3, NULL, $4, true, $5, $6,
-    false, $7, $8, 'dark', 'cyber_blue',
+    false, $7, $8, 'light', 'cyber_blue',
     $9, $10, $11, $12
 )
 `
@@ -107,7 +107,7 @@ INSERT INTO users (
     oidc_sub, oidc_provider, avatar_url
 ) VALUES (
     $1, $2, $3, NULL, $4, true, $5, $6,
-    false, $7, $8, 'dark', 'cyber_blue',
+    false, $7, $8, 'light', 'cyber_blue',
     $9, $10, $11
 )
 `
@@ -425,7 +425,7 @@ func (q *Queries) GetUserByOidcSub(ctx context.Context, oidcSub *string) (User, 
 
 const getUserByOidcSubOrEmail = `-- name: GetUserByOidcSubOrEmail :one
 SELECT id, username, email, password_hash, role, is_active, last_login, created_at, updated_at, tfa_backup_codes, tfa_enabled, tfa_secret, first_name, last_name, theme_preference, color_theme, ui_preferences, oidc_sub, oidc_provider, avatar_url, discord_id, discord_username, discord_avatar, discord_linked_at, newsletter_subscribed, newsletter_subscribed_at FROM users
-WHERE oidc_sub = $1 OR LOWER(email) = LOWER($2)
+WHERE oidc_sub = $1 OR (LOWER(email) = LOWER($2) AND $2 != '')
 ORDER BY CASE WHEN oidc_sub = $1 THEN 0 ELSE 1 END
 LIMIT 1
 `
@@ -435,6 +435,10 @@ type GetUserByOidcSubOrEmailParams struct {
 	Lower   string  `json:"lower"`
 }
 
+// The "$2 != ”" guard mirrors GetUserByDiscordIDOrEmail. Without it an IdP
+// asserting an empty email participates in the email branch, which is junk
+// input rather than a takeover (the oidc_sub cross-check blocks a second such
+// login) but should not reach account matching at all.
 func (q *Queries) GetUserByOidcSubOrEmail(ctx context.Context, arg GetUserByOidcSubOrEmailParams) (User, error) {
 	row := q.db.QueryRow(ctx, getUserByOidcSubOrEmail, arg.OidcSub, arg.Lower)
 	var i User
@@ -816,6 +820,16 @@ WHERE id = $1
 
 func (q *Queries) UpdateUserDiscordUnlink(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, updateUserDiscordUnlink, id)
+	return err
+}
+
+const updateUserLastLogin = `-- name: UpdateUserLastLogin :exec
+UPDATE users SET last_login = NOW(), updated_at = NOW()
+WHERE id = $1
+`
+
+func (q *Queries) UpdateUserLastLogin(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, updateUserLastLogin, id)
 	return err
 }
 

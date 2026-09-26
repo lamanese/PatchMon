@@ -14,7 +14,14 @@ JOIN hosts h ON h.id = hp.host_id
 ORDER BY p.name;
 
 -- name: ListPackages :many
-SELECT p.id, p.name, p.description, p.category, p.latest_version, p.created_at
+SELECT p.id, p.name, p.description, p.category, p.latest_version, p.created_at,
+    -- fork: PM_IGNORE_DEFINITION_UPDATES (informational only - does not filter rows or affect CountPackages)
+    EXISTS (
+        SELECT 1 FROM host_packages hp
+        WHERE hp.package_id = p.id
+        AND (sqlc.narg('host_id')::text IS NULL OR hp.host_id = sqlc.narg('host_id'))
+        AND fork_is_definition_update(hp.wua_categories, hp.wua_kb)
+    ) AS is_definition_update
 FROM packages p
 WHERE (sqlc.narg('search')::text IS NULL OR p.name ILIKE '%' || sqlc.narg('search') || '%' OR p.description ILIKE '%' || sqlc.narg('search') || '%')
 AND (sqlc.narg('category')::text IS NULL OR p.category = sqlc.narg('category'))
@@ -124,12 +131,13 @@ ORDER BY hp.needs_update DESC, h.friendly_name ASC
 LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
 
 -- name: GetHostPackageStatsByHostIDs :many
+-- fork: PM_IGNORE_DEFINITION_UPDATES (same metric as GetHostPackageStats - keep them in agreement; total install count is untouched)
 SELECT host_id,
     COUNT(*)::int AS total,
-    SUM(CASE WHEN needs_update THEN 1 ELSE 0 END)::int AS outdated,
-    SUM(CASE WHEN needs_update AND is_security_update THEN 1 ELSE 0 END)::int AS security
+    SUM(CASE WHEN needs_update AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(wua_categories, wua_kb)) THEN 1 ELSE 0 END)::int AS outdated,
+    SUM(CASE WHEN needs_update AND is_security_update AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(wua_categories, wua_kb)) THEN 1 ELSE 0 END)::int AS security
 FROM host_packages
-WHERE host_id = ANY($1::text[])
+WHERE host_id = ANY(sqlc.arg('host_ids')::text[])
 GROUP BY host_id;
 
 -- name: ListOrphanedPackages :many
@@ -140,10 +148,11 @@ WHERE NOT EXISTS (SELECT 1 FROM host_packages hp WHERE hp.package_id = p.id);
 DELETE FROM packages WHERE id = ANY($1::text[]);
 
 -- name: GetPendingUpdateCountsPerHost :many
+-- fork: PM_IGNORE_DEFINITION_UPDATES (used only by the update-threshold alert monitor)
 SELECT
     hp.host_id,
-    SUM(CASE WHEN hp.needs_update THEN 1 ELSE 0 END)::int AS pending_count,
-    SUM(CASE WHEN hp.needs_update AND hp.is_security_update THEN 1 ELSE 0 END)::int AS security_count
+    SUM(CASE WHEN hp.needs_update AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(hp.wua_categories, hp.wua_kb)) THEN 1 ELSE 0 END)::int AS pending_count,
+    SUM(CASE WHEN hp.needs_update AND hp.is_security_update AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(hp.wua_categories, hp.wua_kb)) THEN 1 ELSE 0 END)::int AS security_count
 FROM host_packages hp
 JOIN hosts h ON h.id = hp.host_id AND h.status = 'active'
 GROUP BY hp.host_id;

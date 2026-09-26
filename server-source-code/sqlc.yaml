@@ -14,5 +14,12 @@ sql:
         emit_interface: true
         emit_pointers_for_null_types: true
         overrides:
-          - db_type: "pg_catalog.timestamptz"
+          # Unqualified "timestamptz" is what sqlc 1.30 + pgx/v5 actually matches; "pg_catalog.timestamptz" never matched.
+          - db_type: "timestamptz"
             go_type: "time.Time"
+          - db_type: "timestamptz"
+            nullable: true
+            go_type:
+              import: "time"
+              type: "Time"
+              pointer: true

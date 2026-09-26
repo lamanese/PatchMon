@@ -26,15 +26,20 @@ type OnAgentDisconnect func(ctx context.Context, apiID string)
 // OnAgentConnect is called when an agent's WebSocket connects. Used to resolve host_down alerts.
 type OnAgentConnect func(ctx context.Context, apiID string)
 
+// OnComplianceProgress is called when an agent sends a compliance_scan_progress
+// message. Used to resolve "running" scan placeholders on terminal phases.
+type OnComplianceProgress func(ctx context.Context, apiID, phase, errorMessage string)
+
 // AgentWSHandler handles WebSocket connections from agents.
 type AgentWSHandler struct {
-	hosts             *store.HostsStore
-	registry          *agentregistry.Registry
-	onSshProxyMessage OnSshProxyMessage
-	onRDPProxyMessage OnRDPProxyMessage
-	onDisconnect      OnAgentDisconnect
-	onConnect         OnAgentConnect
-	upgrader          websocket.Upgrader
+	hosts                *store.HostsStore
+	registry             *agentregistry.Registry
+	onSshProxyMessage    OnSshProxyMessage
+	onRDPProxyMessage    OnRDPProxyMessage
+	onDisconnect         OnAgentDisconnect
+	onConnect            OnAgentConnect
+	onComplianceProgress OnComplianceProgress
+	upgrader             websocket.Upgrader
 }
 
 // AgentWSHandlerOption configures AgentWSHandler.
@@ -61,6 +66,14 @@ func WithOnRDPProxyMessage(f OnRDPProxyMessage) AgentWSHandlerOption {
 	}
 }
 
+// WithOnComplianceProgress sets the callback invoked when an agent sends a
+// compliance_scan_progress message.
+func WithOnComplianceProgress(f OnComplianceProgress) AgentWSHandlerOption {
+	return func(h *AgentWSHandler) {
+		h.onComplianceProgress = f
+	}
+}
+
 // NewAgentWSHandler creates a new agent WebSocket handler.
 func NewAgentWSHandler(hosts *store.HostsStore, registry *agentregistry.Registry, onSshProxy OnSshProxyMessage, opts ...AgentWSHandlerOption) *AgentWSHandler {
 	h := &AgentWSHandler{
@@ -80,6 +93,16 @@ func NewAgentWSHandler(hosts *store.HostsStore, registry *agentregistry.Registry
 	}
 	return h
 }
+
+// Agent WebSocket heartbeat timings. The server pings on agentWSPingPeriod and
+// requires some inbound frame (pong, ping, or data) within agentWSPongWait, so
+// a silently dead agent is detected in at most agentWSPongWait rather than
+// never. Mirrors the agent's own settings in serve.go.
+const (
+	agentWSPongWait   = 90 * time.Second
+	agentWSPingPeriod = 30 * time.Second
+	agentWSWriteWait  = 10 * time.Second
+)
 
 // ServeWS handles GET /api/v1/agents/ws - upgrades to WebSocket with API key auth.
 func (h *AgentWSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
@@ -119,21 +142,77 @@ func (h *AgentWSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		h.onConnect(connCtx, apiID)
 	}
 	defer func() {
+		// Registry teardown FIRST, and identity-aware: if the agent already
+		// reconnected, a newer connection owns the slot. The agent is then
+		// demonstrably live, so neither the registry entry nor the disconnect
+		// side effects may be touched by this stale teardown.
+		ownsTeardown := h.registry.UnregisterConn(apiID, conn)
+		_ = conn.Close()
+		if !ownsTeardown {
+			slog.Info("agent ws teardown superseded by reconnect", "api_id", apiID)
+			return
+		}
 		if h.onDisconnect != nil {
 			h.onDisconnect(connCtx, apiID)
 		}
-		h.registry.Unregister(apiID)
-		_ = conn.Close()
 	}()
 
 	slog.Info("agent ws connected", "api_id", apiID)
 
 	// Configure connection
 	conn.SetReadLimit(512 * 1024) // 512KB max message
+
+	// Heartbeat.
+	//
+	// A pong handler was registered here before, but the server never sent a
+	// ping, so it never received a pong, so SetReadDeadline was never called
+	// at all and ReadMessage blocked forever. An agent that died silently --
+	// SIGSTOPped, deadlocked, OOM-frozen, or sitting behind a middlebox that
+	// keeps the TCP session alive so no FIN ever arrives -- stayed "connected"
+	// indefinitely. Consequences, all permanent:
+	//
+	//   - the goroutine, the *websocket.Conn and the registry entry leaked,
+	//     one set per dead agent;
+	//   - registry.Get(apiID).Connected stayed true, so alerts.hostDownState
+	//     reported down=false on every sweep and host_down never fired for
+	//     exactly the failure class it exists to catch;
+	//   - queue workers saw IsConnected==true and WriteMessage succeeded into
+	//     the socket buffer, so job_history was marked completed for commands
+	//     the agent never received.
+	//
+	// Cadence mirrors the agent side (ping every 30s, 90s deadline).
+	_ = conn.SetReadDeadline(time.Now().Add(agentWSPongWait))
 	conn.SetPongHandler(func(string) error {
-		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		return nil
+		return conn.SetReadDeadline(time.Now().Add(agentWSPongWait))
 	})
+	// The agent pings us on its own 30s ticker; that is liveness too. Chain to
+	// gorilla's default handler so the pong reply still goes out.
+	defaultPingHandler := conn.PingHandler()
+	conn.SetPingHandler(func(appData string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(agentWSPongWait))
+		return defaultPingHandler(appData)
+	})
+
+	// Ping loop. WriteControl is the one write method gorilla documents as safe
+	// to call concurrently with other writes, so this deliberately bypasses the
+	// registry's per-agent write mutex rather than contending with queue
+	// workers for it. Registered after the teardown defer so it stops first.
+	pingStop := make(chan struct{})
+	defer close(pingStop)
+	go func() {
+		t := time.NewTicker(agentWSPingPeriod)
+		defer t.Stop()
+		for {
+			select {
+			case <-pingStop:
+				return
+			case <-t.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(agentWSWriteWait)); err != nil {
+					return
+				}
+			}
+		}
+	}()
 
 	// Read loop - process messages from agent
 	for {
@@ -144,6 +223,8 @@ func (h *AgentWSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 			}
 			break
 		}
+		// Inbound traffic is liveness in its own right.
+		_ = conn.SetReadDeadline(time.Now().Add(agentWSPongWait))
 
 		// Forward SSH proxy messages to SSH terminal handler
 		if h.onSshProxyMessage != nil {
@@ -169,6 +250,19 @@ func (h *AgentWSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 					h.onRDPProxyMessage(apiID, message)
 					continue
 				}
+			}
+		}
+		// Resolve compliance scan progress (terminal phases close the
+		// "running" placeholder rows created when the scan was triggered)
+		if h.onComplianceProgress != nil {
+			var msg struct {
+				Type  string `json:"type"`
+				Phase string `json:"phase"`
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(message, &msg); err == nil && msg.Type == "compliance_scan_progress" {
+				h.onComplianceProgress(connCtx, apiID, msg.Phase, msg.Error)
+				continue
 			}
 		}
 	}

@@ -110,7 +110,7 @@ export const dashboardAPI = {
 // Admin Hosts API (for management interface)
 export const adminHostsAPI = {
 	create: (data) => api.post("/hosts/create", data),
-	list: () => api.get("/hosts/admin/list"),
+	list: (params) => api.get("/hosts/admin/list", { params }),
 	delete: (hostId) => api.delete(`/hosts/${hostId}`),
 	deleteBulk: (hostIds) => api.delete("/hosts/bulk", { data: { hostIds } }),
 	regenerateCredentials: (hostId) =>
@@ -135,6 +135,10 @@ export const adminHostsAPI = {
 	fetchReport: (hostId) => api.post(`/hosts/${hostId}/fetch-report`),
 	fetchReportBulk: (hostIds) =>
 		api.post("/hosts/bulk/fetch-report", { hostIds }),
+	rebootBulk: (hostIds, onlyIfRequired) =>
+		api.post("/hosts/bulk/reboot", { hostIds, onlyIfRequired }),
+	allowRebootBulk: (hostIds, allowReboot) =>
+		api.put("/hosts/bulk/allow-reboot", { hostIds, allowReboot }),
 	updateFriendlyName: (hostId, friendlyName) =>
 		api.patch(`/hosts/${hostId}/friendly-name`, {
 			friendly_name: friendlyName,
@@ -171,6 +175,21 @@ export const adminHostsAPI = {
 		api.post(`/hosts/${hostId}/compliance/on-demand-only`, {
 			on_demand_only: onDemandOnly,
 		}),
+};
+
+// Reboot Schedules API (scheduled remote reboots per host group)
+export const rebootSchedulesAPI = {
+	list: () => api.get("/reboot-schedules"),
+	create: (data) => api.post("/reboot-schedules", data),
+	update: (id, data) => api.put(`/reboot-schedules/${id}`, data),
+	delete: (id) => api.delete(`/reboot-schedules/${id}`),
+};
+
+export const patchSchedulesAPI = {
+	list: () => api.get("/patch-schedules"),
+	create: (data) => api.post("/patch-schedules", data),
+	update: (id, data) => api.put(`/patch-schedules/${id}`, data),
+	delete: (id) => api.delete(`/patch-schedules/${id}`),
 };
 
 // Host Groups API
@@ -216,6 +235,12 @@ export const settingsAPI = {
 	getEnvironmentConfig: () => api.get("/settings/environment"),
 	updateEnvironmentConfig: (key, value) =>
 		api.patch(`/settings/environment/${key}`, { value }),
+};
+
+// Licence API (fork feature: licensed host count)
+export const licenseAPI = {
+	get: () => api.get("/license"),
+	update: (data) => api.put("/license", data),
 };
 
 // Community links API (public - used in nav, login, wizard)
@@ -535,8 +560,13 @@ export const rdpAPI = {
 export const authAPI = {
 	login: (username, password) =>
 		api.post("/auth/login", { username, password }),
-	verifyTfa: (username, token, remember_me = false) =>
-		api.post("/auth/verify-tfa", { username, token, remember_me }),
+	verifyTfa: (username, token, remember_me = false, tfa_ticket = "") =>
+		api.post("/auth/verify-tfa", {
+			username,
+			token,
+			remember_me,
+			tfa_ticket,
+		}),
 	signup: (username, email, password, firstName, lastName) =>
 		api.post("/auth/signup", {
 			username,
@@ -674,6 +704,17 @@ export const notificationsAPI = {
 		api.delete(`/notifications/scheduled-reports/${id}`),
 	runScheduledReportNow: (id) =>
 		api.post(`/notifications/scheduled-reports/${id}/run-now`),
+	previewScheduledReport: (id) =>
+		api.post(`/notifications/scheduled-reports/${id}/preview`, null, {
+			responseType: "blob",
+			timeout: 40000,
+		}),
+	listReportArchive: (id) =>
+		api.get(`/notifications/scheduled-reports/${id}/archive`),
+	downloadReportArchivePdf: (archiveId) =>
+		api.get(`/notifications/scheduled-reports/archive/${archiveId}/pdf`, {
+			responseType: "blob",
+		}),
 };
 
 export default api;

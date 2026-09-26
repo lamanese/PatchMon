@@ -37,3 +37,15 @@ export function isLegacyDefaultPath(path) {
 	if (normalized.startsWith("/api/")) return false;
 	return normalized in LEGACY_DEFAULT_PATHS;
 }
+
+/**
+ * Icon for the login page, which always has a dark background: an uploaded
+ * favicon is used as-is, the shipped default switches to its dark variant
+ * (light facets) so the mark stays visible.
+ */
+export function loginIconPath(faviconPath) {
+	const resolved = resolveLogoPath(faviconPath, "favicon");
+	return resolved === DEFAULT_PATHS.favicon
+		? "/assets/logo_square_default_dark.svg"
+		: resolved;
+}

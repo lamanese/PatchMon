@@ -113,6 +113,31 @@ const SettingsMetrics = () => {
 		return `${id.substring(0, 8)}...${id.substring(id.length - 8)}`;
 	};
 
+	// Telemetry hard-disabled server-side (PM_HIDE_COMMUNITY_LINKS)
+	if (metricsSettings?.metrics_locked) {
+		return (
+			<div className="space-y-6">
+				<div className="flex items-center mb-6">
+					<BarChart3 className="h-6 w-6 text-primary-600 mr-3" />
+					<div>
+						<h2 className="text-xl font-semibold text-secondary-900 dark:text-white">
+							Anonymous Metrics & Telemetry
+						</h2>
+					</div>
+				</div>
+				<div className="bg-white dark:bg-secondary-800 rounded-lg border border-secondary-200 dark:border-secondary-700 p-6">
+					<div className="flex items-center text-sm">
+						<EyeOff className="h-4 w-4 text-secondary-500 mr-2 flex-shrink-0" />
+						<span className="text-secondary-600 dark:text-white">
+							Telemetry is disabled on this server (PM_HIDE_COMMUNITY_LINKS). No
+							data is ever sent to the upstream metrics API.
+						</span>
+					</div>
+				</div>
+			</div>
+		);
+	}
+
 	return (
 		<div className="space-y-6">
 			{/* Header */}
@@ -172,7 +197,7 @@ const SettingsMetrics = () => {
 				{/* More Information Button */}
 				<div className="mt-4 pt-4 border-t border-blue-200 dark:border-blue-700">
 					<a
-						href="https://patchmon.net/docs/patchmon-admin-guide#metrics-and-telemetry"
+						href="https://github.com/lamanese/PatMan/blob/feat/remote-reboot/docs/patchmon-admin-guide.md#metrics-and-telemetry"
 						target="_blank"
 						rel="noopener noreferrer"
 						className="inline-flex items-center px-4 py-2 text-sm font-medium text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-900/50 rounded-md hover:bg-blue-200 dark:hover:bg-blue-900/70 transition-colors"
@@ -378,17 +403,6 @@ const SettingsMetrics = () => {
 							</li>
 							<li>The anonymous UUID prevents duplicate counting</li>
 							<li>You can regenerate your ID or opt-out at any time</li>
-							<li>
-								All collected data is displayed publicly on{" "}
-								<a
-									href="https://patchmon.net"
-									target="_blank"
-									rel="noopener noreferrer"
-									className="text-primary-600 dark:text-primary-400 hover:underline"
-								>
-									patchmon.net
-								</a>
-							</li>
 						</ul>
 					</div>
 				</div>

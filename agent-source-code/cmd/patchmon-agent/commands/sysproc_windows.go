@@ -2,10 +2,18 @@
 
 package commands
 
-import "syscall"
+import (
+	"syscall"
 
-// sysProcAttrForDetach returns nil on Windows (Setsid is Unix-only).
-// Child process detachment is handled differently on Windows.
+	"golang.org/x/sys/windows"
+)
+
+// sysProcAttrForDetach detaches the child from this process (no console, own
+// process group) so the restart helper survives when the service process exits.
+// Setsid is Unix-only; on Windows detachment works via creation flags.
 func sysProcAttrForDetach() *syscall.SysProcAttr {
-	return nil
+	return &syscall.SysProcAttr{
+		CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP,
+		HideWindow:    true,
+	}
 }

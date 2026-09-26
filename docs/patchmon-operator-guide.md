@@ -124,6 +124,8 @@ You can check the startup logs at any time with:
 docker compose logs -f server
 ```
 
+> **Upgrading from 2.0.2 or earlier?** `ENABLE_LOGGING` used to default to `false`, and with it off the server wrote no application logs at all, which made every "check the logs" step in this guide useless. From 2.0.3 it defaults to `true`. If you explicitly set `ENABLE_LOGGING=false` in your `.env`, or turned logging off in **Settings > Environment**, that choice is preserved and you will still see no logs.
+
 ---
 
 ### Container Image
@@ -633,7 +635,7 @@ The `server.env.*` keys map directly to the environment variables the PatchMon b
 | `CORS_ORIGIN` | Allowed origin for CORS (must match the URL users type in their browser; comma-separate with no spaces to allow multiple, e.g. `https://patchmon.example.com,https://patchmon.internal.lan`) | `http://localhost:3000` |
 | `ENABLE_HSTS` | Enable HSTS header for HTTPS | `false` |
 | `TRUST_PROXY` | Trust proxy headers when behind an Ingress controller | `true` |
-| `ENABLE_LOGGING` | Enable structured logging to stdout | `false` |
+| `ENABLE_LOGGING` | Enable structured logging to stdout | `true` |
 | `LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
 | `JSON_BODY_LIMIT` | Max JSON body size | `5mb` |
 | `AGENT_UPDATE_BODY_LIMIT` | Max agent update body size | `5mb` |
@@ -1547,6 +1549,9 @@ General HTTP server and network settings.
 | `CORS_ORIGIN` | `http://localhost:3000` | No | Allowed CORS origin(s). Must match the exact URL you use to access PatchMon in your browser (protocol, hostname, and port; no path, no trailing slash). To allow multiple origins, separate them with a comma and no spaces (e.g. `https://patchmon.example.com,https://patchmon.internal.lan`). |
 | `ENABLE_HSTS` | `false` | No | When `true`, the server adds an `HTTP Strict Transport Security` header to responses. Enable this only when PatchMon is served over HTTPS. |
 | `TRUST_PROXY` | `true` | No | When `true`, the server trusts `X-Forwarded-For` / `X-Forwarded-Proto` and related headers from a reverse proxy (Traefik, Caddy, nginx, NPM, etc.). Required for accurate client IP detection, correct rate limiting, and OIDC's HTTPS check when TLS is terminated at the proxy. Default is `true` because the officially supported deployment is Docker behind a reverse proxy; set to `false` explicitly only if PatchMon is exposed directly to the internet without a proxy. |
+| `TRUSTED_PROXY_RANGES` | *(empty)* | No | Comma-separated CIDRs or bare IPs of the reverse proxies in front of PatchMon. The client IP is resolved by walking `X-Forwarded-For` from the right and taking the first address that is not in this list, so a client cannot forge it. Leave it empty when there is a single reverse proxy (the usual setup). Set it only when proxies are chained, for example a CDN in front of Nginx Proxy Manager. Environment only; it cannot be changed in the UI. Only evaluated when `TRUST_PROXY=true`; `X-Real-IP` and `True-Client-IP` are not evaluated. |
+| `PM_SERVER_MACHINE_ID` | _(none)_ | No | Manual override for the remote-reboot self-exclusion check: the machine identity of the host running the PatchMon server itself, which must never be rebootable through PatchMon. Normally **not** needed - the server auto-detects its identity from `/sys/class/dmi/id/product_uuid` (readable host-wide even inside containers) and from the host's machine-id bind-mounted to `/run/host-machine-id` (add `- /etc/machine-id:/run/host-machine-id:ro` to the server's `volumes:` for hosts without readable DMI, e.g. LXC). Set this only when neither source is available - use the host's DMI product UUID: `PM_SERVER_MACHINE_ID=$(sudo cat /sys/class/dmi/id/product_uuid)`. If the server cannot determine any identity, it refuses **all** reboot requests with HTTP 503 (fail closed). |
+| `PM_IGNORE_DEFINITION_UPDATES` | `false` | No | When `true`, excludes Windows Defender "Security Intelligence Update" / definition updates from every outstanding/security update count the UI shows (dashboard cards, host list, host detail, alerts) - Microsoft republishes this update (KB2267602) several times a day, which otherwise makes a fully-patched Windows host permanently show 1 outstanding update. Matching is by WUA category name (English "Definition Updates", German "Definitionsupdates", French "Mises à jour de définitions", Italian "Aggiornamenti delle definizioni") plus KB2267602 as a fallback. The updates stay visible in package/update lists and remain fully installable; only the counters change. |
 
 **Production example:**
 
@@ -1607,12 +1612,18 @@ Settings for JWT tokens, browser sessions, account lockout, two-factor authentic
 
 #### Account Lockout
 
-Lockout is applied per user account after repeated failed login attempts.
+Lockout is applied per combination of client IP address and the username that was typed, after repeated failed login attempts. Usernames that do not exist are counted too, so a lockout can be reached for a name that was never an account. That is deliberate: it means the point at which a lockout starts no longer reveals which usernames are real.
+
+Because the counter is per username, a lockout does not stop an attacker who tries a different username each time. The protection against that is the auth rate limit (`AUTH_RATE_LIMIT_MAX` and `AUTH_RATE_LIMIT_WINDOW_MS`), which is applied per client IP address across all sign-in attempts.
+
+Usernames are matched case-insensitively, and the lockout counter follows the same rule, so `admin` and `Admin` are one account with one shared allowance rather than two.
 
 | Variable | Default | Required | Description |
 |----------|---------|----------|-------------|
-| `MAX_LOGIN_ATTEMPTS` | `5` | No | Number of consecutive failed login attempts before the account is temporarily locked. |
-| `LOCKOUT_DURATION_MINUTES` | `15` | No | How long (in minutes) an account stays locked after exceeding `MAX_LOGIN_ATTEMPTS`. |
+| `MAX_LOGIN_ATTEMPTS` | `5` | No | Number of consecutive failed attempts against one username, from one client IP address, before further attempts on that combination are refused. |
+| `LOCKOUT_DURATION_MINUTES` | `15` | No | How long (in minutes) that combination stays locked after exceeding `MAX_LOGIN_ATTEMPTS`. |
+
+Every rejected sign-in is written to the server log at `warn` level, so it is visible at the default `LOG_LEVEL` without switching to `debug`. See [Failed Login Attempts in the Log](#failed-login-attempts-in-the-log).
 
 #### Session Inactivity
 
@@ -1655,6 +1666,20 @@ Redis is used for background job queues (asynq), bootstrap tokens, and TFA locko
 | `REDIS_TLS_CA` | _(none)_ | No | Path to a custom CA certificate file for verifying the Redis TLS connection. Only used when `REDIS_TLS=true`. |
 | `REDIS_CONNECT_TIMEOUT_MS` | `60000` | No | Milliseconds to wait when establishing a new connection to Redis before timing out. |
 | `REDIS_COMMAND_TIMEOUT_MS` | `60000` | No | Milliseconds to wait for a Redis command to complete before timing out. |
+
+**Required Redis permissions when using ACLs:**
+
+If you set `REDIS_USER` and restrict that user with an ACL command allowlist, the user must be able to run server-side Lua scripts. Rate limiting evaluates a small script so that a counter and its expiry are set together, which stops a dropped expiry stranding a client on HTTP 429 indefinitely.
+
+Grant at least:
+
+```
+ACL SETUSER patchmon on >yourpassword ~* +@read +@write +@keyspace +eval +evalsha +script
+```
+
+Without `+eval` and `+evalsha`, rate limiting fails. Sign-in and password endpoints deliberately fail closed when the rate limiter is unavailable, so the visible symptom is `503 Service temporarily unavailable` on login rather than a rate limiting warning. If you see that after tightening an ACL, check these permissions first.
+
+Redis users with no ACL restrictions, and deployments using `REDIS_PASSWORD` alone, need no change.
 
 **Generating a secure Redis password:**
 
@@ -1709,7 +1734,7 @@ Rules applied when a user sets or changes a local account password. These do not
 
 | Variable | Default | Required | Description |
 |----------|---------|----------|-------------|
-| `ENABLE_LOGGING` | `false` | No | When `true`, enables structured application logging to stdout. Set to `true` in production to capture request and error logs. |
+| `ENABLE_LOGGING` | `true` | No | Structured application logging to stdout. **Setting this to `false` silences the server completely.** Not reduced logging: none at all, which leaves every instruction in this guide that asks you to check the server logs with nothing to show. Changed in 2.0.3; it previously defaulted to `false`. An explicit `false`, in either `.env` or **Settings > Environment**, is still honoured. |
 | `LOG_LEVEL` | `info` | No | Minimum log level to output. Accepted values: `debug`, `info`, `warn`, `error`. Must be one of these exact strings. The server will fail to start if an invalid value is provided. |
 | `ENABLE_PPROF` | `false` | No | When `true`, exposes Go pprof profiling endpoints. For diagnostics only. Do not enable in production unless actively investigating a performance issue. |
 | `MEMSTATS_INTERVAL_SEC` | `60` | No | How often (in seconds) the server logs Go runtime memory statistics when profiling is active. Only relevant when `ENABLE_PPROF=true`. |
@@ -1722,6 +1747,49 @@ Rules applied when a user sets or changes a local account password. These do not
 | `info` | Normal production operation |
 | `warn` | Quieter production operation; only non-critical issues and errors |
 | `error` | Minimal output; critical errors only |
+
+#### Failed Login Attempts in the Log
+
+Every rejected sign-in produces exactly one `warn` line, so it appears at the default `LOG_LEVEL` and at `warn`. A successful sign-in produces one `info` line.
+
+```json
+{"time":"2026-08-13T18:22:41Z","level":"WARN","msg":"login failed","reason":"user_not_found","username":"hackerman","ip":"203.0.113.9","user_agent":"curl/8.7.1"}
+```
+
+`username` and `user_agent` are whatever the client sent, truncated, and are recorded exactly as received. `username` is omitted when the client sent none. `ip` is the client address resolved through `TRUST_PROXY` and `TRUSTED_PROXY_RANGES`, so get those right or every attempt will appear to come from your reverse proxy.
+
+`"locked": true` is added when that particular attempt is the one that triggered the lockout. The `reason` still describes what was actually wrong, so counting a reason across your logs stays accurate.
+
+The `reason` field distinguishes the failure:
+
+| Reason | Meaning |
+|---|---|
+| `user_not_found` | No account matches the username or email that was typed |
+| `invalid_password` | The account exists and the password was wrong |
+| `account_disabled` | The account exists but is deactivated |
+| `no_password_set` | The account has no local password, typically SSO-only |
+| `locked_out` | Refused on arrival because a lockout from earlier attempts is still in force |
+| `missing_credentials` | The request omitted the username or the password |
+| `username_too_long` | The submitted username exceeded 254 characters and was rejected before any lookup |
+| `malformed_request` | The request body was not valid JSON |
+| `local_auth_disabled` | A password sign-in was attempted while the instance is SSO-only |
+| `invalid_tfa_code` | The password was accepted but the two-factor code was wrong |
+| `tfa_locked_out` | Refused on arrival because a two-factor lockout from earlier wrong codes is still in force |
+| `tfa_token_malformed` | The submitted two-factor code was not six alphanumeric characters |
+| `tfa_ticket_invalid` | The two-factor step was reached without a valid, unexpired ticket from the password step |
+| `tfa_user_ineligible` | The ticket resolved to an account that is inactive or has no two-factor enrolled |
+
+A failed lookup caused by the database being unreachable is **not** reported as `user_not_found`. It is logged separately at `error` level as `auth login lookup failed`, and it does not consume a lockout attempt, so a database problem cannot lock out the people retrying a correct password.
+
+To watch sign-in activity on a Docker install:
+
+```bash
+docker compose logs -f server | grep -E '"msg":"login (failed|succeeded)"'
+```
+
+That grep assumes JSON output, which is what a production install emits. Setting `APP_ENV=development` switches the logger to plain text, where the same lines read `msg="login failed"`.
+
+Nothing is logged when `ENABLE_LOGGING=false`, and these lines are suppressed if `LOG_LEVEL` is set to `error`.
 
 ---
 
@@ -2160,7 +2228,7 @@ docker compose up -d --force-recreate patchmon-server
 sudo systemctl restart <your-domain>
 ```
 
-Check the logs to confirm OIDC initialised:
+This check needs logging on, which is the default from 2.0.3. If you have set `ENABLE_LOGGING=false`, or you are on 2.0.2 or earlier where `false` was the default, the server writes no logs at all and the commands below return nothing regardless of whether OIDC loaded. Keep `LOG_LEVEL` at `info` or lower too, since the confirmation line is logged at info level.
 
 ```bash
 # Docker
@@ -2295,7 +2363,14 @@ OIDC_SYNC_ROLES=true
 
 **Logs show:** `OIDC is enabled but missing required configuration`
 
-All four required variables must be set: `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URI`. Check for typos or empty values.
+- **Logging is off.** `ENABLE_LOGGING` defaults to `true` from 2.0.3, but an explicit `false` in `.env` or **Settings > Environment** is still honoured, and it was the default on earlier releases. With logging disabled the server writes nothing at all, so this check tells you nothing
+- **`LOG_LEVEL` is above `info`.** The confirmation line is logged at info level, so `warn` or `error` hides it
+- **You are on 2.0.2 or older.** A correct configuration logged nothing at all on those releases
+- **Your configuration did not resolve.** Check for `missing required config` or `partially configured` in the same output
+
+If logging is off and you would rather not turn it on, check whether the SSO button appears on the login page instead. That is driven by the same resolved configuration.
+
+You may also see a second OIDC line warning that role sync cannot grant superadmin. That is unrelated to whether SSO loaded and is covered under Step 3.
 
 #### SSO Button Not Appearing
 
@@ -2625,13 +2700,14 @@ You'll see this if OIDC environment variables were set in `.env` before the UI w
 
 #### The "Sign in with Microsoft" button doesn't appear on the login page
 
-The button only shows when OIDC is both **enabled** and **successfully initialised** at runtime. Most common causes:
+The button shows when OIDC is enabled and all four required values are present. PatchMon does not contact Entra until someone actually clicks the button, so an egress firewall blocking `login.microsoftonline.com` will **not** hide it. Most common causes:
 
-- **Issuer URL is wrong:** it must end in `/v2.0`. Double-check for typos in the tenant GUID.
 - **Client Secret is empty or wrong:** the label will say "Not set". Re-enter it and click **Save** next to the secret field.
-- **PatchMon cannot reach `login.microsoftonline.com`:** an egress firewall or proxy is blocking it.
+- **Issuer URL, Client ID or Redirect URI is empty.** Any one of the four being blank disables SSO.
 
-Check the server logs; search for `oidc`:
+If the button appears but login fails, the problem is Entra connectivity or configuration instead. A blocked `login.microsoftonline.com` gives "Failed to reach the OIDC provider" on clicking the button, and a wrong issuer URL (it must end in `/v2.0`, so check the tenant GUID for typos) gives the same.
+
+Check the server logs; search for `oidc`. This needs `ENABLE_LOGGING` on, which is the default from 2.0.3:
 
 ```bash
 # Docker
@@ -4642,6 +4718,20 @@ log_level: "info"
 # Default: false
 skip_ssl_verify: false
 
+# ─── Remote Reboot ───────────────────────────────────────────────────
+# Allow remote reboot commands over an insecure command channel.
+#
+# The agent refuses remote reboots (fail closed) when the channel to
+# the server is not MITM-protected, i.e. when skip_ssl_verify is true
+# OR patchmon_server uses plain http:// (which results in an
+# unencrypted ws:// WebSocket). Over such a channel an attacker in the
+# network path could inject reboot commands.
+#
+#     SECURITY: Only set this to true in trusted lab networks. The
+#     correct fix for production is HTTPS with valid certificates.
+# Default: false
+allow_reboot_insecure_transport: false
+
 # ─── Reporting Schedule ──────────────────────────────────────────────
 # How often (in minutes) the agent sends a full report to the server.
 # This value is synced from the server on startup. If the server has
@@ -5238,6 +5328,8 @@ The `server` container embeds the Go HTTP server, the frontend, the queue worker
 
 Before attempting any fix, capture the current state of the stack. These commands are safe and non-destructive.
 
+> **If the server logs look empty, check `ENABLE_LOGGING`.** It defaults to `true` from 2.0.3, but an explicit `false` silences the server completely, and `false` was the default on 2.0.2 and earlier. With it off, `docker compose logs server` shows container lifecycle output and nothing from PatchMon itself, so do not read anything into the silence.
+
 ```bash
 # In the directory where your docker-compose.yml lives
 
@@ -5741,7 +5833,38 @@ Log in with local credentials, fix the OIDC config, and flip it back.
 
 > **Always take a database backup before running `UPDATE` statements.** `docker compose exec database pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > patchmon-backup-$(date +%F).sql`.
 
-### 10. Quick-Reference: When to Restart What
+### 10. Remote Reboot Returns 503 "self-exclusion is not configured"
+
+#### Symptoms
+
+- Every reboot request fails with HTTP 503 and the message `Reboot refused: self-exclusion is not configured`.
+- Scheduled reboots are refused; the audit log shows `host_reboot_scheduled_run` entries with `success=false` and the error `self-exclusion is not configured`.
+- Server logs show `refusing reboot request: self-exclusion not configured (no DMI product UUID, no /run/host-machine-id mount, no PM_SERVER_MACHINE_ID)`.
+
+#### Cause
+
+The server cannot determine the machine identity of its own host, so it cannot guarantee the PatchMon server is never rebooted through PatchMon. Reboots fail closed in that state. This typically happens in containers on hosts without readable DMI (LXC, some VMs) when the machine-id bind mount is missing.
+
+#### Fix
+
+Add the host's machine-id as a read-only bind mount to the `server` service and restart it:
+
+```yaml
+services:
+  server:
+    volumes:
+      - /etc/machine-id:/run/host-machine-id:ro
+```
+
+Or set the override explicitly in `.env` using the host's DMI product UUID:
+
+```bash
+PM_SERVER_MACHINE_ID=$(sudo cat /sys/class/dmi/id/product_uuid)
+```
+
+Then `docker compose up -d server`. See the environment variable reference for details.
+
+### 11. Quick-Reference: When to Restart What
 
 | Change | What to restart |
 |--------|-----------------|
@@ -6100,6 +6223,27 @@ ls -la /etc/patchmon/config.yml /etc/patchmon/credentials.yml /usr/local/bin/pat
 ```
 
 **Full details:** [Managing the PatchMon Agent: "Permission Denied" Errors](#permission-denied-errors).
+
+### Remote Reboot Refused: Insecure Transport
+
+A remote reboot triggered from the server (manually or via a reboot schedule) never happens, and the agent log shows:
+
+```
+Refusing remote reboot: the command channel is not MITM-protected.
+Set allow_reboot_insecure_transport: true in the agent config to allow this in trusted networks.
+```
+
+**Cause:** the agent fails closed on reboot commands when the channel to the server is not protected against man-in-the-middle attacks - either `skip_ssl_verify: true` is set, or `patchmon_server` uses plain `http://` (which means an unencrypted `ws://` WebSocket). Over such a channel an attacker in the network path could inject reboot commands.
+
+**Fix (production):** serve PatchMon over HTTPS with valid certificates and remove `skip_ssl_verify`.
+
+**Fix (trusted lab networks only):** opt in explicitly in `/etc/patchmon/config.yml`:
+
+```yaml
+allow_reboot_insecure_transport: true
+```
+
+Then restart the agent service. See the [Agent config.yml Reference](#agent-config-yml-reference) for details.
 
 ### Escalation
 

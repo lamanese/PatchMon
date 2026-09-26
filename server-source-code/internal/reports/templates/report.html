@@ -1,0 +1,147 @@
+{{- /* Scheduled report body. Every value is escaped by html/template in context. */ -}}
+{{- $T := .T -}}{{- $L := .M.Location -}}{{- $links := .Links -}}{{- $base := .BaseURL -}}
+<!DOCTYPE html><html lang="{{.M.Language}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>{{t $T "subject_prefix"}}: {{.M.ReportName}}</title></head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f1f5f9;padding:32px 0;"><tr><td align="center">
+<table width="720" cellpadding="0" cellspacing="0" style="max-width:720px;width:100%;background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+<tr><td style="background-color:#0f172a;padding:20px 32px;">
+  <table width="100%" cellpadding="0" cellspacing="0"><tr>
+  <td style="vertical-align:middle;">{{if .LogoURL}}<img src="{{.LogoURL}}" alt="" width="140" height="32" style="height:32px;width:auto;max-width:180px;display:block;border:0;" />{{else}}<span style="color:#ffffff;font-size:20px;font-weight:700;">{{.BrandName}}</span>{{end}}</td>
+  <td style="vertical-align:middle;text-align:right;color:#cbd5e1;font-size:12px;">{{t $T "generated_at"}}: {{dt $T $L .M.GeneratedAt}}</td>
+  </tr></table>
+</td></tr>
+<tr><td style="padding:24px 32px 8px;">
+  <h1 style="color:#0f172a;font-size:22px;font-weight:700;margin:0 0 12px;">{{.M.ReportName}}</h1>
+  <table cellpadding="0" cellspacing="0" style="font-size:13px;color:#475569;">
+    <tr><td style="padding:2px 12px 2px 0;font-weight:600;">{{t $T "period"}}</td><td>{{$T.PeriodLabel .M.PeriodDays}} ({{dt $T $L .M.PeriodFrom}} – {{dt $T $L .M.PeriodTo}})</td></tr>
+    <tr><td style="padding:2px 12px 2px 0;font-weight:600;">{{t $T "timezone"}}</td><td>{{.M.TimezoneName}}</td></tr>
+    <tr><td style="padding:2px 12px 2px 0;font-weight:600;">{{t $T "groups"}}</td><td>{{if .M.FleetWide}}{{t $T "fleet_wide"}}{{else}}{{range $i, $g := .M.Groups}}{{if $i}}, {{end}}{{$g.Name}}{{end}}{{end}}</td></tr>
+    <tr><td style="padding:2px 12px 2px 0;font-weight:600;">{{t $T "hosts"}}</td><td>{{.M.HostCount}}</td></tr>
+  </table>
+</td></tr>
+<tr><td style="padding:0 32px 24px;">
+{{- define "h2"}}<h2 style="color:#0f172a;font-size:16px;font-weight:600;margin:24px 0 12px;padding-bottom:8px;border-bottom:2px solid #e2e8f0;">{{.}}</h2>{{end -}}
+{{- define "kpi"}}<td width="25%" style="padding:4px;"><table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f8fafc;border-radius:6px;padding:12px 16px;"><tr><td style="font-size:22px;font-weight:700;color:{{.Color}};line-height:1.2;">{{.Value}}</td></tr><tr><td style="font-size:11px;color:#64748b;padding-top:2px;text-transform:uppercase;letter-spacing:0.03em;">{{.Label}}</td></tr></table></td>{{end -}}
+{{- define "th"}}<th style="text-align:left;padding:8px 10px;background-color:#f1f5f9;color:#475569;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;border-bottom:2px solid #e2e8f0;">{{.}}</th>{{end -}}
+{{- define "badge"}}<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;color:{{.C.FG}};background-color:{{.C.BG}};">{{.Text}}</span>{{end -}}
+{{- define "nodata"}}<p style="color:#64748b;font-size:14px;">{{.}}</p>{{end -}}
+{{- define "note"}}<p style="color:#94a3b8;font-size:12px;margin:4px 0 0;">{{.}}</p>{{end -}}
+{{- $td := .TD -}}
+{{- range $sec := .M.Sections}}
+{{- if eq $sec "executive_summary"}}{{with $.M.ExecutiveSummary}}
+{{template "h2" (t $T "sec.executive_summary")}}
+<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;"><tr>
+{{template "kpi" (dict "Value" .HostCount "Label" (t $T "kpi.total_hosts") "Color" "#2563eb")}}
+{{template "kpi" (dict "Value" (pct .AverageScore) "Label" (t $T "kpi.avg_compliance") "Color" (scoreColor .AverageScore))}}
+{{template "kpi" (dict "Value" .HostsCritical "Label" (t $T "kpi.critical_hosts") "Color" (zeroGreen .HostsCritical))}}
+{{template "kpi" (dict "Value" .HostsCompliant "Label" (t $T "kpi.compliant_hosts") "Color" "#16a34a")}}
+</tr></table>
+<h3 style="color:#0f172a;font-size:15px;font-weight:600;margin:16px 0 8px;">{{t $T "sec.patching_overview"}} – {{$T.PeriodLabel $.M.PeriodDays}}</h3>
+<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;"><tr>
+{{template "kpi" (dict "Value" .RunsTotal "Label" (t $T "kpi.runs_total") "Color" "#6366f1")}}
+{{template "kpi" (dict "Value" .RunsCompleted "Label" (t $T "kpi.runs_completed") "Color" "#16a34a")}}
+{{template "kpi" (dict "Value" .RunsFailed "Label" (t $T "kpi.runs_failed") "Color" (zeroGreen .RunsFailed))}}
+{{template "kpi" (dict "Value" .RunsRunning "Label" (t $T "kpi.runs_running") "Color" "#d97706")}}
+</tr></table>
+{{end}}{{end -}}
+
+{{- if eq $sec "compliance_summary"}}{{with $.M.ComplianceSummary}}
+{{template "h2" (t $T "sec.compliance_summary")}}
+<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;"><tr>
+{{template "kpi" (dict "Value" .PassedRules "Label" (t $T "kpi.passed_rules") "Color" "#16a34a")}}
+{{template "kpi" (dict "Value" .FailedRules "Label" (t $T "kpi.failed_rules") "Color" (zeroGreen .FailedRules))}}
+{{template "kpi" (dict "Value" .HostsCritical "Label" (t $T "kpi.critical_hosts") "Color" (zeroGreen .HostsCritical))}}
+{{template "kpi" (dict "Value" .Unscanned "Label" (t $T "kpi.unscanned") "Color" "#94a3b8")}}
+</tr></table>
+{{if .Worst}}<h3 style="color:#0f172a;font-size:14px;font-weight:600;margin:16px 0 8px;">{{t $T "sec.worst_hosts"}}</h3>
+<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:16px;"><tr>{{template "th" (t $T "col.host")}}{{template "th" (t $T "col.score")}}{{template "th" (t $T "col.profile")}}{{template "th" (t $T "col.completed")}}</tr>
+{{range $i, $r := .Worst}}<tr><td style="{{$td}}background-color:{{alt $i}};">{{if $links}}<a href="{{$base}}/hosts/{{$r.HostID}}" style="color:#2563eb;text-decoration:none;">{{$r.HostName}}</a>{{else}}{{$r.HostName}}{{end}}</td><td style="{{$td}}background-color:{{alt $i}};">{{pctp $r.Score}}</td><td style="{{$td}}background-color:{{alt $i}};">{{$r.Profile}}</td><td style="{{$td}}background-color:{{alt $i}};">{{dt $T $L $r.CompletedAt}}</td></tr>{{end}}
+</table>{{else}}{{template "nodata" (t $T "val.no_data")}}{{end}}
+{{end}}{{end -}}
+
+{{- if eq $sec "recent_patch_runs"}}{{with $.M.RecentPatchRuns}}
+{{template "h2" (t $T "sec.recent_patch_runs")}}
+{{if .Rows}}<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:16px;"><tr>{{template "th" (t $T "col.host")}}{{template "th" (t $T "col.status")}}{{template "th" (t $T "col.type")}}{{template "th" (t $T "col.packages")}}{{template "th" (t $T "col.started")}}{{template "th" (t $T "col.completed")}}</tr>
+{{range $i, $r := .Rows}}<tr><td style="{{$td}}background-color:{{alt $i}};">{{if $links}}<a href="{{$base}}/patching/runs/{{$r.ID}}" style="color:#2563eb;text-decoration:none;">{{$r.HostName}}</a>{{else}}{{$r.HostName}}{{end}}</td><td style="{{$td}}background-color:{{alt $i}};">{{template "badge" (dict "C" (statusColor $r.Status) "Text" (status $T $r.Status))}}</td><td style="{{$td}}background-color:{{alt $i}};">{{status $T $r.PatchType}}</td><td style="{{$td}}background-color:{{alt $i}};">{{if $r.Packages}}{{$r.Packages}}{{else}}{{t $T "val.all_packages"}}{{end}}</td><td style="{{$td}}background-color:{{alt $i}};">{{if $r.StartedAt}}{{dtp $T $L $r.StartedAt}}{{else}}{{dt $T $L $r.CreatedAt}}{{end}}</td><td style="{{$td}}background-color:{{alt $i}};">{{dtp $T $L $r.CompletedAt}}</td></tr>{{end}}
+</table>{{else}}{{template "nodata" (t $T "val.no_data")}}{{end}}
+{{end}}{{end -}}
+
+{{- if eq $sec "hosts_offline"}}{{with $.M.HostStatus}}
+{{template "h2" (t $T "sec.hosts_offline")}}
+{{if .Rows}}<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:16px;"><tr>{{template "th" (t $T "col.host")}}{{template "th" (t $T "col.status")}}{{template "th" (t $T "col.last_seen")}}</tr>
+{{range $i, $r := .Rows}}<tr><td style="{{$td}}background-color:{{alt $i}};">{{if $links}}<a href="{{$base}}/hosts/{{$r.HostID}}" style="color:#2563eb;text-decoration:none;">{{$r.HostName}}</a>{{else}}{{$r.HostName}}{{end}}</td><td style="{{$td}}background-color:{{alt $i}};">{{template "badge" (dict "C" (statusColor $r.Status) "Text" (status $T $r.Status))}}</td><td style="{{$td}}background-color:{{alt $i}};">{{if $r.LastSeen}}{{dtp $T $L $r.LastSeen}}{{else}}{{t $T "val.never"}}{{end}}</td></tr>{{end}}
+</table>{{else}}{{template "nodata" (t $T "val.no_data")}}{{end}}
+{{end}}{{end -}}
+
+{{- if eq $sec "open_alerts"}}{{with $.M.OpenAlerts}}
+{{template "h2" (t $T "sec.open_alerts")}}
+<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;"><tr>
+{{template "kpi" (dict "Value" .Total "Label" (t $T "kpi.alerts_total") "Color" "#6366f1")}}
+{{template "kpi" (dict "Value" .Critical "Label" (t $T "kpi.alerts_critical") "Color" (zeroGreen .Critical))}}
+{{template "kpi" (dict "Value" .Error "Label" (t $T "kpi.alerts_error") "Color" (zeroGreen .Error))}}
+{{template "kpi" (dict "Value" .Warning "Label" (t $T "kpi.alerts_warning") "Color" "#d97706")}}
+</tr></table>
+{{if .Rows}}<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:16px;"><tr>{{template "th" (t $T "col.severity")}}{{template "th" (t $T "col.title")}}{{template "th" (t $T "col.host")}}{{template "th" (t $T "col.created")}}</tr>
+{{range $i, $r := .Rows}}<tr><td style="{{$td}}background-color:{{alt $i}};">{{template "badge" (dict "C" (sevColor $r.Severity) "Text" $r.Severity)}}</td><td style="{{$td}}background-color:{{alt $i}};">{{if $links}}<a href="{{$base}}/alerts" style="color:#2563eb;text-decoration:none;">{{$r.Title}}</a>{{else}}{{$r.Title}}{{end}}</td><td style="{{$td}}background-color:{{alt $i}};">{{orDash $r.HostName}}</td><td style="{{$td}}background-color:{{alt $i}};">{{dt $T $L $r.CreatedAt}}</td></tr>{{end}}
+</table>{{else}}{{template "nodata" (t $T "val.no_data")}}{{end}}
+{{end}}{{end -}}
+
+{{- if eq $sec "hosts_by_updates"}}{{with $.M.HostsByUpdates}}
+{{template "h2" (t $T "sec.hosts_by_updates")}}
+{{if .Rows}}<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:16px;"><tr>{{template "th" (t $T "col.host")}}{{template "th" (t $T "col.updates")}}{{template "th" (t $T "col.security_updates")}}{{template "th" (t $T "col.status")}}{{template "th" (t $T "col.last_seen")}}</tr>
+{{range $i, $r := .Rows}}<tr><td style="{{$td}}background-color:{{alt $i}};">{{if $links}}<a href="{{$base}}/hosts/{{$r.HostID}}" style="color:#2563eb;text-decoration:none;">{{$r.HostName}}</a>{{else}}{{$r.HostName}}{{end}}</td><td style="{{$td}}background-color:{{alt $i}};">{{$r.Updates}}</td><td style="{{$td}}background-color:{{alt $i}};">{{$r.SecurityUpdates}}</td><td style="{{$td}}background-color:{{alt $i}};">{{template "badge" (dict "C" (statusColor $r.Status) "Text" (status $T $r.Status))}}</td><td style="{{$td}}background-color:{{alt $i}};">{{if $r.LastSeen}}{{dtp $T $L $r.LastSeen}}{{else}}{{t $T "val.never"}}{{end}}</td></tr>{{end}}
+</table>{{else}}{{template "nodata" (t $T "val.no_data")}}{{end}}
+{{end}}{{end -}}
+
+{{- if eq $sec "top_security_packages"}}{{with $.M.TopSecurityPackages}}
+{{template "h2" (t $T "sec.top_security_packages")}}
+{{if .Rows}}<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:16px;"><tr>{{template "th" (t $T "col.package")}}{{template "th" (t $T "col.affected_hosts")}}{{template "th" (t $T "col.available")}}</tr>
+{{range $i, $r := .Rows}}<tr><td style="{{$td}}background-color:{{alt $i}};">{{$r.Name}}</td><td style="{{$td}}background-color:{{alt $i}};">{{$r.AffectedHosts}}</td><td style="{{$td}}background-color:{{alt $i}};">{{orDash (join $r.AvailableVersions)}}</td></tr>{{end}}
+</table>{{else}}{{template "nodata" (t $T "val.no_data")}}{{end}}
+{{end}}{{end -}}
+
+{{- if eq $sec "host_overview"}}{{with $.M.HostOverview}}
+{{template "h2" (t $T "sec.host_overview")}}
+{{if .Rows}}<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:8px;"><tr>{{template "th" (t $T "col.host")}}{{template "th" (t $T "col.os")}}{{template "th" (t $T "col.status")}}{{template "th" (t $T "col.updates")}}{{template "th" (t $T "col.security_updates")}}{{template "th" (t $T "col.reboot_pending")}}{{template "th" (t $T "col.last_boot")}}{{template "th" (t $T "col.last_patch_run")}}{{template "th" (t $T "col.last_seen")}}{{template "th" (t $T "col.agent")}}</tr>
+{{range $i, $r := .Rows}}<tr><td style="{{$td}}background-color:{{alt $i}};">{{if $links}}<a href="{{$base}}/hosts/{{$r.HostID}}" style="color:#2563eb;text-decoration:none;">{{$r.HostName}}</a>{{else}}{{$r.HostName}}{{end}}{{if $r.PkgBroken}}<br><span style="color:#d97706;font-size:11px;">{{t $T "val.pkg_broken"}}</span>{{end}}</td><td style="{{$td}}background-color:{{alt $i}};">{{$r.OS}}</td><td style="{{$td}}background-color:{{alt $i}};">{{template "badge" (dict "C" (statusColor $r.Status) "Text" (status $T $r.Status))}}</td><td style="{{$td}}background-color:{{alt $i}};">{{$r.Updates}}</td><td style="{{$td}}background-color:{{alt $i}};">{{$r.SecurityUpdates}}</td><td style="{{$td}}background-color:{{alt $i}};">{{yesno $T $r.NeedsReboot}}</td><td style="{{$td}}background-color:{{alt $i}};">{{if $r.BootTime}}{{dtp $T $L $r.BootTime}}{{else if $r.Uptime}}{{tf $T "val.uptime_reported" $r.Uptime}}{{else}}-{{end}}</td><td style="{{$td}}background-color:{{alt $i}};">{{if $r.LastRunStatus}}{{status $T $r.LastRunStatus}} ({{dtp $T $L $r.LastRunAt}}){{else}}{{t $T "val.none"}}{{end}}</td><td style="{{$td}}background-color:{{alt $i}};">{{if $r.LastSeen}}{{dtp $T $L $r.LastSeen}}{{else}}{{t $T "val.never"}}{{end}}</td><td style="{{$td}}background-color:{{alt $i}};">{{orDash $r.AgentVersion}}</td></tr>{{end}}
+</table>{{template "note" (t $T "note.windows_boot")}}{{else}}{{template "nodata" (t $T "val.no_data")}}{{end}}
+{{end}}{{end -}}
+
+{{- if eq $sec "security_updates_by_host"}}{{with $.M.SecurityUpdatesByHost}}
+{{template "h2" (t $T "sec.security_updates_by_host")}}
+{{if .Hosts}}{{range $h := .Hosts}}<h3 style="color:#0f172a;font-size:14px;font-weight:600;margin:16px 0 8px;">{{$h.HostName}}</h3>
+<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:8px;"><tr>{{template "th" (t $T "col.package")}}{{template "th" (t $T "col.installed")}}{{template "th" (t $T "col.available")}}</tr>
+{{range $i, $r := $h.Rows}}<tr><td style="{{$td}}background-color:{{alt $i}};">{{$r.Package}}</td><td style="{{$td}}background-color:{{alt $i}};">{{$r.Installed}}</td><td style="{{$td}}background-color:{{alt $i}};">{{orDash $r.Available}}</td></tr>{{end}}
+</table>{{if $h.More}}{{template "note" (tf $T "val.and_n_more" $h.More)}}{{end}}{{end}}{{else}}{{template "nodata" (t $T "val.no_data")}}{{end}}
+{{end}}{{end -}}
+
+{{- if eq $sec "disks"}}{{with $.M.Disks}}
+{{template "h2" (t $T "sec.disks")}}
+{{if .Rows}}<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:16px;"><tr>{{template "th" (t $T "col.host")}}{{template "th" (t $T "col.disk")}}{{template "th" (t $T "col.mount")}}{{template "th" (t $T "col.size")}}{{template "th" (t $T "col.used")}}</tr>
+{{range $i, $r := .Rows}}<tr><td style="{{$td}}background-color:{{alt $i}};">{{$r.HostName}}</td><td style="{{$td}}background-color:{{alt $i}};">{{$r.Name}}</td><td style="{{$td}}background-color:{{alt $i}};">{{$r.Mount}}</td>{{if $r.Usage}}<td style="{{$td}}background-color:{{alt $i}};">{{gb $r.Usage.TotalGB}}</td><td style="{{$td}}background-color:{{alt $i}};">{{template "badge" (dict "C" (levelColor $r.Level) "Text" (pct $r.Usage.UsedPercent))}}</td>{{else}}<td colspan="2" style="{{$td}}background-color:{{alt $i}};">{{orDash $r.Raw}}</td>{{end}}</tr>{{end}}
+</table>{{else}}{{template "nodata" (t $T "val.no_data")}}{{end}}
+{{end}}{{end -}}
+
+{{- if eq $sec "patch_activity"}}{{with $.M.PatchActivity}}
+{{template "h2" (t $T "sec.patch_activity")}}
+<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;"><tr>
+{{template "kpi" (dict "Value" .Completed "Label" (t $T "kpi.runs_completed") "Color" "#16a34a")}}
+{{template "kpi" (dict "Value" .Failed "Label" (t $T "kpi.runs_failed") "Color" (zeroGreen .Failed))}}
+</tr></table>
+{{if .Rows}}<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:8px;"><tr>{{template "th" (t $T "col.date")}}{{template "th" (t $T "col.host")}}{{template "th" (t $T "col.type")}}{{template "th" (t $T "col.result")}}{{template "th" (t $T "col.package_count")}}</tr>
+{{range $i, $r := .Rows}}<tr><td style="{{$td}}background-color:{{alt $i}};">{{dt $T $L $r.CreatedAt}}</td><td style="{{$td}}background-color:{{alt $i}};">{{if $links}}<a href="{{$base}}/patching/runs/{{$r.ID}}" style="color:#2563eb;text-decoration:none;">{{$r.HostName}}</a>{{else}}{{$r.HostName}}{{end}}</td><td style="{{$td}}background-color:{{alt $i}};">{{status $T $r.PatchType}}{{if $r.DryRun}} – {{t $T "val.dry_run"}}{{end}}</td><td style="{{$td}}background-color:{{alt $i}};">{{template "badge" (dict "C" (statusColor $r.Status) "Text" (status $T $r.Status))}}</td><td style="{{$td}}background-color:{{alt $i}};">{{intp $T $r.PackageCount}}</td></tr>{{end}}
+</table>{{if .Truncated}}{{template "note" (tf $T "val.more_rows" (len .Rows))}}{{end}}{{template "note" (t $T "note.activity")}}{{else}}{{template "nodata" (t $T "val.no_data")}}{{end}}
+{{end}}{{end -}}
+
+{{- if eq $sec "reboots"}}{{with $.M.Reboots}}
+{{template "h2" (t $T "sec.reboots")}}
+{{if .Rows}}<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:8px;"><tr>{{template "th" (t $T "col.date")}}{{template "th" (t $T "col.host")}}{{template "th" (t $T "col.result")}}</tr>
+{{range $i, $r := .Rows}}<tr><td style="{{$td}}background-color:{{alt $i}};">{{dt $T $L $r.CreatedAt}}</td><td style="{{$td}}background-color:{{alt $i}};">{{orDash $r.HostName}}</td><td style="{{$td}}background-color:{{alt $i}};">{{if eq $r.Status "sent"}}{{template "badge" (dict "C" (statusColor "sent") "Text" (t $T "val.reboot_sent"))}}{{else if eq $r.Status "not_delivered"}}{{template "badge" (dict "C" (statusColor "not_delivered") "Text" (t $T "val.reboot_not_delivered"))}}{{if $r.Error}} <span style="color:#64748b;font-size:12px;">{{$r.Error}}</span>{{end}}{{else}}{{$r.Status}}{{end}}</td></tr>{{end}}
+</table>{{if .Truncated}}{{template "note" (tf $T "val.more_rows" (len .Rows))}}{{end}}{{template "note" (t $T "note.reboot")}}{{else}}{{template "nodata" (t $T "val.no_data")}}{{end}}
+{{end}}{{end -}}
+{{- end}}
+</td></tr>
+<tr><td style="background-color:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:12px;">{{t $T "footer"}} · <a href="{{.BrandURL}}" style="color:#2563eb;text-decoration:none;">{{.BrandName}}</a></td></tr>
+</table>
+</td></tr></table>
+</body></html>

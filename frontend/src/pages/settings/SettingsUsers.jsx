@@ -4,10 +4,12 @@ import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import RolesTab from "../../components/settings/RolesTab";
 import UsersTab from "../../components/settings/UsersTab";
+import { useAuth } from "../../contexts/AuthContext";
 
 const SettingsUsers = () => {
 	const location = useLocation();
 	const navigate = useNavigate();
+	const { canManageUsers, canManageSettings } = useAuth();
 	const [activeTab, setActiveTab] = useState(() => {
 		// Set initial tab based on current route
 		if (location.pathname === "/settings/roles") return "roles";
@@ -33,9 +35,12 @@ const SettingsUsers = () => {
 	// so SSO can link on first login.
 	const isOIDCSyncRoles = isOIDCEnabled && (oidcConfig?.syncRoles || false);
 
+	// The /settings/roles route requires can_manage_settings.
 	const tabs = [
 		{ id: "users", name: "Users", icon: Users, href: "/settings/users" },
-		{ id: "roles", name: "Roles", icon: Shield, href: "/settings/roles" },
+		...(canManageSettings()
+			? [{ id: "roles", name: "Roles", icon: Shield, href: "/settings/roles" }]
+			: []),
 	];
 
 	// Update active tab when route changes
@@ -86,7 +91,7 @@ const SettingsUsers = () => {
 							);
 						})}
 					</div>
-					{activeTab === "users" && !isOIDCSyncRoles && (
+					{activeTab === "users" && !isOIDCSyncRoles && canManageUsers() && (
 						<button
 							type="button"
 							onClick={() =>
@@ -99,7 +104,7 @@ const SettingsUsers = () => {
 							Add User
 						</button>
 					)}
-					{activeTab === "roles" && !isOIDCSyncRoles && (
+					{activeTab === "roles" && !isOIDCSyncRoles && canManageSettings() && (
 						<button
 							type="button"
 							onClick={() =>

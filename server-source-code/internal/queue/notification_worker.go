@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/smtp"
 	"net/url"
@@ -20,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/PatchMon/PatchMon/server-source-code/internal/branding"
 	hostctx "github.com/PatchMon/PatchMon/server-source-code/internal/context"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/db"
@@ -334,7 +334,7 @@ func buildNOCFields(p notifications.NotificationDeliverPayload) []map[string]int
 func discordWebhookBody(p notifications.NotificationDeliverPayload) ([]byte, error) {
 	title := strings.TrimSpace(p.Title)
 	if title == "" {
-		title = "PatchMon"
+		title = branding.ProductNameShort
 	}
 	title = truncateUTF8(title, 256)
 
@@ -349,7 +349,7 @@ func discordWebhookBody(p notifications.NotificationDeliverPayload) ([]byte, err
 	// Add clickable link to PatchMon if available
 	if link := nocMetaStr(p.Metadata, "app_link"); link != "" {
 		fields = append(fields, map[string]interface{}{
-			"name": "🔗 View in PatchMon", "value": "[Open](" + link + ")", "inline": false,
+			"name": "🔗 View in " + branding.ProductNameShort, "value": "[Open](" + link + ")", "inline": false,
 		})
 	}
 
@@ -358,11 +358,11 @@ func discordWebhookBody(p notifications.NotificationDeliverPayload) ([]byte, err
 		"description": desc,
 		"color":       discordColorForSeverity(p.Severity),
 		"fields":      fields,
-		"footer":      map[string]interface{}{"text": "PatchMon"},
+		"footer":      map[string]interface{}{"text": branding.ProductNameShort},
 		"timestamp":   time.Now().UTC().Format(time.RFC3339),
 	}
 	body := map[string]interface{}{
-		"username": "PatchMon",
+		"username": branding.ProductNameShort,
 		"embeds":   []interface{}{embed},
 	}
 	return json.Marshal(body)
@@ -478,7 +478,7 @@ func slackIncomingWebhookBody(p notifications.NotificationDeliverPayload) ([]byt
 	}
 	title := strings.TrimSpace(p.Title)
 	if title == "" {
-		title = "PatchMon"
+		title = branding.ProductNameShort
 	}
 
 	// Header line with severity icon
@@ -502,13 +502,13 @@ func slackIncomingWebhookBody(p notifications.NotificationDeliverPayload) ([]byt
 	if link := nocMetaStr(p.Metadata, "app_link"); link != "" {
 		sb.WriteString("\n<")
 		sb.WriteString(link)
-		sb.WriteString("|🔗 View in PatchMon>\n")
+		sb.WriteString("|🔗 View in " + branding.ProductNameShort + ">\n")
 	}
 
 	text := truncateUTF8(sb.String(), slackTextMaxRunes)
 	out := map[string]interface{}{
 		"text":       text,
-		"username":   "PatchMon",
+		"username":   branding.ProductNameShort,
 		"icon_emoji": ":bell:",
 	}
 	return json.Marshal(out)
@@ -525,7 +525,7 @@ func stripScheduledReportHTML(s string) string {
 func discordScheduledReportWebhookBody(subject, html, csv string) ([]byte, error) {
 	title := strings.TrimSpace(subject)
 	if title == "" {
-		title = "PatchMon scheduled report"
+		title = branding.ProductNameShort + " scheduled report"
 	}
 	title = truncateUTF8(title, 256)
 
@@ -553,13 +553,13 @@ func discordScheduledReportWebhookBody(subject, html, csv string) ([]byte, error
 		"title":       title,
 		"description": desc,
 		"color":       5814783,
-		"footer":      map[string]interface{}{"text": "PatchMon · scheduled report"},
+		"footer":      map[string]interface{}{"text": branding.ProductNameShort + " · scheduled report"},
 	}
 	if len(fields) > 0 {
 		embed["fields"] = fields
 	}
 	body := map[string]interface{}{
-		"username": "PatchMon",
+		"username": branding.ProductNameShort,
 		"embeds":   []interface{}{embed},
 	}
 	return json.Marshal(body)
@@ -567,7 +567,7 @@ func discordScheduledReportWebhookBody(subject, html, csv string) ([]byte, error
 
 func slackScheduledReportWebhookBody(subject, html, csv string) ([]byte, error) {
 	var sb strings.Builder
-	sb.WriteString("*PatchMon · scheduled report*\n*")
+	sb.WriteString("*" + branding.ProductNameShort + " · scheduled report*\n*")
 	subj := strings.TrimSpace(subject)
 	if subj == "" {
 		subj = "(no subject)"
@@ -589,7 +589,7 @@ func slackScheduledReportWebhookBody(subject, html, csv string) ([]byte, error) 
 	text := truncateUTF8(sb.String(), slackTextMaxRunes)
 	out := map[string]interface{}{
 		"text":       text,
-		"username":   "PatchMon",
+		"username":   branding.ProductNameShort,
 		"icon_emoji": ":bar_chart:",
 	}
 	return json.Marshal(out)
@@ -768,43 +768,7 @@ func (h *NotificationDeliverHandler) sendEmail(ctx context.Context, plain string
 	}
 	tlsCfg := &tls.Config{ServerName: cfg.SMTPHost, MinVersion: tls.VersionTLS12}
 
-	// Plain TCP first, then:
-	// - use_tls=true and server offers STARTTLS: upgrade with STARTTLS (typical 587)
-	// - use_tls=true and no STARTTLS: retry with implicit TLS (e.g. wrong host/port 465 on 25/587)
-	// - use_tls=false: never call StartTLS even if the server advertises it (e.g. local relay)
-	c, conn, err := func() (*smtp.Client, net.Conn, error) {
-		plainConn, dialErr := net.DialTimeout("tcp", addr, 30*time.Second)
-		if dialErr != nil {
-			return nil, nil, dialErr
-		}
-		client, clientErr := smtp.NewClient(plainConn, cfg.SMTPHost)
-		if clientErr != nil {
-			_ = plainConn.Close()
-			return nil, nil, clientErr
-		}
-		startTLS, _ := client.Extension("STARTTLS")
-		if startTLS && cfg.UseTLS {
-			if tlsErr := client.StartTLS(tlsCfg); tlsErr != nil {
-				_ = client.Close()
-				return nil, nil, tlsErr
-			}
-			return client, plainConn, nil
-		}
-		if cfg.UseTLS && !startTLS {
-			_ = client.Close()
-			tlsConn, tlsErr := tls.DialWithDialer(&net.Dialer{Timeout: 30 * time.Second}, "tcp", addr, tlsCfg)
-			if tlsErr != nil {
-				return nil, nil, tlsErr
-			}
-			client, clientErr = smtp.NewClient(tlsConn, cfg.SMTPHost)
-			if clientErr != nil {
-				_ = tlsConn.Close()
-				return nil, nil, clientErr
-			}
-			return client, tlsConn, nil
-		}
-		return client, plainConn, nil
-	}()
+	c, conn, err := dialSMTP(addr, cfg.SMTPHost, cfg.UseTLS, implicitTLSPort(cfg.SMTPPort), tlsCfg, 30*time.Second)
 	if err != nil {
 		return err
 	}
@@ -971,7 +935,7 @@ func (h *NotificationDeliverHandler) sendNtfy(ctx context.Context, plain string,
 
 	title := strings.TrimSpace(p.Title)
 	if title == "" {
-		title = "PatchMon"
+		title = branding.ProductNameShort
 	}
 
 	priority := ntfyPriorityForSeverity(p.Severity)
@@ -1011,7 +975,7 @@ func (h *NotificationDeliverHandler) sendNtfy(ctx context.Context, plain string,
 	if link := nocMetaStr(p.Metadata, "app_link"); link != "" {
 		body["click"] = link
 		body["actions"] = []map[string]interface{}{
-			{"action": "view", "label": "View in PatchMon", "url": link},
+			{"action": "view", "label": "View in " + branding.ProductNameShort, "url": link},
 		}
 	}
 

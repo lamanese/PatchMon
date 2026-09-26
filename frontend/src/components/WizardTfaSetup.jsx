@@ -5,6 +5,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { Copy, Download } from "lucide-react";
 import { useEffect, useId, useState } from "react";
+import { PRODUCT_NAME } from "../constants/branding";
 import { tfaAPI } from "../utils/api";
 
 const copyToClipboard = async (text) => {
@@ -28,7 +29,7 @@ const copyToClipboard = async (text) => {
 };
 
 const downloadBackupCodes = (codes) => {
-	const content = `PatchMon Backup Codes\n\n${codes.map((code, i) => `${i + 1}. ${code}`).join("\n")}\n\nKeep these codes safe! Each code can only be used once.`;
+	const content = `${PRODUCT_NAME} Backup Codes\n\n${codes.map((code, i) => `${i + 1}. ${code}`).join("\n")}\n\nKeep these codes safe! Each code can only be used once.`;
 	const blob = new Blob([content], { type: "text/plain" });
 	const url = URL.createObjectURL(blob);
 	const a = document.createElement("a");

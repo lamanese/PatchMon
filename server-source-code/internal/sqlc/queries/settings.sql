@@ -65,6 +65,14 @@ UPDATE settings SET
     package_cache_refresh_max_age = $59
 WHERE id = $60;
 
+-- name: UpdateLicenseSettings :exec
+UPDATE settings SET
+    updated_at = NOW(),
+    license_max_hosts = sqlc.arg('license_max_hosts'),
+    license_enforce = sqlc.arg('license_enforce'),
+    license_package = sqlc.arg('license_package')
+WHERE id = sqlc.arg('id');
+
 -- name: UpdateSettingsConfig :exec
 UPDATE settings SET
     updated_at = NOW(),

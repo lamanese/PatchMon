@@ -38,8 +38,9 @@ func (s *DashboardStore) GetStats(ctx context.Context) (map[string]interface{}, 
 	offlineThreshold := now.Add(-time.Duration(updateIntervalMinutes*3) * time.Minute)
 
 	stats, err := d.Queries.GetDashboardStats(ctx, db.GetDashboardStatsParams{
-		LastUpdate:   pgtime.From(thresholdTime),
-		LastUpdate_2: pgtime.From(offlineThreshold),
+		LastUpdate:              pgtime.From(thresholdTime),
+		LastUpdate_2:            pgtime.From(offlineThreshold),
+		IgnoreDefinitionUpdates: d.IgnoreDefinitionUpdates(), // fork: PM_IGNORE_DEFINITION_UPDATES
 	})
 	if err != nil {
 		return nil, err
@@ -132,7 +133,10 @@ func (s *DashboardStore) GetHomepageStats(ctx context.Context) (map[string]inter
 	now := time.Now()
 	oneDayAgo := now.Add(-24 * time.Hour)
 
-	stats, err := d.Queries.GetHomepageStats(ctx, pgtime.From(oneDayAgo))
+	stats, err := d.Queries.GetHomepageStats(ctx, db.GetHomepageStatsParams{
+		Since:                   pgtime.From(oneDayAgo),
+		IgnoreDefinitionUpdates: d.IgnoreDefinitionUpdates(), // fork: PM_IGNORE_DEFINITION_UPDATES
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +251,7 @@ type HostsListParams struct {
 // GetHostsWithCounts returns hosts with update counts for dashboard.
 func (s *DashboardStore) GetHostsWithCounts(ctx context.Context, params HostsListParams) ([]map[string]interface{}, error) {
 	d := s.db.DB(ctx)
-	arg := db.GetHostsWithCountsParams{}
+	arg := db.GetHostsWithCountsParams{IgnoreDefinitionUpdates: d.IgnoreDefinitionUpdates()} // fork: PM_IGNORE_DEFINITION_UPDATES
 	if params.Search != "" {
 		arg.Search = &params.Search
 	}
@@ -321,6 +325,9 @@ func (s *DashboardStore) GetHostsWithCounts(ctx context.Context, params HostsLis
 			"ip": h.Ip, "os_type": h.OsType, "os_version": h.OsVersion,
 			"status": h.Status, "agent_version": h.AgentVersion, "auto_update": h.AutoUpdate,
 			"notes": h.Notes, "api_id": h.ApiID, "needs_reboot": h.NeedsReboot, "reboot_reason": h.RebootReason,
+			"allow_reboot": h.AllowReboot,
+			"pkg_broken":   h.ForkPkgBroken, "pkg_broken_detail": h.ForkPkgBrokenDetail,
+			"boot_time":      h.ForkBootTime,
 			"system_uptime":  h.SystemUptime,
 			"docker_enabled": h.DockerEnabled, "compliance_enabled": h.ComplianceEnabled,
 			"compliance_on_demand_only": h.ComplianceOnDemandOnly,
@@ -375,7 +382,9 @@ func (s *DashboardStore) GetHostDetail(ctx context.Context, hostID string, histo
 		"last_update": host.LastUpdate, "status": host.Status, "api_id": host.ApiID,
 		"agent_version": host.AgentVersion, "auto_update": host.AutoUpdate, "notes": host.Notes,
 		"system_uptime": host.SystemUptime, "needs_reboot": host.NeedsReboot,
-		"reboot_reason":  host.RebootReason,
+		"reboot_reason": host.RebootReason,
+		"pkg_broken":    host.PkgBroken, "pkg_broken_detail": host.PkgBrokenDetail,
+		"boot_time":      host.BootTime,
 		"docker_enabled": host.DockerEnabled, "compliance_enabled": host.ComplianceEnabled,
 		"compliance_on_demand_only": host.ComplianceOnDemandOnly,
 		"host_down_alerts_enabled":  host.HostDownAlertsEnabled,
@@ -388,7 +397,7 @@ func (s *DashboardStore) GetHostDetail(ctx context.Context, hostID string, histo
 		"host_group_memberships": hg, "primary_interface": host.PrimaryInterface,
 	}
 
-	stats, _ := d.Queries.GetHostPackageStats(ctx, hostID)
+	stats, _ := d.Queries.GetHostPackageStats(ctx, db.GetHostPackageStatsParams{HostID: hostID, IgnoreDefinitionUpdates: d.IgnoreDefinitionUpdates()}) // fork: PM_IGNORE_DEFINITION_UPDATES
 	res["stats"] = map[string]interface{}{
 		"total_packages":    stats.Column1,
 		"outdated_packages": stats.Column2,
@@ -428,6 +437,8 @@ func (s *DashboardStore) getHostPackagesWithPackages(ctx context.Context, hostID
 			"needs_update": r.NeedsUpdate, "is_security_update": r.IsSecurityUpdate,
 			"last_checked": lastChecked,
 			"packages":     map[string]interface{}{"name": r.PkgName},
+			// fork: PM_IGNORE_DEFINITION_UPDATES
+			"is_definition_update": r.IsDefinitionUpdate,
 		}
 	}
 	return out, nil
@@ -602,7 +613,7 @@ func (s *DashboardStore) GetPackageTrends(ctx context.Context, days int, hostID 
 					securityCount: int(latest.UniqueSecurityCount),
 				})
 			} else {
-				fallback, err := d.Queries.GetSystemStatsForInsert(ctx)
+				fallback, err := d.Queries.GetSystemStatsForInsert(ctx, d.IgnoreDefinitionUpdates()) // fork: PM_IGNORE_DEFINITION_UPDATES
 				if err == nil {
 					aggregated = append(aggregated, packageTrendPoint{
 						timeKey:       endDate.Format("2006-01-02"),
@@ -643,7 +654,7 @@ func (s *DashboardStore) GetPackageTrends(ctx context.Context, days int, hostID 
 			}
 			// Fallback for 24h view: when no update_history, use current state
 			if len(aggregated) == 0 {
-				stats, err := d.Queries.GetHostPackageStats(ctx, hostID)
+				stats, err := d.Queries.GetHostPackageStats(ctx, db.GetHostPackageStatsParams{HostID: hostID, IgnoreDefinitionUpdates: d.IgnoreDefinitionUpdates()}) // fork: PM_IGNORE_DEFINITION_UPDATES
 				if err == nil {
 					aggregated = append(aggregated, packageTrendPoint{
 						timeKey:       endDate.Format(time.RFC3339),
@@ -673,7 +684,7 @@ func (s *DashboardStore) GetPackageTrends(ctx context.Context, days int, hostID 
 		}
 		// Fallback: when no update_history for this host, use current state from host_packages
 		if len(aggregated) == 0 {
-			stats, err := d.Queries.GetHostPackageStats(ctx, hostID)
+			stats, err := d.Queries.GetHostPackageStats(ctx, db.GetHostPackageStatsParams{HostID: hostID, IgnoreDefinitionUpdates: d.IgnoreDefinitionUpdates()}) // fork: PM_IGNORE_DEFINITION_UPDATES
 			if err == nil {
 				aggregated = append(aggregated, packageTrendPoint{
 					timeKey:       endDate.Format("2006-01-02"),
@@ -794,7 +805,7 @@ func (s *DashboardStore) buildPackageTrendsResponse(ctx context.Context, filled 
 	}
 	var currentPackageState map[string]interface{}
 	if hostIDOut != "all" {
-		stats, err := d.Queries.GetHostPackageStats(ctx, hostIDOut)
+		stats, err := d.Queries.GetHostPackageStats(ctx, db.GetHostPackageStatsParams{HostID: hostIDOut, IgnoreDefinitionUpdates: d.IgnoreDefinitionUpdates()}) // fork: PM_IGNORE_DEFINITION_UPDATES
 		if err == nil {
 			currentPackageState = map[string]interface{}{
 				"total_packages": stats.Column1,
@@ -811,7 +822,7 @@ func (s *DashboardStore) buildPackageTrendsResponse(ctx context.Context, filled 
 				"security_count": latest.UniqueSecurityCount,
 			}
 		} else {
-			fallback, err := d.Queries.GetSystemStatsForInsert(ctx)
+			fallback, err := d.Queries.GetSystemStatsForInsert(ctx, d.IgnoreDefinitionUpdates()) // fork: PM_IGNORE_DEFINITION_UPDATES
 			if err == nil {
 				currentPackageState = map[string]interface{}{
 					"total_packages": fallback.Column3,

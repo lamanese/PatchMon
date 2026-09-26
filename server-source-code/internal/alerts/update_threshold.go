@@ -42,7 +42,9 @@ func ProcessUpdateThresholdMonitor(ctx context.Context, d *database.DB, tenantHo
 	pendThreshold := parseThreshold(pendCfg, 10)
 
 	// Get per-host update counts.
-	counts, err := d.Queries.GetPendingUpdateCountsPerHost(ctx)
+	// fork: PM_IGNORE_DEFINITION_UPDATES - flag threaded from d's config, not a new
+	// parameter, so callers in internal/queue/ (out of scope for this change) are unaffected.
+	counts, err := d.Queries.GetPendingUpdateCountsPerHost(ctx, d.IgnoreDefinitionUpdates())
 	if err != nil {
 		return 0, err
 	}

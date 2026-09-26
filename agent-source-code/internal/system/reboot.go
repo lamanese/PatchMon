@@ -57,8 +57,38 @@ func (d *Detector) CheckRebootRequired() (bool, string) {
 	return false, ""
 }
 
+// ScheduleReboot schedules a system reboot after the given delay in minutes.
+// The reason is shown to logged-in users where the platform supports it.
+func (d *Detector) ScheduleReboot(delayMinutes int, reason string) error {
+	if delayMinutes < 1 {
+		delayMinutes = 1
+	}
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("shutdown", "/r", "/t", strconv.Itoa(delayMinutes*60), "/c", reason)
+	} else {
+		cmd = exec.Command("shutdown", "-r", fmt.Sprintf("+%d", delayMinutes), reason)
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to schedule reboot: %w (output: %s)", err, strings.TrimSpace(string(output)))
+	}
+
+	d.logger.WithFields(logutil.SanitizeMap(map[string]interface{}{
+		"delay_minutes": delayMinutes,
+		"reason":        reason,
+	})).Info("System reboot scheduled")
+	return nil
+}
+
 // checkWindowsRebootRequired checks if Windows requires a reboot (per UsoClient/WUA docs)
-// Checks: RebootRequired registry, PendingFileRenameOperations, CBS reboot-pending
+// Checks: Windows Update RebootRequired and Component Based Servicing reboot-pending.
+//
+// PendingFileRenameOperations is deliberately not consulted. Ordinary application
+// updaters write to that key during routine self-updates, so treating it as a
+// reboot signal marks healthy hosts as needing a reboot indefinitely.
 func (d *Detector) checkWindowsRebootRequired() (bool, string) {
 	psScript := `
 $ErrorActionPreference = "SilentlyContinue"
@@ -67,10 +97,6 @@ $reasons = @()
 # Windows Update RebootRequired
 $wu = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired" -ErrorAction SilentlyContinue
 if ($wu) { $reasons += "Windows Update requires reboot" }
-
-# Pending file rename operations (installer pending reboot)
-$pfro = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -Name PendingFileRenameOperations -ErrorAction SilentlyContinue
-if ($pfro -and $pfro.PendingFileRenameOperations) { $reasons += "Pending file rename operations" }
 
 # Component Based Servicing (CBS) reboot pending
 $cbs = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending" -ErrorAction SilentlyContinue

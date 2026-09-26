@@ -1,14 +1,18 @@
 -- name: GetSystemStatsForInsert :one
+-- fork: PM_IGNORE_DEFINITION_UPDATES (the three needs_update subselects exclude Definition Updates when the flag is on; total packages/total hosts are untouched)
 SELECT
     (SELECT COUNT(DISTINCT p.id)::int FROM packages p
-        INNER JOIN host_packages hp ON hp.package_id = p.id AND hp.needs_update = true),
+        INNER JOIN host_packages hp ON hp.package_id = p.id AND hp.needs_update = true
+            AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(hp.wua_categories, hp.wua_kb))),
     (SELECT COUNT(DISTINCT p.id)::int FROM packages p
-        INNER JOIN host_packages hp ON hp.package_id = p.id AND hp.needs_update = true AND hp.is_security_update = true),
+        INNER JOIN host_packages hp ON hp.package_id = p.id AND hp.needs_update = true AND hp.is_security_update = true
+            AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(hp.wua_categories, hp.wua_kb))),
     (SELECT COUNT(DISTINCT p.id)::int FROM packages p
         WHERE EXISTS (SELECT 1 FROM host_packages hp WHERE hp.package_id = p.id)),
     (SELECT COUNT(*)::int FROM hosts WHERE status = 'active'),
     (SELECT COUNT(DISTINCT h.id)::int FROM hosts h
-        INNER JOIN host_packages hp ON hp.host_id = h.id AND hp.needs_update = true);
+        INNER JOIN host_packages hp ON hp.host_id = h.id AND hp.needs_update = true
+            AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(hp.wua_categories, hp.wua_kb)));
 
 -- name: InsertSystemStatistics :exec
 INSERT INTO system_statistics (id, unique_packages_count, unique_security_count, total_packages, total_hosts, hosts_needing_updates, timestamp)

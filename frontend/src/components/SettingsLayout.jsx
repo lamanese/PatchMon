@@ -1,4 +1,5 @@
 import {
+	BadgeCheck,
 	BarChart3,
 	Bot,
 	ChevronDown,
@@ -36,6 +37,24 @@ const SettingsLayout = ({ children }) => {
 	const buildSecondaryNavigation = () => {
 		const nav = [];
 
+		// Personal pages: available to every signed-in user, whatever their role
+		// may or may not see of user management and server settings.
+		const accountItems = [
+			{
+				name: "My Profile",
+				href: "/settings/profile",
+				icon: UserCircle,
+			},
+		];
+		if (!publicSettings?.admin_mode) {
+			accountItems.push({
+				name: "Licence",
+				href: "/settings/license",
+				icon: BadgeCheck,
+			});
+		}
+		nav.push({ section: "My Account", items: accountItems });
+
 		// Users section
 		if (canViewUsers() || canManageUsers()) {
 			const userItems = [
@@ -50,7 +69,8 @@ const SettingsLayout = ({ children }) => {
 			// dedicated "Roles" editor manages custom role CRUD. Locked items
 			// stay visible with a TierBadge for discovery; the route renders
 			// an upgrade screen via <ModuleGate>.
-			{
+			// The /settings/roles route requires can_manage_settings.
+			if (canManageSettings()) {
 				const locked = !hasModule("rbac_custom");
 				userItems.push({
 					name: "Roles",
@@ -60,11 +80,6 @@ const SettingsLayout = ({ children }) => {
 					lockedTier: locked ? getRequiredTier("rbac_custom") : null,
 				});
 			}
-			userItems.push({
-				name: "My Profile",
-				href: "/settings/profile",
-				icon: UserCircle,
-			});
 			if (canManageSettings()) {
 				userItems.push(
 					{
@@ -180,6 +195,8 @@ const SettingsLayout = ({ children }) => {
 					icon: BarChart3,
 				});
 			}
+			// Licence (fork feature) lives under "My Account": every user may
+			// read it, only superadmins can change it.
 			nav.push({
 				section: "Server",
 				items: serverItems,

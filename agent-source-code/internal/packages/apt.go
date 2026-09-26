@@ -53,7 +53,7 @@ func (m *APTManager) GetPackages() []models.Package {
 		(m.cacheRefresh.Mode == "if_stale" && m.isCacheStale(m.cacheRefresh.MaxAge))
 	if shouldRefresh {
 		m.logger.WithField("mode", m.cacheRefresh.Mode).Debug("Refreshing package cache")
-		updateCmd := exec.Command(packageManager, "update", "-qq")
+		updateCmd := exec.Command(packageManager, AptUpdateArgs()...)
 		if err := updateCmd.Run(); err != nil {
 			m.logger.WithError(err).WithField("manager", packageManager).Warn("Failed to update package lists")
 		}
@@ -90,7 +90,10 @@ func (m *APTManager) GetPackages() []models.Package {
 	go func() {
 		defer wg.Done()
 		m.logger.Debug("Getting upgradable packages...")
-		upgradeCmd := exec.Command(packageManager, "-s", "-o", "Debug::NoLocking=1", "upgrade")
+		// --with-new-pkgs so packages held back for needing new dependencies
+		// (e.g. fwupd -> libfwupd3) are reported as upgradable, matching what
+		// patch_all actually upgrades.
+		upgradeCmd := exec.Command(packageManager, "-s", "-o", "Debug::NoLocking=1", "--with-new-pkgs", "upgrade")
 		upgradeCmd.Env = append(os.Environ(), "LANG=C")
 		out, err := upgradeCmd.Output()
 		if err != nil {

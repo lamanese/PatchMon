@@ -71,12 +71,30 @@ func (h *WindowsUpdatesHandler) RecordInstallResult(w http.ResponseWriter, r *ht
 		return
 	}
 
+	d := h.db.DB(r.Context())
+
+	// Defense in depth: a dry run must never alter recorded install state, and
+	// results may only be recorded against the host's own run. The agent
+	// already skips result reporting for dry runs - this enforces it server-side.
+	if body.PatchRunID != "" {
+		run, err := d.Queries.GetPatchRunByID(r.Context(), body.PatchRunID)
+		if err == nil {
+			if run.HostID != host.ID {
+				JSON(w, http.StatusForbidden, map[string]string{"error": "patch_run_id does not belong to this host"})
+				return
+			}
+			if run.DryRun {
+				JSON(w, http.StatusBadRequest, map[string]string{"error": "dry runs must not report install results"})
+				return
+			}
+		}
+	}
+
 	result := "failed"
 	if body.Success {
 		result = "success"
 	}
 
-	d := h.db.DB(r.Context())
 	guid := body.GUID
 	_ = d.Queries.UpdateHostPackageWUAInstallResult(r.Context(), db.UpdateHostPackageWUAInstallResultParams{
 		HostID:           host.ID,
@@ -229,6 +247,8 @@ func (h *WindowsUpdatesHandler) ListForHost(w http.ResponseWriter, r *http.Reque
 			"needs_update":       row.NeedsUpdate,
 			"is_security_update": row.IsSecurityUpdate,
 			"last_checked":       pgTimestampToString(row.LastChecked),
+			// fork: PM_IGNORE_DEFINITION_UPDATES
+			"is_definition_update": row.IsDefinitionUpdate,
 		}
 		if row.WuaGuid != nil {
 			u["guid"] = *row.WuaGuid
@@ -263,7 +283,8 @@ func (h *WindowsUpdatesHandler) ListForHost(w http.ResponseWriter, r *http.Reque
 		updates = append(updates, u)
 	}
 
-	stats, _ := d.Queries.CountWindowsUpdatesByHostID(r.Context(), hostID)
+	// fork: PM_IGNORE_DEFINITION_UPDATES
+	stats, _ := d.Queries.CountWindowsUpdatesByHostID(r.Context(), db.CountWindowsUpdatesByHostIDParams{HostID: hostID, IgnoreDefinitionUpdates: d.IgnoreDefinitionUpdates()})
 
 	JSON(w, http.StatusOK, map[string]interface{}{
 		"host_id":         hostID,

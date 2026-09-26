@@ -9,12 +9,16 @@ import (
 	"unicode"
 
 	"github.com/PatchMon/PatchMon/server-source-code/internal/config"
+	hostctx "github.com/PatchMon/PatchMon/server-source-code/internal/context"
 )
 
-// hostFromRequest returns the X-Forwarded-Host value for use in job payloads,
-// so queue workers can resolve the correct database for the request.
+// hostFromRequest returns the tenant host for job payloads, so queue workers
+// can resolve the correct database. It is the host the context middleware
+// actually resolved, never the raw X-Forwarded-Host header: on a
+// single-instance server behind a proxy that header is set but means
+// nothing, and fail-closed workers must not treat it as a tenant.
 func hostFromRequest(r *http.Request) string {
-	return strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	return strings.TrimSpace(hostctx.TenantHostKey(r.Context()))
 }
 
 // ValidatePasswordPolicy checks password against resolved config. Returns descriptive error.

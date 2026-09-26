@@ -14,6 +14,8 @@ hp_package_counts AS (
         COUNT(DISTINCT package_id) FILTER (WHERE is_security_update)::int AS security_updates
     FROM host_packages
     WHERE needs_update = true
+      -- fork: PM_IGNORE_DEFINITION_UPDATES
+      AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(wua_categories, wua_kb))
 )
 SELECT
     hc.total_hosts,
@@ -44,15 +46,16 @@ ORDER BY count DESC, os_type, os_version;
 -- name: GetHostsWithCounts :many
 SELECT h.id, h.machine_id, h.friendly_name, h.hostname, h.ip, h.os_type, h.os_version,
     h.status, h.agent_version, h.auto_update, h.notes, h.api_id,
-    h.needs_reboot, h.reboot_reason, h.system_uptime, h.docker_enabled, h.compliance_enabled, h.compliance_on_demand_only,
+    h.needs_reboot, h.reboot_reason, h.allow_reboot, h.fork_pkg_broken, h.fork_pkg_broken_detail, h.fork_boot_time, h.system_uptime, h.docker_enabled, h.compliance_enabled, h.compliance_on_demand_only,
     h.last_update,
     h.compliance_scanner_status->'scanner_info'->>'ssg_version' as ssg_version,
     COALESCE(uc.cnt, 0)::int as updates_count,
     COALESCE(sc.cnt, 0)::int as security_updates_count,
     COALESCE(tc.cnt, 0)::int as total_packages_count
 FROM hosts h
-LEFT JOIN (SELECT host_id, COUNT(*) as cnt FROM host_packages WHERE needs_update = true GROUP BY host_id) uc ON uc.host_id = h.id
-LEFT JOIN (SELECT host_id, COUNT(*) as cnt FROM host_packages WHERE needs_update = true AND is_security_update = true GROUP BY host_id) sc ON sc.host_id = h.id
+-- fork: PM_IGNORE_DEFINITION_UPDATES (uc/sc exclude Definition Updates when the flag is on; tc is a total-installed count, left untouched)
+LEFT JOIN (SELECT host_id, COUNT(*) as cnt FROM host_packages WHERE needs_update = true AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(wua_categories, wua_kb)) GROUP BY host_id) uc ON uc.host_id = h.id
+LEFT JOIN (SELECT host_id, COUNT(*) as cnt FROM host_packages WHERE needs_update = true AND is_security_update = true AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(wua_categories, wua_kb)) GROUP BY host_id) sc ON sc.host_id = h.id
 LEFT JOIN (SELECT host_id, COUNT(*) as cnt FROM host_packages GROUP BY host_id) tc ON tc.host_id = h.id
 WHERE (sqlc.narg('search')::text IS NULL OR h.friendly_name ILIKE '%' || sqlc.narg('search') || '%' OR h.hostname ILIKE '%' || sqlc.narg('search') || '%' OR h.ip ILIKE '%' || sqlc.narg('search') || '%' OR h.os_type ILIKE '%' || sqlc.narg('search') || '%' OR h.notes ILIKE '%' || sqlc.narg('search') || '%')
 AND (
@@ -66,13 +69,18 @@ AND (sqlc.narg('os_version')::text IS NULL OR h.os_version ILIKE sqlc.narg('os_v
 ORDER BY h.last_update DESC NULLS LAST;
 
 -- name: GetHostPackageStats :one
-SELECT COUNT(*)::int, COUNT(*) FILTER (WHERE needs_update)::int, COUNT(*) FILTER (WHERE needs_update AND is_security_update)::int
-FROM host_packages WHERE host_id = $1;
+-- fork: PM_IGNORE_DEFINITION_UPDATES (outdated/security FILTERs exclude Definition Updates when the flag is on; total install count is untouched)
+SELECT COUNT(*)::int,
+    COUNT(*) FILTER (WHERE needs_update AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(wua_categories, wua_kb)))::int,
+    COUNT(*) FILTER (WHERE needs_update AND is_security_update AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(wua_categories, wua_kb)))::int
+FROM host_packages WHERE host_id = sqlc.arg('host_id');
 
 -- name: GetHostPackagesWithPackages :many
 SELECT hp.id, hp.host_id, hp.package_id, hp.current_version, hp.available_version,
     hp.needs_update, hp.is_security_update, hp.last_checked,
-    p.name as pkg_name
+    p.name as pkg_name,
+    -- fork: PM_IGNORE_DEFINITION_UPDATES (list stays complete; this only flags rows for the frontend badge)
+    fork_is_definition_update(hp.wua_categories, hp.wua_kb) AS is_definition_update
 FROM host_packages hp
 JOIN packages p ON p.id = hp.package_id
 WHERE hp.host_id = $1
@@ -153,12 +161,16 @@ hosts_needing_updates AS (
     FROM host_packages hp
     JOIN active_hosts ah ON ah.id = hp.host_id
     WHERE hp.needs_update = true
+      -- fork: PM_IGNORE_DEFINITION_UPDATES
+      AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(hp.wua_categories, hp.wua_kb))
 ),
 hosts_with_security AS (
     SELECT COUNT(DISTINCT hp.host_id)::int AS cnt
     FROM host_packages hp
     JOIN active_hosts ah ON ah.id = hp.host_id
     WHERE hp.needs_update = true AND hp.is_security_update = true
+      -- fork: PM_IGNORE_DEFINITION_UPDATES
+      AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(hp.wua_categories, hp.wua_kb))
 ),
 package_counts AS (
     SELECT
@@ -166,6 +178,8 @@ package_counts AS (
         COUNT(DISTINCT package_id) FILTER (WHERE is_security_update)::int AS security_updates
     FROM host_packages
     WHERE needs_update = true
+      -- fork: PM_IGNORE_DEFINITION_UPDATES
+      AND NOT (sqlc.arg('ignore_definition_updates')::boolean AND fork_is_definition_update(wua_categories, wua_kb))
 )
 SELECT
     hc.total_hosts,

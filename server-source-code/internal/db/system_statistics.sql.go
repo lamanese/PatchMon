@@ -92,14 +92,17 @@ func (q *Queries) GetSystemStatisticsDaily(ctx context.Context, arg GetSystemSta
 const getSystemStatsForInsert = `-- name: GetSystemStatsForInsert :one
 SELECT
     (SELECT COUNT(DISTINCT p.id)::int FROM packages p
-        INNER JOIN host_packages hp ON hp.package_id = p.id AND hp.needs_update = true),
+        INNER JOIN host_packages hp ON hp.package_id = p.id AND hp.needs_update = true
+            AND NOT ($1::boolean AND fork_is_definition_update(hp.wua_categories, hp.wua_kb))),
     (SELECT COUNT(DISTINCT p.id)::int FROM packages p
-        INNER JOIN host_packages hp ON hp.package_id = p.id AND hp.needs_update = true AND hp.is_security_update = true),
+        INNER JOIN host_packages hp ON hp.package_id = p.id AND hp.needs_update = true AND hp.is_security_update = true
+            AND NOT ($1::boolean AND fork_is_definition_update(hp.wua_categories, hp.wua_kb))),
     (SELECT COUNT(DISTINCT p.id)::int FROM packages p
         WHERE EXISTS (SELECT 1 FROM host_packages hp WHERE hp.package_id = p.id)),
     (SELECT COUNT(*)::int FROM hosts WHERE status = 'active'),
     (SELECT COUNT(DISTINCT h.id)::int FROM hosts h
-        INNER JOIN host_packages hp ON hp.host_id = h.id AND hp.needs_update = true)
+        INNER JOIN host_packages hp ON hp.host_id = h.id AND hp.needs_update = true
+            AND NOT ($1::boolean AND fork_is_definition_update(hp.wua_categories, hp.wua_kb)))
 `
 
 type GetSystemStatsForInsertRow struct {
@@ -110,8 +113,9 @@ type GetSystemStatsForInsertRow struct {
 	Column5 int32 `json:"column_5"`
 }
 
-func (q *Queries) GetSystemStatsForInsert(ctx context.Context) (GetSystemStatsForInsertRow, error) {
-	row := q.db.QueryRow(ctx, getSystemStatsForInsert)
+// fork: PM_IGNORE_DEFINITION_UPDATES (the three needs_update subselects exclude Definition Updates when the flag is on; total packages/total hosts are untouched)
+func (q *Queries) GetSystemStatsForInsert(ctx context.Context, ignoreDefinitionUpdates bool) (GetSystemStatsForInsertRow, error) {
+	row := q.db.QueryRow(ctx, getSystemStatsForInsert, ignoreDefinitionUpdates)
 	var i GetSystemStatsForInsertRow
 	err := row.Scan(
 		&i.Column1,

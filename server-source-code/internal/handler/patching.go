@@ -784,6 +784,14 @@ func (h *PatchingHandler) RetryValidation(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// A pending offline-retry task for this run would dispatch the same dry
+	// run a second time once the host is back; this task replaces it.
+	if h.queueInspector != nil {
+		for _, retryID := range queue.OfflineRetryTaskIDs(id) {
+			_ = h.queueInspector.DeleteTask(queue.QueuePatching, retryID)
+		}
+	}
+
 	if _, err := h.queueClient.Enqueue(task); err != nil {
 		h.log.Error("patching: enqueue retry-validation error", "error", err)
 		JSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to queue validation retry"})
@@ -817,11 +825,13 @@ func (h *PatchingHandler) DeleteRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Remove run_patch task(s) from queue if present.
-	// Original task: patch-run-{id}, retry task: patch-run-{id}-retry
+	// Original task: patch-run-{id}, plus the offline-retry task(s).
 	if h.queueInspector != nil {
 		taskID := patchRunJobIDPrefix + id
 		_ = h.queueInspector.DeleteTask(queue.QueuePatching, taskID)
-		_ = h.queueInspector.DeleteTask(queue.QueuePatching, taskID+"-retry")
+		for _, retryID := range queue.OfflineRetryTaskIDs(id) {
+			_ = h.queueInspector.DeleteTask(queue.QueuePatching, retryID)
+		}
 	}
 	if err := h.patchRuns.Delete(r.Context(), id); err != nil {
 		h.log.Error("patching: delete run error", "patch_run_id", id, "error", err)
@@ -897,15 +907,31 @@ func (h *PatchingHandler) Trigger(w http.ResponseWriter, r *http.Request) {
 	var pkgNames []string
 	if body.PatchType == "patch_package" {
 		if len(body.PackageNames) > 0 {
-			for _, n := range body.PackageNames {
-				if !isValidPackageName(n) {
-					JSON(w, http.StatusBadRequest, map[string]string{"error": "Every package_names entry must be a valid package name"})
-					return
-				}
-			}
 			if len(body.PackageNames) > 100 {
 				JSON(w, http.StatusBadRequest, map[string]string{"error": "package_names limited to 100 packages per run"})
 				return
+			}
+			// Windows update titles ("2026-05 ... Update (KB...)") contain
+			// spaces and parentheses and fail the generic package-name pattern.
+			// Accept a name that resolves to a WUA GUID on this host instead -
+			// the actual name->GUID substitution happens at dispatch time
+			// (queue/jobs.go), so the run keeps the human-readable titles.
+			var resolved []string
+			for i, n := range body.PackageNames {
+				if isValidPackageName(n) {
+					continue
+				}
+				if resolved == nil {
+					var rerr error
+					resolved, rerr = h.patchRuns.ResolveWindowsUpdateNames(r.Context(), body.HostID, body.PackageNames)
+					if rerr != nil || len(resolved) != len(body.PackageNames) {
+						resolved = body.PackageNames // resolution unavailable -> reject below
+					}
+				}
+				if resolved[i] == n || !isValidPatchUUID(resolved[i]) {
+					JSON(w, http.StatusBadRequest, map[string]string{"error": "Every package_names entry must be a valid package name"})
+					return
+				}
 			}
 			pkgNames = body.PackageNames
 		} else if body.PackageName != "" && isValidPackageName(body.PackageName) {

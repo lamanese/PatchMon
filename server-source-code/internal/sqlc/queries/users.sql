@@ -20,8 +20,12 @@ ORDER BY CASE WHEN discord_id = $1 THEN 0 ELSE 1 END
 LIMIT 1;
 
 -- name: GetUserByOidcSubOrEmail :one
+-- The "$2 != ''" guard mirrors GetUserByDiscordIDOrEmail. Without it an IdP
+-- asserting an empty email participates in the email branch, which is junk
+-- input rather than a takeover (the oidc_sub cross-check blocks a second such
+-- login) but should not reach account matching at all.
 SELECT * FROM users
-WHERE oidc_sub = $1 OR LOWER(email) = LOWER($2)
+WHERE oidc_sub = $1 OR (LOWER(email) = LOWER($2) AND $2 != '')
 ORDER BY CASE WHEN oidc_sub = $1 THEN 0 ELSE 1 END
 LIMIT 1;
 
@@ -76,7 +80,7 @@ INSERT INTO users (
     oidc_sub, oidc_provider, avatar_url
 ) VALUES (
     $1, $2, $3, NULL, $4, true, $5, $6,
-    false, $7, $8, 'dark', 'cyber_blue',
+    false, $7, $8, 'light', 'cyber_blue',
     $9, $10, $11
 );
 
@@ -86,6 +90,10 @@ UPDATE users SET
     updated_at = $5, first_name = $6, last_name = $7,
     theme_preference = $8, color_theme = $9
 WHERE id = $10;
+
+-- name: UpdateUserLastLogin :exec
+UPDATE users SET last_login = NOW(), updated_at = NOW()
+WHERE id = $1;
 
 -- name: UpdateUserOidcLink :exec
 UPDATE users SET
@@ -126,7 +134,7 @@ INSERT INTO users (
     discord_id, discord_username, discord_avatar, discord_linked_at
 ) VALUES (
     $1, $2, $3, NULL, $4, true, $5, $6,
-    false, $7, $8, 'dark', 'cyber_blue',
+    false, $7, $8, 'light', 'cyber_blue',
     $9, $10, $11, $12
 );
 

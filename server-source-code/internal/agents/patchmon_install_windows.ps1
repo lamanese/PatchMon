@@ -92,6 +92,15 @@ New-Item -ItemType Directory -Force -Path $InstallPath | Out-Null
 Write-Host "Creating configuration directory..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Force -Path $ConfigPath | Out-Null
 
+# Restrict config directory to SYSTEM and Administrators (SIDs, locale-independent).
+# Inherited ProgramData ACLs would let regular users create/own files here -
+# credentials.yml and the self-update marker must not be user-writable.
+# The directory may pre-exist (upgrade, or pre-created by an unprivileged user who
+# then owns it), so first take ownership and reset explicit ACEs before hardening.
+& icacls.exe $ConfigPath /setowner "*S-1-5-32-544" /t /c | Out-Null
+& icacls.exe $ConfigPath /reset /t /c | Out-Null
+& icacls.exe $ConfigPath /inheritance:r /grant "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
+
 # Download the binary from the server
 Write-Host "Downloading PatchMon agent..." -ForegroundColor Yellow
 try {
@@ -228,6 +237,10 @@ try {
         -ErrorAction Stop | Out-Null
 
     Write-Host "Service created successfully." -ForegroundColor Green
+
+    # Configure service recovery: restart on crash. Also the safety net for the
+    # agent self-update, which exits the service process to load the new binary.
+    & sc.exe failure $serviceName reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
 
     # Start the service
     Write-Host "Starting service..." -ForegroundColor Cyan

@@ -12,7 +12,9 @@ import (
 )
 
 // DefaultVersion is the default server version. Bump this when releasing; config_test.go uses it.
-const DefaultVersion = "2.0.2"
+// Fork scheme: <upstream-base>-am.<fork-revision> — bump the am-suffix per fork
+// release, reset to .1 after rebasing onto a new upstream version.
+const DefaultVersion = "2.0.2-am.18"
 
 // Config holds application configuration loaded from environment.
 // Uses same variable names as PatchMon/server for compatibility.
@@ -77,6 +79,10 @@ type Config struct {
 	// Server
 	EnableHSTS bool
 	TrustProxy bool
+	// TrustedProxyRanges lists CIDRs (or bare IPs) of reverse proxies in front of
+	// PatchMon. Env-only: exposing this in the settings UI would let an admin
+	// widen it to 0.0.0.0/0 and restore X-Forwarded-For spoofing.
+	TrustedProxyRanges []string
 	// Rate limits (env -> DB -> default)
 	RateLimitWindowMs         int
 	RateLimitMax              int
@@ -147,6 +153,46 @@ type Config struct {
 	// Set ADMIN_MODE=on in .env for managed/multi-context deployments.
 	AdminMode bool
 
+	// HideCommunityLinks hides the upstream community/social/donate links
+	// (nav bar, login footer, first-run wizard), the upstream newsletter
+	// opt-in (profile page, wizard, release-notes modal) and disables the
+	// upstream version checks (DNS beacons *.vcheck.patchmon.net, update
+	// alerts, release links) for self-hosted forks — updates ship via the
+	// fork's own image pipeline. Set PM_HIDE_COMMUNITY_LINKS=true in .env.
+	HideCommunityLinks bool
+
+	// DisableSignup hard-disables user self-registration regardless of the
+	// signup_enabled DB setting: the signup endpoints refuse, the toggle is
+	// hidden in the settings UI and Discord auto-create is off. Fail-closed
+	// guard for internet-facing instances. Set PM_DISABLE_SIGNUP=true in .env.
+	DisableSignup bool
+
+	// IgnoreDefinitionUpdates excludes host_packages whose wua_categories
+	// contains "Definition Updates" (Windows Defender's Security Intelligence
+	// Update, KB2267602, which Microsoft republishes several times a day) from
+	// every outstanding/security update counter the product shows or acts on:
+	// dashboard cards, host list columns, host detail stats, homepage stats
+	// and the update-threshold alerts. The rows themselves stay visible and
+	// installable everywhere - only counts change. Set
+	// PM_IGNORE_DEFINITION_UPDATES=true in .env.
+	IgnoreDefinitionUpdates bool
+
+	// LicenseMaxHosts overrides the license_max_hosts DB setting (fork
+	// feature: amanit sells packages by VM count). When > 0, the whole
+	// licence settings tab becomes read-only for the customer superadmin
+	// ("managed by amanit") and enforce/package are taken from the env as
+	// well. 0 = not set, DB settings apply. Set PM_LICENSE_MAX_HOSTS=<n>.
+	LicenseMaxHosts int
+
+	// LicenseEnforce overrides license_enforce when LicenseMaxHosts is set:
+	// true blocks new host registrations once active+pending reaches
+	// ceil(max*1.1). Set PM_LICENSE_ENFORCE=true.
+	LicenseEnforce bool
+
+	// LicensePackage overrides license_package (display name, e.g.
+	// "Paket 3, bis 200 VMs") when LicenseMaxHosts is set. Set PM_LICENSE_PACKAGE.
+	LicensePackage string
+
 	// BillingPortalURL is the Stripe customer portal URL shown to tenants when AdminMode is on.
 	BillingPortalURL string
 
@@ -200,7 +246,7 @@ func Load() (*Config, error) {
 		CORSOrigin: getEnv("CORS_ORIGIN", "http://localhost:3000"),
 		AssetsDir:  getEnv("ASSETS_DIR", ""),
 
-		EnableLogging: getEnv("ENABLE_LOGGING", "") == "true",
+		EnableLogging: getEnv("ENABLE_LOGGING", "true") != "false",
 		LogLevel:      getEnv("LOG_LEVEL", "info"),
 
 		EnablePprof:         getEnv("ENABLE_PPROF", "") == "true",
@@ -239,12 +285,18 @@ func Load() (*Config, error) {
 		OidcUserGroup:        getEnv("OIDC_USER_GROUP", ""),
 		OidcEnforceHTTPS:     getEnv("OIDC_ENFORCE_HTTPS", "true") != "false",
 
-		SSGContentDir:         getEnv("SSG_CONTENT_DIR", "./ssg-content"),
-		AdminMode:             getEnv("ADMIN_MODE", "") == "on",
-		BillingPortalURL:      getEnv("BILLING_PORTAL_URL", ""),
-		BillingServiceURL:     getEnv("BILLING_SERVICE_URL", ""),
-		BillingInternalSecret: getEnv("BILLING_INTERNAL_SECRET", ""),
-		ProvisionerURL:        getEnv("PROVISIONER_URL", ""),
+		SSGContentDir:           getEnv("SSG_CONTENT_DIR", "./ssg-content"),
+		AdminMode:               getEnv("ADMIN_MODE", "") == "on",
+		HideCommunityLinks:      getEnv("PM_HIDE_COMMUNITY_LINKS", "") == "true",
+		DisableSignup:           getEnv("PM_DISABLE_SIGNUP", "") == "true",
+		IgnoreDefinitionUpdates: getEnv("PM_IGNORE_DEFINITION_UPDATES", "") == "true",
+		LicenseMaxHosts:         getEnvInt("PM_LICENSE_MAX_HOSTS", 0),
+		LicenseEnforce:          getEnv("PM_LICENSE_ENFORCE", "") == "true",
+		LicensePackage:          getEnv("PM_LICENSE_PACKAGE", ""),
+		BillingPortalURL:        getEnv("BILLING_PORTAL_URL", ""),
+		BillingServiceURL:       getEnv("BILLING_SERVICE_URL", ""),
+		BillingInternalSecret:   getEnv("BILLING_INTERNAL_SECRET", ""),
+		ProvisionerURL:          getEnv("PROVISIONER_URL", ""),
 
 		MaxLoginAttempts:   getEnvInt("MAX_LOGIN_ATTEMPTS", 5),
 		LockoutDurationMin: getEnvInt("LOCKOUT_DURATION_MINUTES", 15),
@@ -256,7 +308,12 @@ func Load() (*Config, error) {
 		// reach the audit log, and rate limiting keys on the proxy's IP.
 		// Set TRUST_PROXY=false explicitly only when PatchMon is exposed
 		// directly to the internet without a reverse proxy.
-		TrustProxy:                  getEnv("TRUST_PROXY", "true") != "false",
+		TrustProxy: getEnv("TRUST_PROXY", "true") != "false",
+		// Comma-separated CIDRs or bare IPs of the reverse proxies in front of
+		// PatchMon. Empty is the correct value for a single proxy (the default
+		// Docker deployment); set it when proxies are chained, e.g. Cloudflare
+		// in front of Nginx Proxy Manager.
+		TrustedProxyRanges:          splitAndTrim(getEnv("TRUSTED_PROXY_RANGES", "")),
 		RateLimitWindowMs:           getEnvInt("RATE_LIMIT_WINDOW_MS", 900000),
 		RateLimitMax:                getEnvInt("RATE_LIMIT_MAX", 5000),
 		AuthRateLimitWindowMs:       getEnvInt("AUTH_RATE_LIMIT_WINDOW_MS", 600000),
@@ -289,11 +346,46 @@ func Load() (*Config, error) {
 		GuacdAddress: getEnv("GUACD_ADDRESS", "127.0.0.1:4822"),
 	}
 
+	if err := cfg.applyLicenseEnv(); err != nil {
+		return nil, err
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
 	return cfg, nil
+}
+
+// applyLicenseEnv parses the PM_LICENSE_* overrides strictly. getEnvInt maps
+// anything unparsable to 0, and 0 means "licence not env-managed": a typo
+// would silently drop the lock and hand the licence back to the UI. These
+// variables therefore fail startup (fail-closed) rather than being ignored.
+func (c *Config) applyLicenseEnv() error {
+	rawMax := strings.TrimSpace(os.Getenv("PM_LICENSE_MAX_HOSTS"))
+	rawEnforce := strings.ToLower(strings.TrimSpace(os.Getenv("PM_LICENSE_ENFORCE")))
+
+	c.LicenseMaxHosts = 0
+	if rawMax != "" {
+		v, err := strconv.Atoi(rawMax)
+		if err != nil || v < 1 {
+			return fmt.Errorf("PM_LICENSE_MAX_HOSTS must be a positive integer, got %q", rawMax)
+		}
+		c.LicenseMaxHosts = v
+	}
+
+	switch rawEnforce {
+	case "":
+		c.LicenseEnforce = false
+	case "true", "false":
+		if rawMax == "" {
+			return fmt.Errorf("PM_LICENSE_ENFORCE is set but PM_LICENSE_MAX_HOSTS is not; the env licence only applies when PM_LICENSE_MAX_HOSTS is set")
+		}
+		c.LicenseEnforce = rawEnforce == "true"
+	default:
+		return fmt.Errorf("PM_LICENSE_ENFORCE must be true or false, got %q", rawEnforce)
+	}
+	return nil
 }
 
 // Validate checks required configuration.
@@ -329,6 +421,22 @@ func getEnv(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+// splitAndTrim splits a comma-separated env value, trimming whitespace and
+// dropping empty entries. Returns nil for an empty value.
+func splitAndTrim(v string) []string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 // getEnvEnv returns APP_ENV if set, else NODE_ENV (for backward compatibility), else "production".

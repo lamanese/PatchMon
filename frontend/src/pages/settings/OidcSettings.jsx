@@ -306,7 +306,7 @@ const OidcSettings = () => {
 					{/* Sync roles */}
 					<ToggleCard
 						label="Sync roles from IdP"
-						description="Map IdP groups to PatchMon roles"
+						description="Map IdP groups to application roles"
 						checked={form.oidc_sync_roles}
 						onChange={() =>
 							handleFieldChange("oidc_sync_roles", !form.oidc_sync_roles)
@@ -585,7 +585,7 @@ const OidcSettings = () => {
 				{showRoleMapping && (
 					<div className="px-4 pb-4 border-t border-secondary-200 dark:border-secondary-700 pt-4">
 						<p className="text-sm text-secondary-500 dark:text-secondary-400 mb-4">
-							Map IdP group names to PatchMon roles. Users are assigned the
+							Map IdP group names to application roles. Users are assigned the
 							highest matching role. Default role is used when no group matches.
 						</p>
 						{form.oidc_sync_roles && !form.oidc_superadmin_group?.trim() && (
@@ -606,7 +606,7 @@ const OidcSettings = () => {
 								<thead className="bg-secondary-50 dark:bg-secondary-700">
 									<tr>
 										<th className="px-4 py-3 text-left text-xs font-medium text-secondary-500 dark:text-secondary-300 uppercase tracking-wider">
-											PatchMon Role
+											Application Role
 										</th>
 										<th className="px-4 py-3 text-left text-xs font-medium text-secondary-500 dark:text-secondary-300 uppercase tracking-wider">
 											OIDC Mapped Role (IdP Group Name)
