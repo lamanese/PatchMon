@@ -3824,13 +3824,18 @@ Formatters for each channel render this as a clickable button (Discord/Slack ric
 
 ### Overview
 
-A **scheduled report** is a periodic fleet summary that PatchMon renders to HTML (with a CSV attachment) and delivers through one or more notification destinations on a cron schedule. Use them to keep leadership and on-call teams informed about compliance posture, patching throughput, pending updates, and open alerts, without anyone needing to log into the UI.
+A **scheduled report** is a periodic fleet summary that PatchMon renders on a cron schedule and delivers through notification destinations. Every run renders the same typed model three ways: an HTML body, a CSV export and an A4 PDF. E-mail deliveries carry the HTML as the message body and the PDF as an attachment; webhooks receive the HTML and CSV as JSON, ntfy a plain-text excerpt. Use reports to keep leadership, on-call teams or your customers informed about compliance posture, patching throughput, pending updates and open alerts, without anyone needing to log into the UI.
 
-Scheduled reports are managed under **Reporting → Scheduled Reports**. They share the same destinations as event-driven notifications, so any email, webhook, or ntfy destination you have already set up can receive reports too.
+Scheduled reports are managed under **Reporting → Scheduled Reports**. A report is either:
+
+- an **internal report**: delivered to one or more of your notification destinations (e-mail, webhook, ntfy), as before; or
+- a **customer report**: a PDF by e-mail to a fixed list of external recipients, restricted to the hosts of selected host groups. See [Customer reports](#customer-reports).
+
+Every run is kept in the [report archive](#report-archive) with its PDF and the status of each delivery.
 
 ### Permissions
 
-Creating, editing, running, and deleting scheduled reports requires `can_manage_notifications`. Admins and superadmins bypass the check. Users without the permission do not see the tab.
+Creating, editing, running, previewing and deleting scheduled reports, and reading the archive, requires `can_manage_notifications`. Admins and superadmins bypass the check. Users without the permission do not see the tab.
 
 To include host-group scoping, the user must also have `can_view_hosts` (so the group picker can populate).
 
@@ -3838,23 +3843,52 @@ To include host-group scoping, the user must also have `can_view_hosts` (so the 
 
 1. Open **Reporting → Scheduled Reports**.
 2. Click **New report**. (Disabled until at least one destination exists. Create one under [Notification Destinations](#notification-destinations).)
-3. Fill in the modal:
+3. Choose **Internal report** or **Customer report** at the top of the modal.
+4. Fill in the modal:
 
 | Field | Notes |
 |-------|-------|
-| **Report name** | Required. Shown in the table and as the email subject prefix. |
+| **Report name** | Required. Shown in the table, in the mail subject and in the PDF file name. |
 | **Schedule** | Frequency + time of day. See [Schedule options](#schedule-options). |
 | **Sections** | Which blocks to include in the rendered report. See [Report sections](#report-sections). |
-| **Deliver to** | Tick every destination that should receive this report. You can send the same report to multiple destinations. |
-| **Scope to host groups** | Optional. Limits **every** section (KPIs, lists, alerts, packages) to the hosts of the selected groups. Leave empty for fleet-wide. Groups are the current selection, not a history: a host moved from group A to group B brings its activity of the period into B's next report. |
+| **Deliver to** | Internal reports only. Tick every destination that should receive this report. Destinations of type **Internal Alerts** cannot receive reports; saving a report with one fails with `400`. |
+| **Scope to host groups** | Internal reports: optional. Limits **every** section (KPIs, lists, alerts, packages) to the hosts of the selected groups. Leave empty for fleet-wide. Groups are the current selection, not a history: a host moved from group A to group B brings its activity of the period into B's next report. |
+| **Recipients** | Customer reports only. One to ten e-mail addresses; type an address and press Enter or comma. |
+| **SMTP account** | Customer reports only. The enabled e-mail destination used to send the mails. |
+| **Host groups** | Customer reports only. At least one group is required. |
 | **Language** | `English` (default) or `Deutsch`. Raw data (package names, update titles, error text) stays as reported. |
 | **Activity period** | 7, 30 or 90 days (default 30). Window for the patching KPIs, patch activity and reboots; independent of the delivery schedule. |
 | **Top rows per section** | Numeric cap on per-host lists, defaults to **20**, at most 200. |
 | **Enabled** | On by default. Disable to keep the report saved but paused. |
 
-4. Click **Create**.
+5. Click **Create**. For an enabled customer report, a confirmation dialog appears first (see [Customer reports](#customer-reports)).
 
 After creation, the report appears in the table with its next run time, status badge, and action buttons.
+
+### Customer reports
+
+A customer report sends the PDF to people outside your organisation, so it has stricter rules than an internal report. The server enforces them on every create and update and answers `400` when one is broken:
+
+| Rule | Detail |
+|------|--------|
+| **Recipients** | 1 to 10 addresses in `email_recipients`. Each entry must be exactly one mailbox (an optional display name is dropped); lists, `,`/`;` inside an entry and control characters are rejected. Addresses are stored in lowercase and duplicates are dropped. |
+| **SMTP account** | Exactly one destination, and it must be an **enabled e-mail** destination. Its host, port, credentials and sender address are used; its own **To** address is ignored. Webhook and ntfy destinations cannot be combined with a customer report. |
+| **Host groups** | At least one. A customer report never falls back to the whole fleet; a run without groups fails with `scope_invalid`. |
+| **Schedule** | At most once per hour. Any cron whose next two runs are less than an hour apart (for example `*/30 * * * *`) is rejected; `0 * * * *` is the shortest allowed schedule. The modal's frequencies are all daily or rarer. |
+
+Every recipient gets their **own** e-mail (no shared To/Cc line), so recipients never see each other's addresses.
+
+Customer mode also changes the content:
+
+- The PDF and the mail body contain **no links to the PatchMon server** and no server URL, and the mail body does not load the logo from the server (it shows the vendor name instead).
+- **Open alerts** list only alerts bound to a host in scope, and only alert types meaningful to a customer; server-wide alerts are left out.
+- Every PDF page carries the vendor name in its footer, next to the page number.
+
+**Confirmation dialog.** Saving an enabled customer report and clicking **Run now** on a customer report both open a confirmation dialog that lists the host groups, the current number of hosts in them, the recipients, the sender (SMTP account) and the language. Nothing is saved or sent until you confirm. If the selected groups contain no hosts right now, the dialog says so.
+
+**Duplicate** creates a copy as a disabled **internal** report: recipients are never copied from one customer's report to the next.
+
+The PDF header uses the uploaded light logo from **Settings → Branding** when it is a PNG or JPEG; SVG logos fall back to the default logo (see [Previewing a report as PDF](#previewing-a-report-as-pdf)).
 
 ### Schedule options
 
@@ -3896,38 +3930,92 @@ New reports default to **Executive summary + Compliance summary + Recent patch r
 
 ### Delivering a report
 
-Every tick in **Deliver to** adds a destination to the report's fan-out. At run-time, PatchMon:
+At run time, PatchMon renders the report **once** (HTML, CSV and PDF), stores the output together with the list of planned deliveries in the [archive](#report-archive), and then sends each delivery from that stored snapshot. Deliveries are sent one after another; each result is recorded as soon as it is known.
 
-1. Resolves the destinations (skips disabled ones).
-2. Renders the HTML body and CSV attachment once.
-3. Sends the same payload to each destination in parallel.
+Who receives what:
 
-For each channel type the payload adapts:
+| Report / destination | Deliveries | What the recipient sees |
+|----------------------|-----------|-------------------------|
+| **Customer report** | One per recipient, all through the report's SMTP account. | HTML e-mail with the PDF attached. |
+| **Internal report, e-mail destination** | One per destination, to the destination's **To** address. | HTML e-mail with the PDF attached. The dark header shows the dark-mode logo from *Settings → Branding* (the light-mode logo only when no dark one is uploaded; PNG or JPEG, most mail clients do not render SVG). |
+| **Internal report, webhook destination** | One per destination. | JSON POST with `kind: "scheduled_report"`, `subject`, `html` and `csv` (Discord and Slack webhook URLs get their native formats). Signed with `X-PatchMon-Signature` when the destination has a signing secret. No PDF. |
+| **Internal report, ntfy destination** | One per destination. | Push notification with the subject as title and a plain-text excerpt of the report (at most 4000 characters). No PDF. |
 
-| Destination | What the recipient sees |
-|-------------|------------------------|
-| **Email** | HTML email rendered inline; CSV attached. Subject contains the report name and timestamp. The dark header shows the dark-mode logo from *Settings → Branding* (the light-mode logo only when no dark one is uploaded; PNG or JPEG, most mail clients do not render SVG). |
-| **Webhook** | JSON POST with report metadata, a summary, and the HTML body in a field. Use this to fan reports into a downstream system (data warehouse, Google Sheets ingester, etc.). |
-| **ntfy** | Short push notification with a link back to the latest report in the UI. The full HTML does not fit ntfy, so it is summarised. |
-| **Internal Alerts** | A system record under the **Alerts** tab, useful when you want a run history inside PatchMon without email. |
+Mail details:
 
-A report's appearance in the **Delivery Log** uses `event_type: scheduled_report`. Filter the log by the report's destinations to audit deliveries.
+- The subject is the localised prefix plus the report name (for example `AutoMan Report: Customer A`, or `AutoMan-Bericht: …` in German).
+- The attachment is named `report-<slug>-<yyyymmdd>.pdf`: the report name lower-cased and hyphenated, plus the run's date in the report's timezone. The CSV is not attached to e-mails; it goes to webhooks and is stored in the archive.
+- Each mail is addressed to exactly one mailbox. An internal e-mail destination whose **To** field holds several addresses fails with `destination_invalid`; use a customer report or one destination per address instead.
+- One mail (connect, TLS, authentication and data) has 60 seconds; a slower server fails the delivery with `smtp_timeout`. Port 465 uses implicit TLS, 587 and 25 STARTTLS.
+
+Disabled destinations are skipped when the run is planned. A destination that is deleted, disabled or unreadable between planning and sending fails its delivery with `destination_invalid`.
+
+**Retries.** A run gets up to three retries (four attempts in total). A retry happens only when at least one delivery failed with a retryable code (see the table below), and it re-sends **only the deliveries that are not `sent`**: a recipient who already received the mail never receives it twice from a retry. Retries send the stored snapshot, not a fresh render: renaming the report, changing recipients or editing the definition after the run started does not affect it. A transient render failure (for example a database error) is also retried; configuration errors are not.
+
+**Statuses.** A run ends in one of these states; the same status is written to `scheduled_report_runs`:
+
+| Status | Meaning |
+|--------|---------|
+| `pending` | The run is rendering, sending or waiting for a retry. |
+| `completed` | Every delivery was sent. |
+| `partial` | At least one delivery was sent and at least one failed after all retries. |
+| `failed` | No delivery was sent, or rendering failed. The run's error code says why. |
+
+**Error codes.** Runs and deliveries carry one code from a fixed list:
+
+| Code | Meaning | Retried |
+|------|---------|---------|
+| `definition_invalid` | The stored report definition is invalid (unknown section, language or period). | No |
+| `scope_invalid` | Unknown host group, or a customer report without host groups. | No |
+| `no_hosts` | The selected host groups contain no hosts. | No |
+| `too_many_hosts` | More than 500 hosts in scope. | No |
+| `render_failed` | Rendering failed for another reason (for example a database error). | Yes |
+| `pdf_too_large` | The PDF would exceed 10 MB. | No |
+| `smtp_connect` | The SMTP server could not be reached or the TLS handshake failed. | Yes |
+| `smtp_auth` | The SMTP server rejected the credentials. | No |
+| `smtp_rejected` | The SMTP server rejected the sender, recipient or message permanently (5xx). | No |
+| `smtp_temporary` | The SMTP server answered with a temporary error (4xx, for example greylisting). | Yes |
+| `smtp_timeout` | The mail did not complete within 60 seconds. | Yes |
+| `destination_invalid` | The destination was deleted, disabled or is misconfigured (unreadable config, invalid sender or To address), or the report has no usable destination. | No |
+| `delivery_failed` | A webhook or ntfy delivery failed (transport error or non-2xx answer). | Yes |
+| `abandoned` | The run was still `pending` after 24 hours (see [Report archive](#report-archive)). | No |
+
+Stored error texts are redacted before they reach the database, the API or the log: at most 300 characters on one line, no credentials (passwords, tokens, authorisation headers), URLs reduced to scheme and host, and e-mail addresses masked.
+
+Scheduled reports do not write to the **Delivery Log**; the archive is their delivery history.
+
+### Report archive
+
+Click **Archive** in the report's row to see its past runs. For each run the archive shows when it was created, whether it was scheduled or manual, the status (with the error code when there is one), the activity period, the host groups and host count, and one line per delivery with its target, status, number of attempts and error code. Hover an error code to read the redacted error text.
+
+- **Retention:** the 24 newest runs per report are kept; older runs are deleted when a run of the report finishes.
+- **PDF download:** **Download** returns the PDF exactly as it was sent, named like the mail attachment. A run that failed before rendering has no PDF.
+- **Abandoned runs:** a run still `pending` after 24 hours (for example after a server crash in the middle of sending) is marked `failed` with the code `abandoned` the next time a run of the same report finishes.
+- **Deleting a report** deletes its whole archive, including the stored PDFs. The delete dialog says so.
+- **Preview** (see below) is never archived.
+
+The same data is available through the API (session authentication, `can_manage_notifications`):
+
+- `GET /api/v1/notifications/scheduled-reports/{id}/archive`: the newest runs with their deliveries. PDF bytes are never part of the list.
+- `GET /api/v1/notifications/scheduled-reports/archive/{archiveId}/pdf`: the stored PDF of one run (`404` when the run has none).
 
 ### Running a report manually
 
-Click the green **Play** button in the report's row to run it immediately. The report is queued for instant execution and delivered to the configured destinations.
+Click the green **Play** button in the report's row to run it immediately. For a customer report the [confirmation dialog](#customer-reports) appears first. The run is queued and delivered like a scheduled run, with its own archive entry marked `manual`; it does not move the report's schedule.
 
-Manual runs respect the same destination state: disabled destinations are skipped, and rate limits still apply.
+`POST /api/v1/notifications/scheduled-reports/{id}/run-now` answers `{"status":"scheduled","run_id":"…"}`; the UI shows the first characters of the run id in its toast.
 
-Disabled reports show the play button greyed out. Enable the report (or edit and tick **Enabled**) before running. The button tooltip tells you why it is unavailable.
+A report can be run manually at most once per 60 seconds. A second click within that window answers `429` with the number of seconds left, shown as an error toast. The cooldown is kept in the server's memory and resets when the server restarts.
+
+Disabled reports show the play button greyed out, and the API answers `400 Report is disabled`. Enable the report (or edit and tick **Enabled**) before running. The button tooltip tells you why it is unavailable.
 
 ### Previewing a report as PDF
 
-Click **Preview** next to **Edit** in the report's row to render it as a PDF and download it immediately. Preview does not send anything, does not write to the Delivery Log, and does not touch the report's schedule (`next_run_at`/`last_run_at`) — it just renders the current definition on demand. Unlike **Play**, it works even for a **disabled** report, so you can check a report before turning it on.
+Click **Preview** next to **Edit** in the report's row to render it as a PDF and download it immediately. Preview does not send anything, is not archived, and does not touch the report's schedule (`next_run_at`/`last_run_at`); it just renders the current definition on demand. Unlike **Play**, it works even for a **disabled** report, so you can check a report before turning it on.
 
-PatchMon renders one PDF at a time per server process. If another preview is already rendering, the request waits up to 10 seconds for the slot to free up and then answers `503 Renderer busy, try again in a few seconds` — click **Preview** again. The whole request, including that wait, has a 25-second budget; a report over an unusually large fleet can hit this and fail with `503 Rendering took too long`.
+PatchMon renders one PDF at a time per server process. If another preview is already rendering, the request waits up to 10 seconds for the slot to free up and then answers `503 Renderer busy, try again in a few seconds`; click **Preview** again. The whole request, including that wait, has a 25-second budget; a report over an unusually large fleet can hit this and fail with `503 Rendering took too long`.
 
-The header logo has one fixed rule, no manual override: an uploaded logo is used only if it is a PNG or JPEG that decodes to at most 4 megapixels; it is always re-encoded as PNG and scaled down to 600 px wide if larger. Anything else — an SVG, an oversized, truncated or otherwise corrupt file, or no logo at all — falls back to the vendor default; a preview never fails because of the logo. If the default was used instead of your upload, a toast tells you and points at **Settings → Branding**.
+The header logo has one fixed rule, no manual override: an uploaded logo is used only if it is a PNG or JPEG that decodes to at most 4 megapixels; it is always re-encoded as PNG and scaled down to 600 px wide if larger. Anything else (an SVG, an oversized, truncated or otherwise corrupt file, or no logo at all) falls back to the vendor default; a preview never fails because of the logo. If the default was used instead of your upload, a toast tells you and points at **Settings → Branding**. The same rule applies to the PDFs attached to report e-mails.
 
 The downloaded file is named `report-<slug>-<yyyymmdd>.pdf` (the report name, lower-cased and hyphenated, plus the render date in the report's timezone), and a single PDF is capped at 10 MB; a report that would exceed it fails with an error instead of a truncated download.
 
@@ -3937,32 +4025,48 @@ Preview requires `can_manage_notifications`, the same permission as creating, ed
 
 ### Editing and deleting
 
-- **Edit** reopens the same modal pre-filled with the current schedule, sections, and destinations. Saving re-computes the next run time.
-- **Delete** removes the report permanently. Past deliveries in the log remain.
-- **Enabled switch**: edit the report and toggle **Enabled** in the modal. Disabled reports keep their schedule but do not fire until re-enabled; their next-run time is still displayed.
+- **Edit** reopens the same modal pre-filled with the current mode, schedule, sections, destinations or recipients. Saving re-computes the next run time. Saving an enabled customer report opens the confirmation dialog again.
+- **Duplicate** copies the report as a new, disabled internal report (see [Customer reports](#customer-reports)).
+- **Delete** removes the report permanently, together with its archive and stored PDFs.
+- **Enabled switch**: edit the report and toggle **Enabled** in the modal. Disabled reports keep their schedule but do not fire until re-enabled; their next-run time is still displayed. When you re-enable a report whose next run time lies in the past, the next run is recomputed from the cron instead of firing immediately.
+
+API notes for `PUT /api/v1/notifications/scheduled-reports/{id}`:
+
+- `email_recipients` decides the mode. A list makes the report a customer report; omitting the field or sending `null` makes it an **internal** report (the modal always sends the field). An empty list `[]` is rejected with `400`.
+- The customer-mode rules are checked on every `PUT`, including one that only disables the report. If the e-mail destination of a customer report was deleted or disabled, give the report a valid SMTP account first; until then it cannot be saved, not even to disable it.
+- Destinations of type `internal` are rejected with `400` for every report.
 
 ### How scheduling works internally
 
-Scheduled reports are stored in the `scheduled_reports` table. On create or update, PatchMon computes the next run via the cron expression in the server's timezone and writes it to `next_run_at`. The scheduler enqueues the report task to asynq at exactly that time, with no background polling loop.
+Scheduled reports are stored in the `scheduled_reports` table; customer recipients in its `fork_email_recipients` column (`NULL` for internal reports). On create or update, PatchMon computes the next run via the cron expression in the server's timezone, writes it to `next_run_at` and enqueues a task to asynq for exactly that time, with no background polling loop.
 
-When the task executes, the worker:
+**Run identity.** Every run has a run key: `sched:<tenant>:<report>:<unix slot>` for a scheduled run (the report plus the `next_run_at` it was enqueued for) or `manual:<tenant>:<report>:<uuid>` for **Run now**. The asynq task id is derived from the run key, so enqueuing the same slot twice is a no-op, and the archive stores the run key as a unique value, so a slot can produce at most one archive entry.
 
-1. Re-reads the report row.
-2. Aborts if it has been disabled since enqueue.
-3. Validates the definition, resolves the host scope and renders HTML + CSV from a typed model (`internal/reports`). Every section reads only the hosts in scope; a report never falls back to the whole fleet. Unknown host groups, groups without hosts, or more than 500 hosts fail the run with a clear message in `scheduled_report_runs`.
-4. Sends the rendered report to each destination. Delivery errors are logged per destination; there is no per-destination retry yet.
-5. Updates `last_run_at` and queues the next occurrence.
+When a task executes, the worker:
+
+1. Resolves the tenant database (fail-closed: a task that names a tenant never falls back to the default database) and re-reads the report row. A deleted or disabled report ends the task without a run.
+2. **Claims the slot** (scheduled runs only): in one transaction it moves `next_run_at` to the following cron slot, but only while `next_run_at` still equals the task's slot, and inserts the `pending` archive row. If another task has already claimed the slot, or the report was rescheduled in the meantime, the task ends without a run.
+3. **Enqueues the next run** right after the claim, independent of how rendering and delivery go.
+4. Validates the definition, resolves the host scope and renders HTML, CSV and PDF from a typed model (`internal/reports`). Every section reads only the hosts in scope; a report never falls back to the whole fleet. Unknown host groups, groups without hosts, or more than 500 hosts fail the run with the matching [error code](#delivering-a-report).
+5. **Snapshots** the output, the resolved groups, the host count, the sender and the planned deliveries into the archive row in one transaction.
+6. Sends every delivery that is not yet `sent` from the snapshot, records each result, and finalises the run (archive status, `scheduled_report_runs` row, retention). A retry resumes at step 6 with the same archive row.
+
+**After downtime.** The hourly fallback job and the startup rehydration enqueue each enabled report at its stored `next_run_at`, not at "now". A slot that passed while the server was down therefore runs once, late, after the restart; the slot claim prevents a second run. Tasks queued by images before 2.0.2-am.13 (payload without a trigger) are discarded once when they execute; the stored `next_run_at` re-creates the chain.
 
 Because the schedule is stored as a cron string plus a timezone, daylight-saving transitions are handled by the cron library. Jobs that would fall in a skipped hour are pushed to the next valid slot; jobs repeated in a duplicate hour fire once.
 
-The **Preview** action (see above) uses the same typed model but draws it onto an A4 canvas with `internal/reports.RenderPDF` instead of the HTML template, serialised through a process-wide render gate (`internal/reports.RenderGate`) so that at most one PDF renders at a time; a busy gate answers `503` after a 10-second wait rather than queueing indefinitely.
+Rendering in the worker and the **Preview** action share a process-wide render gate (`internal/reports.RenderGate`), so at most one PDF renders at a time; a busy gate answers a preview with `503` after a 10-second wait rather than queueing indefinitely, while a scheduled run waits for its turn.
 
 ### Known limits
 
-- Delivery failures are logged, not retried: a destination that rejects the report does not receive it again until the next scheduled run. Archive, per-recipient status and retries are planned.
+- **Duplicate mails are unlikely but possible.** If the server crashes after the SMTP server accepted a mail but before PatchMon recorded it as `sent`, a retry sends that mail again.
+- There is no per-day send budget. The hourly minimum for customer reports and the 60-second **Run now** cooldown are the only rate limits.
+- `can_manage_notifications` covers all reports and the whole archive. There is no per-group scoping of who may see or edit which customer's report yet.
+- SVG logos fall back to the default logo in the PDF; upload a PNG or JPEG.
+- Recipient addresses with non-ASCII characters (internationalised domain names or local parts) are not converted; use the ASCII (punycode) form.
 - A report is capped at 500 hosts in scope and lists at most 500 rows of activity or reboots per period.
 - There is no "skip next run" option. To skip a single run, disable the report before its scheduled time, then re-enable it afterwards.
-- Report templates are not customisable from the UI in 2.0. The rendered HTML layout is fixed; customise by choosing sections and host-group scope. Custom templates are a candidate for a future release.
+- Report templates are not customisable from the UI. The rendered layout is fixed; customise by choosing sections and host-group scope.
 
 ### Related pages
 
