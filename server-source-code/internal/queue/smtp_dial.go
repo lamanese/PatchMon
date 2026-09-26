@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"context"
 	"crypto/tls"
 	"net"
 	"net/smtp"
@@ -21,14 +22,42 @@ func implicitTLSPort(port int) bool {
 //     not offer STARTTLS, reconnect with implicit TLS.
 //   - !useTLS: plain TCP, never StartTLS even when advertised (local relays).
 //
-// The returned net.Conn must be closed by the caller after the client.
+// timeout bounds the dial and the greeting; the connection deadline is
+// cleared afterwards. The returned net.Conn must be closed by the caller
+// after the client.
 func dialSMTP(addr, host string, useTLS, implicitFirst bool, tlsCfg *tls.Config, timeout time.Duration) (*smtp.Client, net.Conn, error) {
+	return dialSMTPUntil(context.Background(), addr, host, useTLS, implicitFirst, tlsCfg, timeout, time.Time{})
+}
+
+// dialSMTPUntil is dialSMTP with a context and an absolute deadline. A
+// non-zero deadline is set on the connection BEFORE the greeting is read and
+// stays set (STARTTLS included), so a server that accepts and then stays
+// silent cannot hold the session past it. A zero deadline keeps dialSMTP's
+// behaviour (timeout for dial and greeting, then cleared).
+func dialSMTPUntil(ctx context.Context, addr, host string, useTLS, implicitFirst bool, tlsCfg *tls.Config, timeout time.Duration, deadline time.Time) (*smtp.Client, net.Conn, error) {
+	dialer := &net.Dialer{Timeout: timeout, Deadline: deadline}
+	greetingDeadline := deadline
+	if greetingDeadline.IsZero() {
+		greetingDeadline = time.Now().Add(timeout)
+	}
+	// greet reads the server greeting under the deadline.
+	greet := func(conn net.Conn) (*smtp.Client, error) {
+		_ = conn.SetDeadline(greetingDeadline)
+		client, err := smtp.NewClient(conn, host)
+		if err != nil {
+			return nil, err
+		}
+		if deadline.IsZero() {
+			_ = conn.SetDeadline(time.Time{})
+		}
+		return client, nil
+	}
 	dialTLS := func() (*smtp.Client, net.Conn, error) {
-		tlsConn, err := tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", addr, tlsCfg)
+		tlsConn, err := (&tls.Dialer{NetDialer: dialer, Config: tlsCfg}).DialContext(ctx, "tcp", addr)
 		if err != nil {
 			return nil, nil, err
 		}
-		client, err := smtp.NewClient(tlsConn, host)
+		client, err := greet(tlsConn)
 		if err != nil {
 			_ = tlsConn.Close()
 			return nil, nil, err
@@ -38,17 +67,15 @@ func dialSMTP(addr, host string, useTLS, implicitFirst bool, tlsCfg *tls.Config,
 	if useTLS && implicitFirst {
 		return dialTLS()
 	}
-	plainConn, err := net.DialTimeout("tcp", addr, timeout)
+	plainConn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, nil, err
 	}
-	_ = plainConn.SetDeadline(time.Now().Add(timeout))
-	client, err := smtp.NewClient(plainConn, host)
+	client, err := greet(plainConn)
 	if err != nil {
 		_ = plainConn.Close()
 		return nil, nil, err
 	}
-	_ = plainConn.SetDeadline(time.Time{})
 	startTLS, _ := client.Extension("STARTTLS")
 	switch {
 	case useTLS && startTLS:

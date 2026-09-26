@@ -240,10 +240,14 @@ type Querier interface {
 	// the task was enqueued for. Compared at second precision because
 	// notifications.NextCronRun yields whole seconds and legacy rows may carry ms.
 	ForkClaimScheduledReportSlot(ctx context.Context, arg ForkClaimScheduledReportSlotParams) (int64, error)
-	ForkFinishReportArchive(ctx context.Context, arg ForkFinishReportArchiveParams) error
+	// Only a pending row transitions; a second finalize of the same run is a no-op.
+	ForkFinishReportArchive(ctx context.Context, arg ForkFinishReportArchiveParams) (int64, error)
 	ForkGetReportArchiveByRunKey(ctx context.Context, runKey string) (ForkGetReportArchiveByRunKeyRow, error)
 	ForkGetReportArchiveContent(ctx context.Context, id string) (ForkGetReportArchiveContentRow, error)
 	ForkGetReportArchivePDF(ctx context.Context, id string) (ForkGetReportArchivePDFRow, error)
+	// Row lock for the update handler, so a concurrent slot claim is never
+	// overwritten with stale next_run_at/last_run_at values.
+	ForkGetScheduledReportForUpdate(ctx context.Context, id string) (ScheduledReport, error)
 	ForkInsertReportArchive(ctx context.Context, arg ForkInsertReportArchiveParams) error
 	ForkInsertReportDelivery(ctx context.Context, arg ForkInsertReportDeliveryParams) error
 	ForkListReportArchive(ctx context.Context, arg ForkListReportArchiveParams) ([]ForkListReportArchiveRow, error)

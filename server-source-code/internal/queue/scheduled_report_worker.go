@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -219,11 +220,14 @@ func (h *ScheduledReportRunHandler) ProcessTask(ctx context.Context, t *asynq.Ta
 		return err
 	}
 	rep, err := d.Queries.GetScheduledReportByID(ctx, p.ReportID)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !rep.Enabled) {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	if !rep.Enabled {
+		return h.abandonDisabledRun(ctx, d, rep.ID, runKey)
 	}
 
 	arch, err := d.Queries.ForkGetReportArchiveByRunKey(ctx, runKey)
@@ -252,6 +256,51 @@ func (h *ScheduledReportRunHandler) ProcessTask(ctx context.Context, t *asynq.Ta
 		}
 	}
 	return h.deliverArchive(ctx, d, rep, arch.ID)
+}
+
+// abandonDisabledRun ends a run whose report was disabled between attempts:
+// a pending archive row for this run key is finalized as failed/abandoned
+// (its never-attempted deliveries too; failed ones keep their code) instead
+// of waiting for the 24 h rule. Nothing is sent.
+func (h *ScheduledReportRunHandler) abandonDisabledRun(ctx context.Context, d *database.DB, reportID, runKey string) error {
+	arch, err := d.Queries.ForkGetReportArchiveByRunKey(ctx, runKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if arch.Status != "pending" {
+		return nil
+	}
+	const msg = "report was disabled before the run finished"
+	if err := h.abandonUnsentDeliveries(ctx, d, arch.ID, msg); err != nil {
+		return err
+	}
+	h.logInfo("scheduled_report: report disabled, pending run abandoned", "report_id", reportID, "archive_id", arch.ID)
+	return h.finalizeRun(ctx, d, reportID, arch.ID, "failed", reports.CodeAbandoned, msg, "")
+}
+
+// abandonUnsentDeliveries marks every still pending delivery of the archive
+// as failed/abandoned (detached context, like every status write).
+func (h *ScheduledReportRunHandler) abandonUnsentDeliveries(ctx context.Context, d *database.DB, archiveID, msg string) error {
+	markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reportMarkTimeout)
+	defer cancel()
+	dels, err := d.Queries.ForkListReportDeliveries(markCtx, archiveID)
+	if err != nil {
+		return err
+	}
+	code := reports.CodeAbandoned
+	for _, del := range dels {
+		if del.Status != "pending" {
+			continue
+		}
+		m := msg
+		if err := d.Queries.ForkMarkReportDelivery(markCtx, db.ForkMarkReportDeliveryParams{ID: del.ID, Status: "failed", ErrorCode: &code, ErrorMessage: &m}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // openArchive claims the slot (scheduled runs) and inserts the pending archive
@@ -331,16 +380,17 @@ func runErrorCode(err error) string {
 func (h *ScheduledReportRunHandler) handleRenderError(ctx context.Context, d *database.DB, rep db.ScheduledReport, archiveID string, err error) error {
 	deterministic := reports.IsConfigError(err) || errors.Is(err, reports.ErrPDFTooLarge) || errors.Is(err, errNoDestinations)
 	if !deterministic {
+		// On the last attempt even a cancelled context finalizes (on a
+		// detached context) instead of leaving the row pending for 24 h.
 		retried, maxRetry := reportRetryState(ctx)
-		if retried < maxRetry || ctx.Err() != nil {
+		if retried < maxRetry {
 			h.logWarn("scheduled_report: render failed, retrying", "report_id", rep.ID, "archive_id", archiveID, "error", reports.RedactError(err))
 			return err
 		}
 	}
 	code, msg := runErrorCode(err), reports.RedactError(err)
 	h.logWarn("scheduled_report: run failed", "report_id", rep.ID, "archive_id", archiveID, "code", code)
-	h.finalizeRun(ctx, d, rep.ID, archiveID, "failed", code, msg, "")
-	return nil
+	return h.finalizeRun(ctx, d, rep.ID, archiveID, "failed", code, msg, "")
 }
 
 // plannedDelivery is one row of fork_report_deliveries before it exists.
@@ -353,6 +403,7 @@ type deliveryPlan struct {
 	deliveries []plannedDelivery
 	smtpDestID *string
 	mailFrom   *string
+	recipients []string // customer runs: the parsed list the deliveries were planned for
 }
 
 // planDeliveries resolves the report's destinations. Customer mode sends one
@@ -413,7 +464,11 @@ func (h *ScheduledReportRunHandler) planDeliveries(ctx context.Context, d *datab
 		if err != nil {
 			return plan, fmt.Errorf("%w: e-mail destination config unreadable", errNoDestinations)
 		}
-		plan.smtpDestID, plan.mailFrom = &dest.ID, &cfg.From
+		// Same rule as the API: customer mail only over TLS, valid sender.
+		if err := checkCustomerSMTP(cfg); err != nil {
+			return plan, fmt.Errorf("%w: %s", errNoDestinations, err.Error())
+		}
+		plan.smtpDestID, plan.mailFrom, plan.recipients = &dest.ID, &cfg.From, recipients
 		for _, addr := range recipients {
 			plan.deliveries = append(plan.deliveries, plannedDelivery{destID: dest.ID, destName: dest.DisplayName, channel: "email", recipient: addr})
 		}
@@ -510,12 +565,18 @@ func (h *ScheduledReportRunHandler) renderAndSnapshot(ctx context.Context, d *da
 		HostCount:         int32(m.HostCount), //nolint:gosec // bounded by the scope limit
 		SmtpDestinationID: plan.smtpDestID,
 		MailFrom:          plan.mailFrom,
-		Subject:           out.Subject,
-		Html:              &out.HTML,
-		Csv:               &out.CSV,
-		Pdf:               out.PDF,
-		PdfSize:           int32(len(out.PDF)), //nolint:gosec // bounded by the 10 MB PDF limit
-		PdfSha256:         &sumHex,
+		// Name, language, mode and recipients of THIS render: a retry after a
+		// transient render failure may render a changed report.
+		ReportName:   rep.Name,
+		Language:     m.Language,
+		CustomerMode: rep.ForkEmailRecipients != nil,
+		Recipients:   plan.recipients,
+		Subject:      out.Subject,
+		Html:         &out.HTML,
+		Csv:          &out.CSV,
+		Pdf:          out.PDF,
+		PdfSize:      int32(len(out.PDF)), //nolint:gosec // bounded by the 10 MB PDF limit
+		PdfSha256:    &sumHex,
 	}); err != nil {
 		return err
 	}
@@ -547,6 +608,8 @@ func (h *ScheduledReportRunHandler) deliverArchive(ctx context.Context, d *datab
 		return err
 	}
 	loc, _ := reports.ResolveLocation(rep.Timezone)
+	retried, maxRetry := reportRetryState(ctx)
+	lastAttempt := retried >= maxRetry
 	var sent, failed int
 	anyRetryable := false
 	firstCode := ""
@@ -555,15 +618,39 @@ func (h *ScheduledReportRunHandler) deliverArchive(ctx context.Context, d *datab
 			sent++
 			continue
 		}
-		if err := ctx.Err(); err != nil {
-			// Shutdown or timeout: stop sending; the archive stays pending
-			// and asynq requeues the task.
-			return err
+		// A failure that cannot succeed later stays failed; only pending and
+		// retryable-failed deliveries are attempted again.
+		if del.Status == "failed" && (del.ErrorCode == nil || !reports.RetryableCode(*del.ErrorCode)) {
+			failed++
+			if firstCode == "" && del.ErrorCode != nil {
+				firstCode = *del.ErrorCode
+			}
+			continue
 		}
-		sendErr := h.sendDelivery(ctx, d, del, content, loc)
+		if err := ctx.Err(); err != nil {
+			if !lastAttempt {
+				// Shutdown or timeout: stop sending; the archive stays
+				// pending and asynq requeues the task.
+				return err
+			}
+			// Last attempt: record the delivery as not sent and finalize.
+			code, msg := reports.CodeAbandoned, "run ended before this delivery was sent"
+			markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reportMarkTimeout)
+			err := d.Queries.ForkMarkReportDelivery(markCtx, db.ForkMarkReportDeliveryParams{ID: del.ID, Status: "failed", ErrorCode: &code, ErrorMessage: &msg})
+			cancel()
+			if err != nil {
+				return err
+			}
+			failed++
+			if firstCode == "" {
+				firstCode = code
+			}
+			continue
+		}
+		sendErr := h.sendDelivery(ctx, d, rep, del, content, loc)
 		params := db.ForkMarkReportDeliveryParams{ID: del.ID, Status: "sent"}
 		if sendErr != nil {
-			code, msg := classifyDeliveryError(del.Channel, sendErr), reports.RedactError(sendErr)
+			code, msg := classifyDeliveryError(del.Channel, sendErr), redactDeliveryError(sendErr, del.Recipient)
 			params.Status, params.ErrorCode, params.ErrorMessage = "failed", &code, &msg
 			failed++
 			if firstCode == "" {
@@ -584,7 +671,7 @@ func (h *ScheduledReportRunHandler) deliverArchive(ctx context.Context, d *datab
 		}
 	}
 
-	if retried, maxRetry := reportRetryState(ctx); anyRetryable && retried < maxRetry {
+	if anyRetryable && !lastAttempt {
 		return fmt.Errorf("scheduled_report: %d deliveries failed, retrying", failed)
 	}
 
@@ -601,23 +688,43 @@ func (h *ScheduledReportRunHandler) deliverArchive(ctx context.Context, d *datab
 	if content.PdfSha256 != nil {
 		pdfSum = *content.PdfSha256
 	}
-	h.finalizeRun(ctx, d, rep.ID, archiveID, status, code, msg, pdfSum)
+	return h.finalizeRun(ctx, d, rep.ID, archiveID, status, code, msg, pdfSum)
+}
+
+// redactDeliveryError flattens a send error for storage: every occurrence of
+// the delivery's own recipient is masked first (also forms like
+// user@localhost that the generic address pattern misses), then RedactError.
+func redactDeliveryError(err error, recipient string) string {
+	if err == nil {
+		return ""
+	}
+	text := err.Error()
+	if r := strings.TrimSpace(recipient); r != "" {
+		text = regexp.MustCompile(`(?i)`+regexp.QuoteMeta(r)).ReplaceAllString(text, "***@***")
+	}
+	return reports.RedactError(errors.New(text))
+}
+
+// finalizeRun writes the archive's final status and the run row in one
+// transaction, then applies retention, on a context detached from the
+// task's, so a run that reached its end is recorded even when the task
+// context ends now. A failed write is returned so asynq retries; the retry
+// finds the archive still pending and finalizes again. Only the call that
+// moves the archive out of pending inserts the run row.
+func (h *ScheduledReportRunHandler) finalizeRun(ctx context.Context, d *database.DB, reportID, archiveID, status, code, msg, pdfSum string) error {
+	markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reportMarkTimeout)
+	defer cancel()
+	if err := h.finishArchive(markCtx, d, reportID, archiveID, status, code, msg, pdfSum); err != nil {
+		h.logError("scheduled_report: finish archive failed", "archive_id", archiveID, "error", err)
+		return fmt.Errorf("scheduled_report: finalize run: %w", err)
+	}
+	applyReportRetention(markCtx, d, reportID, h.log)
 	return nil
 }
 
-// finalizeRun writes the archive's final status, the run row and applies
-// retention on a context detached from the task's, so a run that reached its
-// end is recorded even when the task context ends now.
-func (h *ScheduledReportRunHandler) finalizeRun(ctx context.Context, d *database.DB, reportID, archiveID, status, code, msg, pdfSum string) {
-	markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reportMarkTimeout)
-	defer cancel()
-	h.finishArchive(markCtx, d, archiveID, status, code, msg)
-	h.insertRun(markCtx, d, reportID, status, msg, pdfSum)
-	applyReportRetention(markCtx, d, reportID, h.log)
-}
-
-// finishArchive sets the archive row's final status (ctx: see finalizeRun).
-func (h *ScheduledReportRunHandler) finishArchive(ctx context.Context, d *database.DB, archiveID, status, code, msg string) {
+// finishArchive moves a pending archive row to its final status and, when
+// that transition happened, records the run row (ctx: see finalizeRun).
+func (h *ScheduledReportRunHandler) finishArchive(ctx context.Context, d *database.DB, reportID, archiveID, status, code, msg, pdfSum string) error {
 	var cp, mp *string
 	if code != "" {
 		cp = &code
@@ -625,9 +732,22 @@ func (h *ScheduledReportRunHandler) finishArchive(ctx context.Context, d *databa
 	if msg != "" {
 		mp = &msg
 	}
-	if err := d.Queries.ForkFinishReportArchive(ctx, db.ForkFinishReportArchiveParams{ID: archiveID, Status: status, ErrorCode: cp, ErrorMessage: mp}); err != nil {
-		h.logError("scheduled_report: finish archive failed", "archive_id", archiveID, "error", err)
+	tx, err := d.Begin(ctx)
+	if err != nil {
+		return err
 	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := d.Queries.WithTx(tx)
+	rows, err := q.ForkFinishReportArchive(ctx, db.ForkFinishReportArchiveParams{ID: archiveID, Status: status, ErrorCode: cp, ErrorMessage: mp})
+	if err != nil {
+		return err
+	}
+	if rows == 1 {
+		if err := insertRun(ctx, q, reportID, status, msg, pdfSum); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // applyReportRetention marks pending rows older than 24 h as abandoned and
@@ -646,7 +766,7 @@ func applyReportRetention(ctx context.Context, d *database.DB, reportID string, 
 	}
 }
 
-func (h *ScheduledReportRunHandler) insertRun(ctx context.Context, d *database.DB, reportID, status, errMsg, hash string) {
+func insertRun(ctx context.Context, q *db.Queries, reportID, status, errMsg, hash string) error {
 	var em *string
 	if errMsg != "" {
 		em = &errMsg
@@ -655,16 +775,14 @@ func (h *ScheduledReportRunHandler) insertRun(ctx context.Context, d *database.D
 	if hash != "" {
 		sh = &hash
 	}
-	_, err := d.Queries.InsertScheduledReportRun(ctx, db.InsertScheduledReportRunParams{
+	_, err := q.InsertScheduledReportRun(ctx, db.InsertScheduledReportRunParams{
 		ID:                uuid.New().String(),
 		ScheduledReportID: reportID,
 		Status:            status,
 		ErrorMessage:      em,
 		SummaryHash:       sh,
 	})
-	if err != nil && h.log != nil {
-		h.log.Debug("scheduled_report: insert run failed", "error", err)
-	}
+	return err
 }
 
 func decryptNotifConfig(enc *util.Encryption, s string) (string, error) {

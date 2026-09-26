@@ -13,6 +13,11 @@ SET last_run_at = sqlc.arg('now'), next_run_at = sqlc.arg('next'), updated_at = 
 WHERE id = sqlc.arg('id') AND enabled = true
   AND date_trunc('second', next_run_at) = date_trunc('second', sqlc.arg('slot')::timestamp);
 
+-- name: ForkGetScheduledReportForUpdate :one
+-- Row lock for the update handler, so a concurrent slot claim is never
+-- overwritten with stale next_run_at/last_run_at values.
+SELECT * FROM scheduled_reports WHERE id = $1 FOR UPDATE;
+
 -- name: ForkSetScheduledReportNextRunIfNull :execrows
 UPDATE scheduled_reports SET next_run_at = sqlc.arg('next'), updated_at = NOW()
 WHERE id = sqlc.arg('id') AND next_run_at IS NULL;
@@ -39,6 +44,8 @@ SET period_from = sqlc.arg('period_from'), period_to = sqlc.arg('period_to'),
     group_ids = COALESCE(sqlc.arg('group_ids')::text[], '{}'::text[]),
     group_names = COALESCE(sqlc.arg('group_names')::text[], '{}'::text[]), host_count = sqlc.arg('host_count'),
     smtp_destination_id = sqlc.narg('smtp_destination_id'), mail_from = sqlc.narg('mail_from'),
+    report_name = sqlc.arg('report_name'), language = sqlc.arg('language'), customer_mode = sqlc.arg('customer_mode'),
+    recipients = COALESCE(sqlc.arg('recipients')::text[], '{}'::text[]),
     subject = sqlc.arg('subject'), html = sqlc.arg('html'), csv = sqlc.arg('csv'),
     pdf = sqlc.arg('pdf'), pdf_size = sqlc.arg('pdf_size'), pdf_sha256 = sqlc.arg('pdf_sha256')
 WHERE id = sqlc.arg('id');
@@ -48,10 +55,11 @@ SELECT id, scheduled_report_id, status, report_name, language, customer_mode, sm
        subject, COALESCE(html, '')::text AS html, COALESCE(csv, '')::text AS csv, pdf, pdf_sha256, created_at
 FROM fork_report_archive WHERE id = $1;
 
--- name: ForkFinishReportArchive :exec
+-- name: ForkFinishReportArchive :execrows
+-- Only a pending row transitions; a second finalize of the same run is a no-op.
 UPDATE fork_report_archive
 SET status = sqlc.arg('status'), error_code = sqlc.narg('error_code'), error_message = sqlc.narg('error_message'), finished_at = NOW()
-WHERE id = sqlc.arg('id');
+WHERE id = sqlc.arg('id') AND status = 'pending';
 
 -- name: ForkListReportArchive :many
 SELECT id, scheduled_report_id, run_key, trigger_kind, slot_at, created_at, finished_at, status, error_code, error_message,
@@ -81,7 +89,7 @@ UPDATE fork_report_deliveries
 SET status = sqlc.arg('status'), error_code = sqlc.narg('error_code'), error_message = sqlc.narg('error_message'),
     attempts = attempts + 1,
     sent_at = CASE WHEN sqlc.arg('status')::text = 'sent' THEN NOW() ELSE sent_at END
-WHERE id = sqlc.arg('id');
+WHERE id = sqlc.arg('id') AND status <> 'sent';
 
 -- name: ForkGetReportArchivePDF :one
 SELECT a.id, a.scheduled_report_id, a.report_name, a.created_at, a.status, a.pdf, s.timezone

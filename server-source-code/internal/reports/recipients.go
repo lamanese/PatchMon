@@ -62,6 +62,11 @@ func ParseMailbox(s string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: invalid address", ErrRecipients)
 	}
+	// Quoted local parts ("first last"@example.com) would need quoting again
+	// in RCPT TO and the To header; refuse them instead.
+	if strings.ContainsAny(a.Address, "\" \\") {
+		return "", fmt.Errorf("%w: unsupported address form", ErrRecipients)
+	}
 	addr := strings.ToLower(a.Address)
 	if !strings.Contains(addr, "@") {
 		return "", fmt.Errorf("%w: invalid address", ErrRecipients)

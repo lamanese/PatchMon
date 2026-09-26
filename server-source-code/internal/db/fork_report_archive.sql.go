@@ -62,10 +62,10 @@ func (q *Queries) ForkClaimScheduledReportSlot(ctx context.Context, arg ForkClai
 	return result.RowsAffected(), nil
 }
 
-const forkFinishReportArchive = `-- name: ForkFinishReportArchive :exec
+const forkFinishReportArchive = `-- name: ForkFinishReportArchive :execrows
 UPDATE fork_report_archive
 SET status = $1, error_code = $2, error_message = $3, finished_at = NOW()
-WHERE id = $4
+WHERE id = $4 AND status = 'pending'
 `
 
 type ForkFinishReportArchiveParams struct {
@@ -75,14 +75,18 @@ type ForkFinishReportArchiveParams struct {
 	ID           string  `json:"id"`
 }
 
-func (q *Queries) ForkFinishReportArchive(ctx context.Context, arg ForkFinishReportArchiveParams) error {
-	_, err := q.db.Exec(ctx, forkFinishReportArchive,
+// Only a pending row transitions; a second finalize of the same run is a no-op.
+func (q *Queries) ForkFinishReportArchive(ctx context.Context, arg ForkFinishReportArchiveParams) (int64, error) {
+	result, err := q.db.Exec(ctx, forkFinishReportArchive,
 		arg.Status,
 		arg.ErrorCode,
 		arg.ErrorMessage,
 		arg.ID,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const forkGetReportArchiveByRunKey = `-- name: ForkGetReportArchiveByRunKey :one
@@ -225,6 +229,32 @@ func (q *Queries) ForkGetReportArchivePDF(ctx context.Context, id string) (ForkG
 		&i.Status,
 		&i.Pdf,
 		&i.Timezone,
+	)
+	return i, err
+}
+
+const forkGetScheduledReportForUpdate = `-- name: ForkGetScheduledReportForUpdate :one
+SELECT id, name, cron_expr, enabled, definition, destination_ids, timezone, next_run_at, last_run_at, created_at, updated_at, fork_email_recipients FROM scheduled_reports WHERE id = $1 FOR UPDATE
+`
+
+// Row lock for the update handler, so a concurrent slot claim is never
+// overwritten with stale next_run_at/last_run_at values.
+func (q *Queries) ForkGetScheduledReportForUpdate(ctx context.Context, id string) (ScheduledReport, error) {
+	row := q.db.QueryRow(ctx, forkGetScheduledReportForUpdate, id)
+	var i ScheduledReport
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CronExpr,
+		&i.Enabled,
+		&i.Definition,
+		&i.DestinationIds,
+		&i.Timezone,
+		&i.NextRunAt,
+		&i.LastRunAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ForkEmailRecipients,
 	)
 	return i, err
 }
@@ -459,7 +489,7 @@ UPDATE fork_report_deliveries
 SET status = $1, error_code = $2, error_message = $3,
     attempts = attempts + 1,
     sent_at = CASE WHEN $1::text = 'sent' THEN NOW() ELSE sent_at END
-WHERE id = $4
+WHERE id = $4 AND status <> 'sent'
 `
 
 type ForkMarkReportDeliveryParams struct {
@@ -543,9 +573,11 @@ SET period_from = $1, period_to = $2,
     group_ids = COALESCE($3::text[], '{}'::text[]),
     group_names = COALESCE($4::text[], '{}'::text[]), host_count = $5,
     smtp_destination_id = $6, mail_from = $7,
-    subject = $8, html = $9, csv = $10,
-    pdf = $11, pdf_size = $12, pdf_sha256 = $13
-WHERE id = $14
+    report_name = $8, language = $9, customer_mode = $10,
+    recipients = COALESCE($11::text[], '{}'::text[]),
+    subject = $12, html = $13, csv = $14,
+    pdf = $15, pdf_size = $16, pdf_sha256 = $17
+WHERE id = $18
 `
 
 type ForkSnapshotReportArchiveParams struct {
@@ -556,6 +588,10 @@ type ForkSnapshotReportArchiveParams struct {
 	HostCount         int32      `json:"host_count"`
 	SmtpDestinationID *string    `json:"smtp_destination_id"`
 	MailFrom          *string    `json:"mail_from"`
+	ReportName        string     `json:"report_name"`
+	Language          string     `json:"language"`
+	CustomerMode      bool       `json:"customer_mode"`
+	Recipients        []string   `json:"recipients"`
 	Subject           string     `json:"subject"`
 	Html              *string    `json:"html"`
 	Csv               *string    `json:"csv"`
@@ -574,6 +610,10 @@ func (q *Queries) ForkSnapshotReportArchive(ctx context.Context, arg ForkSnapsho
 		arg.HostCount,
 		arg.SmtpDestinationID,
 		arg.MailFrom,
+		arg.ReportName,
+		arg.Language,
+		arg.CustomerMode,
+		arg.Recipients,
 		arg.Subject,
 		arg.Html,
 		arg.Csv,

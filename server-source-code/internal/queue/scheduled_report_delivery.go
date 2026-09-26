@@ -17,6 +17,7 @@ import (
 	"github.com/PatchMon/PatchMon/server-source-code/internal/database"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/db"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/reports"
+	"github.com/PatchMon/PatchMon/server-source-code/internal/util"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -24,9 +25,72 @@ import (
 // unreadable or cannot address this recipient. Never retried.
 var errDestinationInvalid = errors.New("destination missing or disabled")
 
+// Customer-report SMTP destination problems. The handler answers them as 400
+// with these texts; the worker records them as destination_invalid.
+var (
+	ErrCustomerSMTPUnreadable = errors.New("the SMTP destination config is unreadable")
+	ErrCustomerSMTPNoTLS      = errors.New("customer reports require an encrypted SMTP connection (TLS)")
+	ErrCustomerSMTPNoSender   = errors.New("the SMTP destination has no valid sender address")
+)
+
+// CheckCustomerSMTPConfig validates the e-mail destination a customer report
+// sends through: readable config, transport encryption (use_tls, or the
+// implicit-TLS port 465) and a valid sender address.
+func CheckCustomerSMTPConfig(enc *util.Encryption, configEncrypted string) error {
+	plain, err := decryptNotifConfig(enc, configEncrypted)
+	if err != nil {
+		return ErrCustomerSMTPUnreadable
+	}
+	var cfg scheduledEmailConfig
+	if err := json.Unmarshal([]byte(plain), &cfg); err != nil {
+		return ErrCustomerSMTPUnreadable
+	}
+	return checkCustomerSMTP(cfg)
+}
+
+func checkCustomerSMTP(cfg scheduledEmailConfig) error {
+	if !cfg.UseTLS && !implicitTLSPort(cfg.SMTPPort) {
+		return ErrCustomerSMTPNoTLS
+	}
+	if _, err := reports.ParseMailbox(cfg.From); err != nil {
+		return ErrCustomerSMTPNoSender
+	}
+	return nil
+}
+
+// recipientStillWanted re-checks a snapshotted e-mail recipient against the
+// CURRENT report and destination, so a retry never mails an address the
+// operator removed after the snapshot. Customer runs: the address must still
+// be in the report's recipient list. Internal runs: it must still be the
+// destination's To.
+func recipientStillWanted(customer bool, rep db.ScheduledReport, cfg scheduledEmailConfig, recipient string) bool {
+	want, err := reports.ParseMailbox(recipient)
+	if err != nil {
+		return false
+	}
+	if customer {
+		if rep.ForkEmailRecipients == nil {
+			return false
+		}
+		current, err := reports.ParseRecipients(rep.ForkEmailRecipients)
+		if err != nil {
+			return false
+		}
+		for _, a := range current {
+			if a == want {
+				return true
+			}
+		}
+		return false
+	}
+	to, err := reports.ParseMailbox(cfg.To)
+	return err == nil && to == want
+}
+
 // sendDelivery sends one archived run to one delivery target. Everything it
-// sends comes from the archive snapshot (content), never from a re-render.
-func (h *ScheduledReportRunHandler) sendDelivery(ctx context.Context, d *database.DB, del db.ForkReportDelivery, content db.ForkGetReportArchiveContentRow, loc *time.Location) error {
+// sends comes from the archive snapshot (content), never from a re-render;
+// only the recipient is re-checked against the current report (rep).
+func (h *ScheduledReportRunHandler) sendDelivery(ctx context.Context, d *database.DB, rep db.ScheduledReport, del db.ForkReportDelivery, content db.ForkGetReportArchiveContentRow, loc *time.Location) error {
 	dest, err := d.Queries.GetNotificationDestinationByID(ctx, del.DestinationID)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !dest.Enabled) {
 		return errDestinationInvalid
@@ -44,10 +108,20 @@ func (h *ScheduledReportRunHandler) sendDelivery(ctx context.Context, d *databas
 		if err := json.Unmarshal([]byte(plain), &cfg); err != nil {
 			return fmt.Errorf("%w: config unreadable", errDestinationInvalid)
 		}
+		if !recipientStillWanted(content.CustomerMode, rep, cfg, del.Recipient) {
+			return fmt.Errorf("%w: recipient no longer configured", errDestinationInvalid)
+		}
 		// The sender frozen with the snapshot wins over the live config, so
 		// a retry sends exactly what the archive says.
 		if content.MailFrom != nil && strings.TrimSpace(*content.MailFrom) != "" {
 			cfg.From = *content.MailFrom
+		}
+		// A customer run never falls back to an unencrypted session, even
+		// when the destination was switched to plaintext after the snapshot.
+		if content.CustomerMode {
+			if err := checkCustomerSMTP(cfg); err != nil {
+				return fmt.Errorf("%w: %s", errDestinationInvalid, err.Error())
+			}
 		}
 		msg, err := reports.BuildMailMessage(reports.MailInput{
 			From:      cfg.From,
@@ -84,7 +158,8 @@ func stripURLError(err error) error {
 }
 
 // sendReportEmailSMTP delivers one prepared message to one recipient within
-// ReportMailDeadline (dial, TLS, auth and data together).
+// ReportMailDeadline (dial, greeting, TLS, auth and data together). A
+// shorter deadline on ctx wins.
 func sendReportEmailSMTP(ctx context.Context, cfg scheduledEmailConfig, to string, msg []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, ReportMailDeadline)
 	defer cancel()
@@ -95,19 +170,23 @@ func sendReportEmailSMTP(ctx context.Context, cfg scheduledEmailConfig, to strin
 	if err != nil {
 		return fmt.Errorf("%w: invalid from address", errDestinationInvalid)
 	}
+	rcpt, err := reports.ParseMailbox(to)
+	if err != nil {
+		return fmt.Errorf("%w: invalid recipient address", errDestinationInvalid)
+	}
 	if cfg.SMTPPort == 0 {
 		cfg.SMTPPort = 587
 	}
 	addr := net.JoinHostPort(cfg.SMTPHost, strconv.Itoa(cfg.SMTPPort))
 	tlsCfg := &tls.Config{ServerName: cfg.SMTPHost, MinVersion: tls.VersionTLS12}
 
-	c, conn, err := dialSMTP(addr, cfg.SMTPHost, cfg.UseTLS, implicitTLSPort(cfg.SMTPPort), tlsCfg, ReportMailDeadline)
+	deadline, _ := ctx.Deadline()
+	c, conn, err := dialSMTPUntil(ctx, addr, cfg.SMTPHost, cfg.UseTLS, implicitTLSPort(cfg.SMTPPort), tlsCfg, ReportMailDeadline, deadline)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
 	defer func() { _ = c.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(ReportMailDeadline))
 	// Cancelling the task context aborts a hanging session.
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
 	defer stop()
@@ -122,7 +201,7 @@ func sendReportEmailSMTP(ctx context.Context, cfg scheduledEmailConfig, to strin
 	if err := c.Mail(from); err != nil {
 		return err
 	}
-	if err := c.Rcpt(to); err != nil {
+	if err := c.Rcpt(rcpt); err != nil {
 		return err
 	}
 	w, err := c.Data()

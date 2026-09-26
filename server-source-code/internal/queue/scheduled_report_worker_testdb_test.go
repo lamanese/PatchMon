@@ -47,7 +47,7 @@ func insertEmailDestination(t *testing.T, d *database.DB, name string) string {
 	id := uuid.NewString()
 	// enc is nil in these tests, so decryptNotifConfig returns the plain JSON.
 	if _, err := d.Exec(context.Background(), `INSERT INTO notification_destinations (id, display_name, channel_type, config_encrypted, enabled, created_at, updated_at)
-		VALUES ($1, $2, 'email', '{"smtp_host":"mail.example","smtp_port":587,"from":"reports@example.com","to":"intern@example.com"}', true, NOW(), NOW())`, id, name); err != nil {
+		VALUES ($1, $2, 'email', '{"smtp_host":"mail.example","smtp_port":587,"use_tls":true,"from":"reports@example.com","to":"intern@example.com"}', true, NOW(), NOW())`, id, name); err != nil {
 		t.Fatal(err)
 	}
 	return id

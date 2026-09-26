@@ -64,3 +64,19 @@ func TestRecipientsErrorIsConfigError(t *testing.T) {
 		t.Fatal("recipient errors are configuration errors (400, no retry)")
 	}
 }
+
+func TestParseMailboxRejectsQuotedLocalParts(t *testing.T) {
+	for _, s := range []string{
+		`"first last"@example.com`,
+		`"Kunde" <"first last"@example.com>`,
+		`"a\"b"@example.com`,
+	} {
+		_, err := ParseMailbox(s)
+		if !errors.Is(err, ErrRecipients) || !strings.Contains(err.Error(), "unsupported address form") {
+			t.Errorf("%q: want unsupported address form, got %v", s, err)
+		}
+	}
+	if got, err := ParseMailbox(`"Kunde AG" <Kunde@Example.com>`); err != nil || got != "kunde@example.com" {
+		t.Fatalf("a quoted display name stays allowed: %q %v", got, err)
+	}
+}
