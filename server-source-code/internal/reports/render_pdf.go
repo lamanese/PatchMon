@@ -358,7 +358,7 @@ func pdfHostOverview(c canvas, tx Texts, m *Model) {
 	for _, r := range s.Rows {
 		host := txt(r.HostName)
 		if r.PkgBroken {
-			host = cell{Text: r.HostName, Color: pdfAmber}
+			host = cell{Text: r.HostName + "\n" + tx.S("val.pkg_broken"), Color: pdfAmber}
 		}
 		reboot := tx.S("val.no")
 		if r.NeedsReboot {

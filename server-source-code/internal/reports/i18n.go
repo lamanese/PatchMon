@@ -148,9 +148,11 @@ var texts = map[string]map[string]string{
 
 		// Short heads for the ten-column host overview table; the full
 		// col.* names above truncate to "…" at that table's column widths
-		// (os, last_boot and last_seen only truncate in German - "OS" /
-		// "Boot" / "Kontakt" fit both languages, so the English value is
-		// left equal to the full name).
+		// in at least one language (os and reboot_pending in both;
+		// last_boot/last_seen only in German - see the fitText assertion
+		// in TestPDFTableWidthsSumToOneAndHostStatusFitsOneLine).
+		// last_boot/last_seen's English value equals the full name since
+		// only German needs shortening; os needs "OS" in both languages.
 		"col.short.updates":          "Upd.",
 		"col.short.security_updates": "Sec.",
 		"col.short.reboot_pending":   "Reboot",

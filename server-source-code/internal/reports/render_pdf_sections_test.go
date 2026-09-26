@@ -142,7 +142,7 @@ func TestRenderSectionsCoversEverySectionInOrder(t *testing.T) {
 		"tr:web01|5|2|" + st("active") + "#16a34a*|24.09.2026 11:00",
 		"tr:openssl|1|3.0.2",
 		"tr:web01|ubuntu 24.04|" + st("active") + "#16a34a*|5|2|" + tx.S("val.yes") + "|21.09.2026 12:00|" + st("completed") + " (24.09.2026 12:00)|24.09.2026 11:00|2.0.20",
-		"tr:db01#d97706|windows 24H2|" + st("active") + "#16a34a*|0|0|" + tx.S("val.no") + "|" + tx.F("val.uptime_reported", "3 days, 2 hours") + "|" + tx.S("val.none") + "|" + tx.S("val.never") + "|-",
+		"tr:db01\n" + tx.S("val.pkg_broken") + "#d97706|windows 24H2|" + st("active") + "#16a34a*|0|0|" + tx.S("val.no") + "|" + tx.F("val.uptime_reported", "3 days, 2 hours") + "|" + tx.S("val.none") + "|" + tx.S("val.never") + "|-",
 		"h3:web01", "tr:openssl|3.0.1|3.0.2", "note:" + tx.F("val.and_n_more", 4),
 		"tr:web01|/dev/sda1|/|50.0 GB|96.0%#dc2626*", "tr:db01|C:|C:\\|-|n/a",
 		"tr:24.09.2026 12:00|web01|" + st("patch_all") + " – " + tx.S("val.dry_run") + "|" + st("completed") + "#16a34a*|2",
@@ -201,17 +201,41 @@ func TestRenderSectionsEnglishAndEmptySections(t *testing.T) {
 }
 
 // TestHostOverviewPkgBrokenHostCellIsAmber checks the C-review fix: a broken
-// host is flagged by colouring its host cell amber, not by an unstyled
-// second line of text (which TestRenderSectionsCoversEverySectionInOrder
-// also covers end to end, via the full row op).
+// host is flagged BOTH by colouring its host cell amber AND by keeping the
+// val.pkg_broken marker text (the colour alone is lost in grayscale print,
+// text extraction and for colour-blind readers).
 func TestHostOverviewPkgBrokenHostCellIsAmber(t *testing.T) {
 	m := sampleModel("de", false)
 	m.HostOverview.Rows[1].PkgBroken = true
 	rc := &recordingCanvas{}
 	renderSections(rc, m)
-	want := cellOp(cell{Text: m.HostOverview.Rows[1].HostName, Color: pdfAmber})
+	tx := T("de")
+	host := m.HostOverview.Rows[1].HostName
+	marker := tx.S("val.pkg_broken")
+	// db01 is also a host in the Disks section (a plain "tr:db01|..." row
+	// with no marker); anchor on the "\n" the marker introduces so this
+	// only matches the host-overview row.
+	prefix := "tr:" + host + "\n"
+	var hostRow string
+	for _, op := range rc.ops {
+		if strings.HasPrefix(op, prefix) {
+			hostRow = op
+			break
+		}
+	}
+	if hostRow == "" {
+		t.Fatalf("broken host row not recorded, ops:\n%s", strings.Join(rc.ops, "\n"))
+	}
+	if !strings.Contains(hostRow, marker) {
+		t.Errorf("host cell %q must keep the %q marker text", hostRow, marker)
+	}
+	if !strings.Contains(hostRow, hexOf(pdfAmber)) {
+		t.Errorf("host cell %q must be coloured amber (%s)", hostRow, hexOf(pdfAmber))
+	}
+	// and the exact combined cell op the renderer must produce
+	want := cellOp(cell{Text: host + "\n" + marker, Color: pdfAmber})
 	if !rc.has(want) {
-		t.Fatalf("want host cell %q coloured amber, ops:\n%s", want, strings.Join(rc.ops, "\n"))
+		t.Fatalf("want host cell %q, ops:\n%s", want, strings.Join(rc.ops, "\n"))
 	}
 }
 
