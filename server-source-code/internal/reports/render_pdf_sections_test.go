@@ -129,7 +129,7 @@ func TestRenderSectionsCoversEverySectionInOrder(t *testing.T) {
 		"th:" + tx.S("col.severity") + "|" + tx.S("col.title") + "|" + tx.S("col.host") + "|" + tx.S("col.created"),
 		"th:" + tx.S("col.host") + "|" + tx.S("col.updates") + "|" + tx.S("col.security_updates") + "|" + tx.S("col.status") + "|" + tx.S("col.last_seen"),
 		"th:" + tx.S("col.package") + "|" + tx.S("col.affected_hosts") + "|" + tx.S("col.available"),
-		"th:" + tx.S("col.host") + "|" + tx.S("col.os") + "|" + tx.S("col.status") + "|" + tx.S("col.updates") + "|" + tx.S("col.security_updates") + "|" + tx.S("col.reboot_pending") + "|" + tx.S("col.last_boot") + "|" + tx.S("col.last_patch_run") + "|" + tx.S("col.last_seen") + "|" + tx.S("col.agent"),
+		"th:" + tx.S("col.host") + "|" + tx.S("col.short.os") + "|" + tx.S("col.status") + "|" + tx.S("col.short.updates") + "|" + tx.S("col.short.security_updates") + "|" + tx.S("col.short.reboot_pending") + "|" + tx.S("col.short.last_boot") + "|" + tx.S("col.short.last_patch_run") + "|" + tx.S("col.short.last_seen") + "|" + tx.S("col.short.agent"),
 		"th:" + tx.S("col.package") + "|" + tx.S("col.installed") + "|" + tx.S("col.available"),
 		"th:" + tx.S("col.host") + "|" + tx.S("col.disk") + "|" + tx.S("col.mount") + "|" + tx.S("col.size") + "|" + tx.S("col.used"),
 		"th:" + tx.S("col.date") + "|" + tx.S("col.host") + "|" + tx.S("col.type") + "|" + tx.S("col.result") + "|" + tx.S("col.package_count"),
@@ -142,7 +142,7 @@ func TestRenderSectionsCoversEverySectionInOrder(t *testing.T) {
 		"tr:web01|5|2|" + st("active") + "#16a34a*|24.09.2026 11:00",
 		"tr:openssl|1|3.0.2",
 		"tr:web01|ubuntu 24.04|" + st("active") + "#16a34a*|5|2|" + tx.S("val.yes") + "|21.09.2026 12:00|" + st("completed") + " (24.09.2026 12:00)|24.09.2026 11:00|2.0.20",
-		"tr:db01\n" + tx.S("val.pkg_broken") + "|windows 24H2|" + st("active") + "#16a34a*|0|0|" + tx.S("val.no") + "|" + tx.F("val.uptime_reported", "3 days, 2 hours") + "|" + tx.S("val.none") + "|" + tx.S("val.never") + "|-",
+		"tr:db01#d97706|windows 24H2|" + st("active") + "#16a34a*|0|0|" + tx.S("val.no") + "|" + tx.F("val.uptime_reported", "3 days, 2 hours") + "|" + tx.S("val.none") + "|" + tx.S("val.never") + "|-",
 		"h3:web01", "tr:openssl|3.0.1|3.0.2", "note:" + tx.F("val.and_n_more", 4),
 		"tr:web01|/dev/sda1|/|50.0 GB|96.0%#dc2626*", "tr:db01|C:|C:\\|-|n/a",
 		"tr:24.09.2026 12:00|web01|" + st("patch_all") + " – " + tx.S("val.dry_run") + "|" + st("completed") + "#16a34a*|2",
@@ -200,6 +200,21 @@ func TestRenderSectionsEnglishAndEmptySections(t *testing.T) {
 	}
 }
 
+// TestHostOverviewPkgBrokenHostCellIsAmber checks the C-review fix: a broken
+// host is flagged by colouring its host cell amber, not by an unstyled
+// second line of text (which TestRenderSectionsCoversEverySectionInOrder
+// also covers end to end, via the full row op).
+func TestHostOverviewPkgBrokenHostCellIsAmber(t *testing.T) {
+	m := sampleModel("de", false)
+	m.HostOverview.Rows[1].PkgBroken = true
+	rc := &recordingCanvas{}
+	renderSections(rc, m)
+	want := cellOp(cell{Text: m.HostOverview.Rows[1].HostName, Color: pdfAmber})
+	if !rc.has(want) {
+		t.Fatalf("want host cell %q coloured amber, ops:\n%s", want, strings.Join(rc.ops, "\n"))
+	}
+}
+
 // colCanvas records the column sets of every table.
 type colCanvas struct {
 	recordingCanvas
@@ -217,6 +232,7 @@ func TestPDFTableWidthsSumToOneAndHostStatusFitsOneLine(t *testing.T) {
 		cc := &colCanvas{}
 		renderSections(cc, sampleModel(lang, false))
 		var statusW float64
+		var hostOverviewCols []pdfCol
 		for _, cols := range cc.tables {
 			sum := 0.0
 			for _, c := range cols {
@@ -225,8 +241,9 @@ func TestPDFTableWidthsSumToOneAndHostStatusFitsOneLine(t *testing.T) {
 			if sum < 0.999 || sum > 1.001 {
 				t.Errorf("%s: table %q widths sum to %.3f", lang, cols[0].Title, sum)
 			}
-			if len(cols) == 10 && cols[1].Title == tx.S("col.os") {
+			if len(cols) == 10 && cols[1].Title == tx.S("col.short.os") {
 				statusW = cols[2].W
+				hostOverviewCols = cols
 			}
 		}
 		if statusW == 0 {
@@ -238,6 +255,16 @@ func TestPDFTableWidthsSumToOneAndHostStatusFitsOneLine(t *testing.T) {
 		for _, st := range []string{"active", "inactive", "pending"} {
 			if lines := wrapLines(c.pdf, tx.Status(st), inner); len(lines) != 1 {
 				t.Errorf("%s: host status %q wraps in host_overview: %q", lang, tx.Status(st), lines)
+			}
+		}
+		// column heads must fit their column at the table header's own font
+		// (bold 7.5 pt, upper-cased); a truncated head silently drops
+		// meaning ("…" only) instead of naming the column.
+		c.font(true, 7.5, colMuted)
+		for _, col := range hostOverviewCols {
+			headInner := pdfUsable*col.W - 2*pdfCellPad
+			if got := fitText(c.pdf, strings.ToUpper(col.Title), headInner); strings.Contains(got, pdfEllipsis) {
+				t.Errorf("%s: host_overview column %q truncates to %q at width %.1f mm", lang, col.Title, got, headInner)
 			}
 		}
 	}

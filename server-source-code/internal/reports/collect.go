@@ -33,6 +33,19 @@ const (
 	complianceWarningMin   = 60.0
 )
 
+// scoreLevel classifies a compliance score against the shared thresholds.
+// scoreColor (render_html.go) and pdfScoreColor (render_pdf.go) both map the
+// level to a colour, keeping the thresholds in exactly one place.
+func scoreLevel(v float64) string {
+	switch {
+	case v >= complianceCompliantMin:
+		return "ok"
+	case v >= complianceWarningMin:
+		return "warn"
+	}
+	return "critical"
+}
+
 // Collect reads every selected section through the ForkReport* queries,
 // which are filtered by the scope's host ids before any aggregation. Any
 // query error aborts the report: a customer must never receive a report

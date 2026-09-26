@@ -146,6 +146,20 @@ var texts = map[string]map[string]string{
 		"col.date":             "Date",
 		"col.package_count":    "Packages",
 
+		// Short heads for the ten-column host overview table; the full
+		// col.* names above truncate to "…" at that table's column widths
+		// (os, last_boot and last_seen only truncate in German - "OS" /
+		// "Boot" / "Kontakt" fit both languages, so the English value is
+		// left equal to the full name).
+		"col.short.updates":          "Upd.",
+		"col.short.security_updates": "Sec.",
+		"col.short.reboot_pending":   "Reboot",
+		"col.short.agent":            "Agent",
+		"col.short.last_patch_run":   "Last run",
+		"col.short.os":               "OS",
+		"col.short.last_boot":        "Last boot",
+		"col.short.last_seen":        "Last seen",
+
 		"val.yes":                  "Yes",
 		"val.no":                   "No",
 		"val.never":                "Never",
@@ -184,7 +198,6 @@ var texts = map[string]map[string]string{
 		"status.patch_package":      "Selected packages",
 		"pdf.page_of":               "Page %d of %s",
 		"pdf.generated":             "Generated",
-		"pdf.default_logo_hint":     "The PDF uses the default logo. Upload a PNG or JPEG under Settings → Branding for your own logo.",
 	},
 	"de": {
 		"title":          "Bericht",
@@ -261,6 +274,17 @@ var texts = map[string]map[string]string{
 		"col.date":             "Datum",
 		"col.package_count":    "Pakete",
 
+		// Short heads for the ten-column host overview table; the full
+		// col.* names above truncate to "…" at that table's column widths.
+		"col.short.updates":          "Upd.",
+		"col.short.security_updates": "Sich.",
+		"col.short.reboot_pending":   "Reboot",
+		"col.short.agent":            "Agent",
+		"col.short.last_patch_run":   "Letzter Lauf",
+		"col.short.os":               "OS",
+		"col.short.last_boot":        "Boot",
+		"col.short.last_seen":        "Kontakt",
+
 		"val.yes":                  "Ja",
 		"val.no":                   "Nein",
 		"val.never":                "Nie",
@@ -299,6 +323,5 @@ var texts = map[string]map[string]string{
 		"status.patch_package":      "Ausgewählte Pakete",
 		"pdf.page_of":               "Seite %d von %s",
 		"pdf.generated":             "Erstellt",
-		"pdf.default_logo_hint":     "Das PDF verwendet das Standardlogo. Für ein eigenes Logo unter Einstellungen → Branding ein PNG oder JPEG hochladen.",
 	},
 }

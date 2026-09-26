@@ -160,13 +160,7 @@ func pdfZeroGreen(n int) pdfColor {
 }
 
 func pdfScoreColor(v float64) pdfColor {
-	switch {
-	case v >= complianceCompliantMin:
-		return pdfGreen
-	case v >= complianceWarningMin:
-		return pdfAmber
-	}
-	return pdfRed
+	return pdfLevelColor(scoreLevel(v))
 }
 
 func pdfLevelColor(level string) pdfColor {
@@ -362,9 +356,9 @@ func pdfHostOverview(c canvas, tx Texts, m *Model) {
 	}
 	rows := make([][]cell, 0, len(s.Rows))
 	for _, r := range s.Rows {
-		host := r.HostName
+		host := txt(r.HostName)
 		if r.PkgBroken {
-			host += "\n" + tx.S("val.pkg_broken")
+			host = cell{Text: r.HostName, Color: pdfAmber}
 		}
 		reboot := tx.S("val.no")
 		if r.NeedsReboot {
@@ -382,7 +376,7 @@ func pdfHostOverview(c canvas, tx Texts, m *Model) {
 			lastRun = tx.Status(r.LastRunStatus) + " (" + pdfDTP(tx, m, r.LastRunAt) + ")"
 		}
 		rows = append(rows, []cell{
-			txt(host), txt(r.OS), pdfBadge(tx, r.Status), num(r.Updates), num(r.SecurityUpdates),
+			host, txt(r.OS), pdfBadge(tx, r.Status), num(r.Updates), num(r.SecurityUpdates),
 			txt(reboot), txt(boot), txt(lastRun), txt(pdfNever(tx, m, r.LastSeen)), txt(pdfOrDash(r.AgentVersion)),
 		})
 	}
@@ -390,11 +384,19 @@ func pdfHostOverview(c canvas, tx Texts, m *Model) {
 		// ten columns on A4 portrait: widths are balanced so that dates,
 		// "Abgeschlossen", "2.0.20" and every host status badge (the widest
 		// is "Ausstehend", bold 8 pt, needs 0.121) stay on one line; sum 1.0
-		// (TestPDFTableWidthsSumToOneAndHostStatusFitsOneLine)
-		col(tx, "host", 0.13, "L"), col(tx, "os", 0.11, "L"), col(tx, "status", 0.125, "L"),
-		col(tx, "updates", 0.06, "R"), col(tx, "security_updates", 0.06, "R"), col(tx, "reboot_pending", 0.07, "L"),
-		col(tx, "last_boot", 0.115, "L"), col(tx, "last_patch_run", 0.14, "L"), col(tx, "last_seen", 0.115, "L"),
-		col(tx, "agent", 0.075, "L"),
+		// (TestPDFTableWidthsSumToOneAndHostStatusFitsOneLine). Every column
+		// except host and status uses a col.short.* head: at these widths
+		// the full col.* names truncate to "…" in at least one language
+		// (os and reboot_pending in both; last_boot/last_seen only in
+		// German - see the fitText assertion in
+		// TestPDFTableWidthsSumToOneAndHostStatusFitsOneLine). os shrank
+		// from 0.11 and reboot_pending grew to 0.08 (was 0.07: even
+		// "REBOOT" needs 10.7 mm, more than the old 9.6 mm inner width) so
+		// the sum stays 1.0.
+		col(tx, "host", 0.13, "L"), col(tx, "short.os", 0.10, "L"), col(tx, "status", 0.125, "L"),
+		col(tx, "short.updates", 0.06, "R"), col(tx, "short.security_updates", 0.06, "R"), col(tx, "short.reboot_pending", 0.08, "L"),
+		col(tx, "short.last_boot", 0.115, "L"), col(tx, "short.last_patch_run", 0.14, "L"), col(tx, "short.last_seen", 0.115, "L"),
+		col(tx, "short.agent", 0.075, "L"),
 	}, rows)
 	c.note(tx.S("note.windows_boot"))
 }

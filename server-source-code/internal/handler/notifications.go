@@ -918,6 +918,17 @@ var (
 	previewBuild    = reports.Build
 )
 
+// logPreviewErr logs a preview failure. A cancelled context means the client
+// gave up (browser closed the tab, navigated away); that is not a server
+// problem and is logged at Warn, everything else at Error.
+func logPreviewErr(msg, reportID string, err error) {
+	if errors.Is(err, context.Canceled) {
+		slog.Warn(msg, "report_id", reportID, "error", err)
+		return
+	}
+	slog.Error(msg, "report_id", reportID, "error", err)
+}
+
 func previewErrorStatus(err error) (int, string) {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
@@ -956,8 +967,9 @@ func (h *NotificationsHandler) PreviewScheduledReport(w http.ResponseWriter, r *
 			Error(w, http.StatusNotFound, "Not found")
 			return
 		}
-		slog.Error("report preview: load report failed", "report_id", id, "error", err)
-		Error(w, http.StatusInternalServerError, "Failed to load report")
+		code, msg := previewErrorStatus(err)
+		logPreviewErr("report preview: load report failed", id, err)
+		Error(w, code, msg)
 		return
 	}
 	in := reports.BuildInput{ReportName: rep.Name, Definition: rep.Definition, Timezone: rep.Timezone, Now: time.Now(), PDF: true}
@@ -968,7 +980,7 @@ func (h *NotificationsHandler) PreviewScheduledReport(w http.ResponseWriter, r *
 	if err != nil {
 		code, msg := previewErrorStatus(err)
 		if !reports.IsConfigError(err) {
-			slog.Error("report preview failed", "report_id", id, "error", err)
+			logPreviewErr("report preview failed", id, err)
 		}
 		Error(w, code, msg)
 		return
@@ -976,7 +988,7 @@ func (h *NotificationsHandler) PreviewScheduledReport(w http.ResponseWriter, r *
 	// a render that finishes just as the budget lapses must not answer 200:
 	// the router timeout may already have written its own response
 	if ctx.Err() != nil {
-		slog.Error("report preview failed", "report_id", id, "error", ctx.Err())
+		logPreviewErr("report preview failed", id, ctx.Err())
 		Error(w, http.StatusServiceUnavailable, "Rendering took too long")
 		return
 	}

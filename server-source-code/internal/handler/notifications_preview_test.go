@@ -13,6 +13,7 @@ import (
 	"github.com/PatchMon/PatchMon/server-source-code/internal/db"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/reports"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -131,6 +132,19 @@ func TestPreviewMissingReportIs404OtherErrorsAre500(t *testing.T) {
 	}
 }
 
+// TestPreviewDeadlineDuringLookupAnswers503 is the C-review fix: a
+// non-ErrNoRows failure while loading the report now goes through
+// previewErrorStatus like every other preview error, so a context deadline
+// during the lookup itself answers 503 (retryable) instead of a bare 500.
+func TestPreviewDeadlineDuringLookupAnswers503(t *testing.T) {
+	freshGate(t)
+	w := httptest.NewRecorder()
+	previewHandler(context.DeadlineExceeded).PreviewScheduledReport(w, previewRequest("abc"))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestPreviewDeadlineCoversGateWait(t *testing.T) {
 	freshGate(t)
 	previewWait = 10 * time.Second // longer than the deadline below
@@ -185,5 +199,43 @@ func TestPreviewSuccessUsesReportTimezoneForFileName(t *testing.T) {
 	}
 	if cd := w.Header().Get("Content-Disposition"); cd != `attachment; filename="report-report-20260925.pdf"` {
 		t.Fatalf("Content-Disposition: %q", cd)
+	}
+}
+
+// TestPreviewSuccessWritesPDFHeaders exercises the full success path against
+// a real report row (scriptedRow can only fail a scan, never return data),
+// using the DB harness from the archive tests.
+func TestPreviewSuccessWritesPDFHeaders(t *testing.T) {
+	freshGate(t)
+	d := newHandlerTestDB(t)
+	h := handlerWithDB(d)
+	id := uuid.NewString()
+	if _, err := d.Exec(context.Background(), `INSERT INTO scheduled_reports (id, name, cron_expr, enabled, definition, destination_ids, timezone)
+		VALUES ($1, 'Weekly Report', '0 6 * * 1', true, '{}', '[]', 'Europe/Zurich')`, id); err != nil {
+		t.Fatal(err)
+	}
+	previewBuild = func(context.Context, *database.DB, reports.BuildInput) (*reports.Output, error) {
+		return &reports.Output{
+			PDF:        []byte("%PDF-1.4"),
+			LogoSource: "default",
+			Model:      &reports.Model{GeneratedAt: time.Date(2026, 9, 28, 6, 0, 0, 0, time.UTC)},
+		}, nil
+	}
+	w := httptest.NewRecorder()
+	h.PreviewScheduledReport(w, previewRequest(id))
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/pdf" {
+		t.Errorf("Content-Type: %q", ct)
+	}
+	if cd := w.Header().Get("Content-Disposition"); cd != `attachment; filename="report-weekly-report-20260928.pdf"` {
+		t.Errorf("Content-Disposition: %q", cd)
+	}
+	if lg := w.Header().Get("X-Report-Logo"); lg != "default" {
+		t.Errorf("X-Report-Logo: %q", lg)
+	}
+	if w.Body.String() != "%PDF-1.4" {
+		t.Errorf("body: %q", w.Body.String())
 	}
 }

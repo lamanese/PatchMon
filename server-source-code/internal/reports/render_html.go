@@ -89,23 +89,9 @@ var reportTemplate = template.Must(template.New("report.html").Funcs(template.Fu
 	"join":        func(s []string) string { return strings.Join(s, ", ") },
 	"statusColor": statusColor,
 	"sevColor":    severityColor,
-	"levelColor": func(level string) badgeColor {
-		switch level {
-		case "critical":
-			return badgeColor{FG: "#dc2626", BG: "#fef2f2"}
-		case "warn":
-			return badgeColor{FG: "#d97706", BG: "#fffbeb"}
-		}
-		return badgeColor{FG: "#16a34a", BG: "#f0fdf4"}
-	},
+	"levelColor":  levelColor,
 	"scoreColor": func(v float64) template.CSS {
-		switch {
-		case v >= complianceCompliantMin:
-			return "#16a34a"
-		case v >= complianceWarningMin:
-			return "#d97706"
-		}
-		return "#dc2626"
+		return levelColor(scoreLevel(v)).FG
 	},
 	"zeroGreen": func(n int) template.CSS {
 		if n == 0 {
@@ -173,6 +159,18 @@ func statusColor(status string) badgeColor {
 		return badgeColor{FG: "#94a3b8", BG: "#f1f5f9"}
 	}
 	return badgeColor{FG: "#64748b", BG: "#f1f5f9"}
+}
+
+// levelColor maps a scoreLevel/compliance level ("ok"/"warn"/"critical", or
+// disk usage's "warn"/"critical") to a badge colour; anything else is "ok".
+func levelColor(level string) badgeColor {
+	switch level {
+	case "critical":
+		return badgeColor{FG: "#dc2626", BG: "#fef2f2"}
+	case "warn":
+		return badgeColor{FG: "#d97706", BG: "#fffbeb"}
+	}
+	return badgeColor{FG: "#16a34a", BG: "#f0fdf4"}
 }
 
 func severityColor(severity string) badgeColor {

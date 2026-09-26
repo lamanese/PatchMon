@@ -345,7 +345,7 @@ func (c *fpdfCanvas) note(text string) {
 	pdf := c.pdf
 	c.font(false, 7.5, colMuted)
 	c.textBlock(pdfLeft, pdfUsable, 3.8, text)
-	pdf.Ln(1)
+	pdf.Ln(3)
 	c.font(false, 9, colText)
 }
 

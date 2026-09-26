@@ -3911,8 +3911,6 @@ For each channel type the payload adapts:
 | **ntfy** | Short push notification with a link back to the latest report in the UI. The full HTML does not fit ntfy, so it is summarised. |
 | **Internal Alerts** | A system record under the **Alerts** tab, useful when you want a run history inside PatchMon without email. |
 
-PDF attachments to e-mails arrive together with the report archive in increment D (same release, 2.0.2-am.11).
-
 A report's appearance in the **Delivery Log** uses `event_type: scheduled_report`. Filter the log by the report's destinations to audit deliveries.
 
 ### Running a report manually
@@ -3957,7 +3955,7 @@ When the task executes, the worker:
 
 Because the schedule is stored as a cron string plus a timezone, daylight-saving transitions are handled by the cron library. Jobs that would fall in a skipped hour are pushed to the next valid slot; jobs repeated in a duplicate hour fire once.
 
-The **Preview** action (see above) uses the same typed model but draws it onto an A4 canvas with `internal/reports.RenderPDF` instead of the HTML template, serialised through a process-wide render gate (`internal/reports.RenderGate`) so that at most one PDF renders at a time; a busy gate answers `503` after a 10-second wait rather than queueing indefinitely. The worker above does not render PDFs yet — that arrives with e-mail PDF attachments and the report archive in increment D (same release, 2.0.2-am.11).
+The **Preview** action (see above) uses the same typed model but draws it onto an A4 canvas with `internal/reports.RenderPDF` instead of the HTML template, serialised through a process-wide render gate (`internal/reports.RenderGate`) so that at most one PDF renders at a time; a busy gate answers `503` after a 10-second wait rather than queueing indefinitely.
 
 ### Known limits
 
