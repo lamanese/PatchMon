@@ -3867,14 +3867,14 @@ After creation, the report appears in the table with its next run time, status b
 
 ### Customer reports
 
-A customer report sends the PDF to people outside your organisation, so it has stricter rules than an internal report. The server enforces them on every create and update and answers `400` when one is broken:
+A customer report sends the PDF to people outside your organisation, so it has stricter rules than an internal report. The server enforces them on every create and update of an **enabled** customer report and answers `400` when one is broken. A disabled customer report can always be saved (only its recipient list is checked), so a report whose SMTP account was deleted can still be switched off; enabling it again checks every rule:
 
 | Rule | Detail |
 |------|--------|
-| **Recipients** | 1 to 10 addresses in `email_recipients`. Each entry must be exactly one mailbox (an optional display name is dropped); lists, `,`/`;` inside an entry and control characters are rejected. Addresses are stored in lowercase and duplicates are dropped. |
-| **SMTP account** | Exactly one destination, and it must be an **enabled e-mail** destination. Its host, port, credentials and sender address are used; its own **To** address is ignored. Webhook and ntfy destinations cannot be combined with a customer report. |
-| **Host groups** | At least one. A customer report never falls back to the whole fleet; a run without groups fails with `scope_invalid`. |
-| **Schedule** | At most once per hour. Any cron whose next two runs are less than an hour apart (for example `*/30 * * * *`) is rejected; `0 * * * *` is the shortest allowed schedule. The modal's frequencies are all daily or rarer. |
+| **Recipients** | 1 to 10 addresses in `email_recipients`. Each entry must be exactly one mailbox (an optional display name is dropped); lists, `,`/`;` inside an entry, control characters and quoted local parts (such as `"first last"@example.com`) are rejected. Addresses are stored in lowercase and duplicates are dropped. |
+| **SMTP account** | Exactly one destination, and it must be an **enabled e-mail** destination with an encrypted connection: **Use TLS** switched on (STARTTLS), or port 465 (implicit TLS). A plaintext account is rejected with `customer reports require an encrypted SMTP connection (TLS)`; the worker applies the same rule at run time (`destination_invalid`). Its sender address must be one valid mailbox. Its host, port, credentials and sender address are used; its own **To** address is ignored. Webhook and ntfy destinations cannot be combined with a customer report. |
+| **Host groups** | At least one; saving without groups answers `customer reports need at least one host group`. A customer report never falls back to the whole fleet; a run without groups fails with `scope_invalid`. |
+| **Schedule** | At most once per hour. The server checks the next 64 runs and rejects any cron where two consecutive runs are less than an hour apart (for example `*/30 * * * *`, or `0,30 9 * * *`); `0 * * * *` is the shortest allowed schedule. The modal's frequencies are all daily or rarer. |
 
 Every recipient gets their **own** e-mail (no shared To/Cc line), so recipients never see each other's addresses.
 
@@ -3946,11 +3946,12 @@ Mail details:
 - The subject is the localised prefix plus the report name (for example `AutoMan Report: Customer A`, or `AutoMan-Bericht: …` in German).
 - The attachment is named `report-<slug>-<yyyymmdd>.pdf`: the report name lower-cased and hyphenated, plus the run's date in the report's timezone. The CSV is not attached to e-mails; it goes to webhooks and is stored in the archive.
 - Each mail is addressed to exactly one mailbox. An internal e-mail destination whose **To** field holds several addresses fails with `destination_invalid`; use a customer report or one destination per address instead.
-- One mail (connect, TLS, authentication and data) has 60 seconds; a slower server fails the delivery with `smtp_timeout`. Port 465 uses implicit TLS, 587 and 25 STARTTLS.
+- The `From` header carries the bare sender address of the SMTP account, without a display name.
+- One mail (connect, greeting, TLS, authentication and data) has 60 seconds; a slower server, or one that accepts the connection and never answers, fails the delivery with `smtp_timeout`. Port 465 uses implicit TLS, 587 and 25 STARTTLS.
 
 Disabled destinations are skipped when the run is planned. A destination that is deleted, disabled or unreadable between planning and sending fails its delivery with `destination_invalid`.
 
-**Retries.** A run gets up to three retries (four attempts in total). A retry happens only when at least one delivery failed with a retryable code (see the table below), and it re-sends **only the deliveries that are not `sent`**: a recipient who already received the mail never receives it twice from a retry. Retries send the stored snapshot, not a fresh render: renaming the report, changing recipients or editing the definition after the run started does not affect it. A transient render failure (for example a database error) is also retried; configuration errors are not.
+**Retries.** A run gets up to three retries (four attempts in total). A retry happens only when at least one delivery failed with a retryable code (see the table below), and it re-sends **only the deliveries that are `pending` or failed with a retryable code**: a recipient who already received the mail never receives it twice from a retry, and a delivery that failed permanently (for example `smtp_rejected`) stays failed. Retries send the stored snapshot (subject, mail body and PDF), not a fresh render, so renaming the report or editing the definition after the snapshot does not change what is sent; for customer reports the sender address is part of the snapshot too, internal reports use the destination's current sender. Before each send the recipient is checked against the current settings: an address removed from the report's recipient list (customer reports), or no longer the destination's **To** address (internal reports), is not mailed and its delivery fails with `destination_invalid`. A transient render failure (for example a database error) is also retried and renders the report as it is at that moment; configuration errors are not retried. On the last attempt a run is always finalised, even when it was interrupted: deliveries that could not be sent any more fail with `abandoned`. A report that is disabled while a run waits for a retry ends that run as `failed` with `abandoned`, without sending.
 
 **Statuses.** A run ends in one of these states; the same status is written to `scheduled_report_runs`:
 
@@ -3974,11 +3975,11 @@ Disabled destinations are skipped when the run is planned. A destination that is
 | `smtp_connect` | The SMTP server could not be reached or the TLS handshake failed. | Yes |
 | `smtp_auth` | The SMTP server rejected the credentials. | No |
 | `smtp_rejected` | The SMTP server rejected the sender, recipient or message permanently (5xx). | No |
-| `smtp_temporary` | The SMTP server answered with a temporary error (4xx, for example greylisting). | Yes |
+| `smtp_temporary` | The SMTP server answered with a temporary error (4xx, for example a mailbox or server temporarily unavailable). The three retries finish within minutes, so longer delays such as greylisting are usually not bridged. | Yes |
 | `smtp_timeout` | The mail did not complete within 60 seconds. | Yes |
-| `destination_invalid` | The destination was deleted, disabled or is misconfigured (unreadable config, invalid sender or To address), or the report has no usable destination. | No |
+| `destination_invalid` | The destination was deleted, disabled or is misconfigured (unreadable config, invalid sender or To address, a customer report's account without TLS), the recipient was removed from the report before a retry, or the report has no usable destination. | No |
 | `delivery_failed` | A webhook or ntfy delivery failed (transport error or non-2xx answer). | Yes |
-| `abandoned` | The run was still `pending` after 24 hours (see [Report archive](#report-archive)). | No |
+| `abandoned` | The run was still `pending` after 24 hours (see [Report archive](#report-archive)), the report was disabled while the run waited for a retry, or (on a delivery) the last attempt ended before it was sent. | No |
 
 Stored error texts are redacted before they reach the database, the API or the log: at most 300 characters on one line, no credentials (passwords, tokens, authorisation headers), URLs reduced to scheme and host, and e-mail addresses masked.
 
@@ -4025,31 +4026,32 @@ Preview requires `can_manage_notifications`, the same permission as creating, ed
 
 ### Editing and deleting
 
-- **Edit** reopens the same modal pre-filled with the current mode, schedule, sections, destinations or recipients. Saving re-computes the next run time. Saving an enabled customer report opens the confirmation dialog again.
+- **Edit** reopens the same modal pre-filled with the current mode, schedule, sections, destinations or recipients. Saving re-computes the next run time when the schedule changed. Saving an enabled customer report opens the confirmation dialog again.
 - **Duplicate** copies the report as a new, disabled internal report (see [Customer reports](#customer-reports)).
 - **Delete** removes the report permanently, together with its archive and stored PDFs.
 - **Enabled switch**: edit the report and toggle **Enabled** in the modal. Disabled reports keep their schedule but do not fire until re-enabled; their next-run time is still displayed. When you re-enable a report whose next run time lies in the past, the next run is recomputed from the cron instead of firing immediately.
 
 API notes for `PUT /api/v1/notifications/scheduled-reports/{id}`:
 
-- `email_recipients` decides the mode. A list makes the report a customer report; omitting the field or sending `null` makes it an **internal** report (the modal always sends the field). An empty list `[]` is rejected with `400`.
-- The customer-mode rules are checked on every `PUT`, including one that only disables the report. If the e-mail destination of a customer report was deleted or disabled, give the report a valid SMTP account first; until then it cannot be saved, not even to disable it.
-- Destinations of type `internal` are rejected with `400` for every report.
+- `email_recipients` decides the mode. A list makes the report a customer report; `null` makes it an **internal** report; omitting the field keeps the stored recipients (and with them the mode). An empty list `[]` is rejected with `400`. On `POST`, omitting the field creates an internal report.
+- The customer-mode rules (host groups, one enabled e-mail destination with TLS and a valid sender, hourly minimum) are checked only when the resulting report is an enabled customer report. `{"enabled": false}` always succeeds, even when the report's e-mail destination was deleted or disabled.
+- Deleting a destination does not remove its id from reports. For internal reports, and for disabled customer reports, ids of deleted destinations and of `internal` destinations are dropped silently on save and the stored list is cleaned. An enabled customer report answers `400` instead.
+- `name` is limited to 200 characters.
 
 ### How scheduling works internally
 
-Scheduled reports are stored in the `scheduled_reports` table; customer recipients in its `fork_email_recipients` column (`NULL` for internal reports). On create or update, PatchMon computes the next run via the cron expression in the server's timezone, writes it to `next_run_at` and enqueues a task to asynq for exactly that time, with no background polling loop.
+Scheduled reports are stored in the `scheduled_reports` table; customer recipients in its `fork_email_recipients` column (`NULL` for internal reports). On create or update, PatchMon computes the next run via the cron expression in the server's timezone, writes it to `next_run_at` and enqueues a task to asynq for exactly that time. There is no per-minute polling of the table; only the hourly fallback job (see **After downtime** below) re-enqueues reports whose task went missing. An update that changes neither the schedule nor the enabled state keeps `next_run_at` and `last_run_at` exactly as stored (the row is locked for the update, so a run claimed at the same moment is never overwritten).
 
 **Run identity.** Every run has a run key: `sched:<tenant>:<report>:<unix slot>` for a scheduled run (the report plus the `next_run_at` it was enqueued for) or `manual:<tenant>:<report>:<uuid>` for **Run now**. The asynq task id is derived from the run key, so enqueuing the same slot twice is a no-op, and the archive stores the run key as a unique value, so a slot can produce at most one archive entry.
 
 When a task executes, the worker:
 
-1. Resolves the tenant database (fail-closed: a task that names a tenant never falls back to the default database) and re-reads the report row. A deleted or disabled report ends the task without a run.
+1. Resolves the tenant database (fail-closed: a task that names a tenant never falls back to the default database) and re-reads the report row. A deleted or disabled report ends the task without a run; if a disabled report still has a `pending` run for this task (a retry), that run is finalised as `failed` with `abandoned`.
 2. **Claims the slot** (scheduled runs only): in one transaction it moves `next_run_at` to the following cron slot, but only while `next_run_at` still equals the task's slot, and inserts the `pending` archive row. If another task has already claimed the slot, or the report was rescheduled in the meantime, the task ends without a run.
 3. **Enqueues the next run** right after the claim, independent of how rendering and delivery go.
 4. Validates the definition, resolves the host scope and renders HTML, CSV and PDF from a typed model (`internal/reports`). Every section reads only the hosts in scope; a report never falls back to the whole fleet. Unknown host groups, groups without hosts, or more than 500 hosts fail the run with the matching [error code](#delivering-a-report).
-5. **Snapshots** the output, the resolved groups, the host count, the sender and the planned deliveries into the archive row in one transaction.
-6. Sends every delivery that is not yet `sent` from the snapshot, records each result, and finalises the run (archive status, `scheduled_report_runs` row, retention). A retry resumes at step 6 with the same archive row.
+5. **Snapshots** the output, the report name, language, mode and recipients of this render, the resolved groups, the host count, the sender (customer reports) and the planned deliveries into the archive row in one transaction.
+6. Sends every delivery that is `pending` or failed with a retryable code from the snapshot, records each result, and finalises the run: archive status and `scheduled_report_runs` row in one transaction, then retention. Only the finalisation that moves the archive row out of `pending` writes a run row. If that write fails, the task returns an error and asynq retries it; the retry finds the row still `pending` and finalises again. A retry resumes at step 6 with the same archive row (or at step 4 when no PDF was stored yet).
 
 **After downtime.** The hourly fallback job and the startup rehydration enqueue each enabled report at its stored `next_run_at`, not at "now". A slot that passed while the server was down therefore runs once, late, after the restart; the slot claim prevents a second run. Tasks queued by images before 2.0.2-am.13 (payload without a trigger) are discarded once when they execute; the stored `next_run_at` re-creates the chain.
 
@@ -4059,7 +4061,7 @@ Rendering in the worker and the **Preview** action share a process-wide render g
 
 ### Known limits
 
-- **Duplicate mails are unlikely but possible.** If the server crashes after the SMTP server accepted a mail but before PatchMon recorded it as `sent`, a retry sends that mail again.
+- **Duplicate mails are unlikely but possible.** If the server crashes after the SMTP server accepted a mail but before PatchMon recorded it as `sent`, or if writing the `sent` mark to the database fails, a retry sends that mail again.
 - There is no per-day send budget. The hourly minimum for customer reports and the 60-second **Run now** cooldown are the only rate limits.
 - `can_manage_notifications` covers all reports and the whole archive. There is no per-group scoping of who may see or edit which customer's report yet.
 - SVG logos fall back to the default logo in the PDF; upload a PNG or JPEG.
