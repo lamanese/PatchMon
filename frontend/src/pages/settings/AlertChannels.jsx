@@ -268,7 +268,7 @@ const DestinationModal = ({
 						<label className="flex items-center gap-2 text-sm text-secondary-700 dark:text-white">
 							<input
 								type="checkbox"
-								checked={config.use_tls !== false}
+								checked={Boolean(config.use_tls)}
 								onChange={(e) => updateConfig("use_tls", e.target.checked)}
 							/>
 							Use TLS
@@ -389,7 +389,16 @@ const DestinationModal = ({
 													? "border-primary-500 bg-primary-50 dark:bg-primary-900/30"
 													: "border-secondary-300 dark:border-secondary-600 hover:border-primary-400"
 											}`}
-											onClick={() => setChannelType(ct.value)}
+											onClick={() => {
+												// New e-mail destinations store use_tls explicitly, so
+												// the saved config matches the ticked checkbox.
+												if (ct.value !== channelType) {
+													setConfig(
+														ct.value === "email" ? { use_tls: true } : {},
+													);
+												}
+												setChannelType(ct.value);
+											}}
 										>
 											<Icon className="h-10 w-10 text-secondary-700 dark:text-secondary-200 mb-2" />
 											<span className="text-sm font-medium text-secondary-900 dark:text-white">
