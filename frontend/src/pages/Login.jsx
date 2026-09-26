@@ -13,6 +13,7 @@ import { useNavigate } from "react-router-dom";
 import DiscordIcon from "../components/DiscordIcon";
 import { PRODUCT_NAME, SOURCE_CODE_URL } from "../constants/branding";
 import { useAuth } from "../contexts/AuthContext";
+import { useTheme } from "../contexts/ThemeContext";
 import { authAPI, isCorsError } from "../utils/api";
 import { loginIconPath, resolveLogoPath } from "../utils/logoPaths";
 
@@ -45,9 +46,10 @@ const Login = () => {
 	const [tfaTicket, setTfaTicket] = useState("");
 	const [tfaUsername, setTfaUsername] = useState("");
 	const [signupEnabled, setSignupEnabled] = useState(false);
-	// null = not yet loaded; gates the left-side branding panel
+	// null = not yet loaded; gates the branding block below the sign-in card
 	const [showGithubVersionOnLogin, setShowGithubVersionOnLogin] =
 		useState(null);
+	const { isDark } = useTheme();
 	const [oidcConfig, setOidcConfig] = useState({
 		enabled: false,
 		buttonText: "Login with SSO",
@@ -63,6 +65,21 @@ const Login = () => {
 
 	// Logo/favicon settings from login-settings (public, no auth needed)
 	const [settings, setSettings] = useState(null);
+	const logoVersion = settings?.updated_at
+		? new Date(settings.updated_at).getTime()
+		: Date.now();
+	// The sign-in card is white in light mode and dark in dark mode: the
+	// shipped default icon follows the card, an uploaded favicon is used as-is.
+	const cardIconSrc = `${
+		isDark
+			? loginIconPath(settings?.favicon)
+			: resolveLogoPath(settings?.favicon, "favicon")
+	}?v=${logoVersion}`;
+	const cardIconFallback = isDark
+		? "/assets/logo_square_default_dark.svg"
+		: "/assets/logo_square_default.svg";
+	// The page background is always dark: the branding block uses the dark variant.
+	const brandIconSrc = `${loginIconPath(settings?.favicon)}?v=${logoVersion}`;
 
 	// Check login settings (signup enabled and show github version)
 	useEffect(() => {
@@ -386,69 +403,17 @@ const Login = () => {
 				className="absolute inset-0 bg-gradient-to-br from-black/30 to-black/50 pointer-events-none"
 			/>
 
-			{/* Left side - Info Panel (hidden on mobile or when GitHub version is disabled) */}
-			{showGithubVersionOnLogin && (
-				<div className="hidden lg:flex lg:w-1/2 xl:w-3/5 relative z-10">
-					<div className="flex flex-col justify-between text-white p-12 h-full w-full">
-						<div className="flex-1 flex flex-col justify-center items-start max-w-xl mx-auto">
-							<div className="space-y-6">
-								<div>
-									<img
-										src={`${loginIconPath(settings?.favicon)}?v=${
-											settings?.updated_at
-												? new Date(settings.updated_at).getTime()
-												: Date.now()
-										}`}
-										alt="Logo"
-										className="h-16 mb-4"
-										onError={(e) => {
-											e.target.src = `/assets/logo_square_default_dark.svg?v=${Date.now()}`;
-										}}
-									/>
-									<p className="text-2xl text-white font-semibold tracking-tight">
-										{PRODUCT_NAME}
-									</p>
-									<p className="mt-1 text-sm text-blue-200 font-medium tracking-wide uppercase">
-										Patch Management
-									</p>
-								</div>
-							</div>
-						</div>
-
-						{/* Footer */}
-						<div className="max-w-xl mx-auto w-full">
-							<div className="border-t border-white/10 pt-6">
-								<a
-									href="https://amanit.swiss"
-									target="_blank"
-									rel="noopener noreferrer"
-									className="text-sm text-gray-400 hover:text-gray-200 transition-colors"
-								>
-									amanit.swiss
-								</a>
-							</div>
-						</div>
-					</div>
-				</div>
-			)}
-
-			{/* Right side - Login Form */}
-			<div
-				className={`${showGithubVersionOnLogin ? "flex-1" : "w-full"} flex flex-col items-center justify-center py-12 px-4 sm:px-6 lg:px-8 relative z-10`}
-			>
+			{/* Sign-in card, always centred; branding (optional) sits below it */}
+			<div className="w-full flex flex-col items-center justify-center py-12 px-4 sm:px-6 lg:px-8 relative z-10">
 				<div className="max-w-md w-full space-y-8 bg-white dark:bg-secondary-900 rounded-2xl shadow-2xl p-8 lg:p-10">
 					<div>
 						<div className="mx-auto h-16 w-16 flex items-center justify-center">
 							<img
-								src={`${loginIconPath(settings?.favicon)}?v=${
-									settings?.updated_at
-										? new Date(settings.updated_at).getTime()
-										: Date.now()
-								}`}
+								src={cardIconSrc}
 								alt="Logo"
 								className="h-16 w-16"
 								onError={(e) => {
-									e.target.src = `/assets/logo_square_default_dark.svg?v=${Date.now()}`;
+									e.target.src = `${cardIconFallback}?v=${Date.now()}`;
 								}}
 							/>
 						</div>
@@ -712,15 +677,11 @@ const Login = () => {
 							<div className="text-center">
 								<div className="mx-auto h-16 w-16 flex items-center justify-center">
 									<img
-										src={`${loginIconPath(settings?.favicon)}?v=${
-											settings?.updated_at
-												? new Date(settings.updated_at).getTime()
-												: Date.now()
-										}`}
+										src={cardIconSrc}
 										alt="Logo"
 										className="h-16 w-16"
 										onError={(e) => {
-											e.target.src = `/assets/logo_square_default_dark.svg?v=${Date.now()}`;
+											e.target.src = `${cardIconFallback}?v=${Date.now()}`;
 										}}
 									/>
 								</div>
@@ -819,6 +780,33 @@ const Login = () => {
 						</form>
 					)}
 				</div>
+				{showGithubVersionOnLogin && (
+					<div className="mt-8 flex flex-col items-center text-center">
+						<img
+							src={brandIconSrc}
+							alt=""
+							aria-hidden="true"
+							className="h-12 w-12"
+							onError={(e) => {
+								e.target.src = `/assets/logo_square_default_dark.svg?v=${Date.now()}`;
+							}}
+						/>
+						<p className="mt-3 text-lg text-white font-semibold tracking-tight">
+							{PRODUCT_NAME}
+						</p>
+						<p className="mt-0.5 text-xs text-blue-200 font-medium tracking-wide uppercase">
+							Patch Management
+						</p>
+						<a
+							href="https://amanit.swiss"
+							target="_blank"
+							rel="noopener noreferrer"
+							className="mt-3 text-sm text-gray-400 hover:text-gray-200 transition-colors"
+						>
+							amanit.swiss
+						</a>
+					</div>
+				)}
 				{/* AGPL v3 section 13: every user of this instance gets an offer of the running source */}
 				<p className="mt-4 text-xs text-gray-300 text-center">
 					<a

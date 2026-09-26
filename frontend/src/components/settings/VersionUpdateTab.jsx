@@ -131,11 +131,12 @@ const VersionUpdateTab = () => {
 								htmlFor="show-github-version-toggle"
 								className="text-sm font-medium text-secondary-900 dark:text-white cursor-pointer"
 							>
-								Show Branding Panel on Login Screen
+								Show branding on the login screen
 							</label>
 							<p className="text-xs text-secondary-500 dark:text-white mt-1">
-								When enabled, the login screen displays the left-side branding
-								panel (logo and footer link).
+								When enabled, the login screen shows the logo, the product name
+								and the amanit.swiss link below the sign-in card. The card
+								itself stays centred either way.
 							</p>
 						</div>
 						<button
