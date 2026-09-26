@@ -1028,8 +1028,10 @@ const ReportModal = ({
 									deleted when a run finishes.
 								</p>
 							</div>
-							<div className="flex flex-col justify-end pb-1">
-								<label className="flex items-center gap-2 text-sm text-secondary-700 dark:text-white">
+							<div>
+								{/* Same top line as the retention label: the checkbox never
+								    moves, only the hint below changes (fixed two-line height). */}
+								<label className="flex items-center gap-2 text-sm font-medium text-secondary-700 dark:text-white mb-1 h-5">
 									<input
 										type="checkbox"
 										checked={form.deliver}
@@ -1037,7 +1039,7 @@ const ReportModal = ({
 									/>
 									Deliver
 								</label>
-								<p className="mt-1 text-xs text-secondary-500">
+								<p className="mt-1 min-h-[2.5rem] text-xs text-secondary-500">
 									{form.deliver
 										? isCustomer
 											? "Each run is e-mailed to the recipients."
