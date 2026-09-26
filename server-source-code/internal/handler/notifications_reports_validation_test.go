@@ -10,8 +10,14 @@ func TestValidateCustomerCronRequiresOneHour(t *testing.T) {
 	if err := validateCustomerCron("*/30 * * * *", "UTC", now); err == nil {
 		t.Fatal("every 30 minutes must be rejected")
 	}
+	if err := validateCustomerCron("0,30 9 * * *", "UTC", now); err == nil {
+		t.Fatal("two runs 30 minutes apart inside one day must be rejected")
+	}
 	if err := validateCustomerCron("0 * * * *", "UTC", now); err != nil {
 		t.Fatalf("hourly is the minimum: %v", err)
+	}
+	if err := validateCustomerCron("0 6 * * 1", "UTC", now); err != nil {
+		t.Fatalf("weekly: %v", err)
 	}
 	if err := validateCustomerCron("0 6 * * 1", "Europe/Zurich", now); err != nil {
 		t.Fatalf("weekly: %v", err)

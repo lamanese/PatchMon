@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/PatchMon/PatchMon/server-source-code/internal/branding"
 	"github.com/PatchMon/PatchMon/server-source-code/internal/config"
@@ -513,6 +514,12 @@ const RunNowCooldown = 60 * time.Second
 // MinCustomerReportInterval is the shortest schedule a customer report may use.
 const MinCustomerReportInterval = time.Hour
 
+// MaxReportNameLength bounds a report name (characters).
+const MaxReportNameLength = 200
+
+// customerCronLookahead is how many upcoming runs validateCustomerCron checks.
+const customerCronLookahead = 64
+
 // deliveryError is a validation error with an API-safe text (never a
 // recipient address). It unwraps to reports.ErrRecipients so
 // definitionErrorStatus answers 400.
@@ -521,18 +528,34 @@ type deliveryError struct{ msg string }
 func (e deliveryError) Error() string { return e.msg }
 func (e deliveryError) Unwrap() error { return reports.ErrRecipients }
 
-// reportDeliveryPlan is the validated delivery side of a report.
-type reportDeliveryPlan struct {
-	Recipients   []string // nil = internal report
-	CustomerMode bool
+// reportDeliveryInput is the delivery side of a report as it will be stored.
+type reportDeliveryInput struct {
+	Recipients *[]string // nil = internal report
+	DestIDs    []string
+	CronExpr   string
+	Timezone   string
+	Enabled    bool
+	Definition []byte // normalised definition JSON
 }
 
-// validateReportDelivery checks recipients, destinations and, for customer
-// reports, the single enabled e-mail destination and the schedule interval.
-func (h *NotificationsHandler) validateReportDelivery(ctx context.Context, recipients *[]string, destIDs []string, cronExpr, tz string) (reportDeliveryPlan, error) {
-	var plan reportDeliveryPlan
-	if recipients != nil {
-		parsed, err := reports.ParseRecipients(*recipients)
+// reportDeliveryPlan is the validated delivery side of a report.
+type reportDeliveryPlan struct {
+	Recipients     []string // nil = internal report
+	CustomerMode   bool
+	DestinationIDs []string // the ids to store (never nil)
+}
+
+// validateReportDelivery checks recipients and destinations. Recipients are
+// always parsed. An enabled customer report is strict: host groups, exactly
+// one enabled e-mail destination with TLS and a valid sender, and at most
+// one run per hour. Every other report (internal, or disabled) silently
+// drops destination ids that no longer exist or are of type internal (the
+// worker skips them anyway), so a stale id never blocks a save and a report
+// can always be disabled.
+func (h *NotificationsHandler) validateReportDelivery(ctx context.Context, in reportDeliveryInput) (reportDeliveryPlan, error) {
+	plan := reportDeliveryPlan{DestinationIDs: []string{}}
+	if in.Recipients != nil {
+		parsed, err := reports.ParseRecipients(*in.Recipients)
 		if err != nil {
 			// The helper texts carry no address; rename the field for the API.
 			return plan, deliveryError{msg: "email_recipients: " + strings.Replace(err.Error(), "recipients: ", "", 1)}
@@ -540,48 +563,75 @@ func (h *NotificationsHandler) validateReportDelivery(ctx context.Context, recip
 		plan.Recipients = parsed
 		plan.CustomerMode = parsed != nil
 	}
+	strict := plan.CustomerMode && in.Enabled
 	q := h.q(ctx)
-	dests := make([]db.NotificationDestination, 0, len(destIDs))
-	for _, id := range destIDs {
+	dests := make([]db.NotificationDestination, 0, len(in.DestIDs))
+	for _, id := range in.DestIDs {
 		dst, err := q.GetNotificationDestinationByID(ctx, id)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return plan, fmt.Errorf("load destination: %w", err)
+			}
+			if strict {
 				return plan, deliveryError{msg: fmt.Sprintf("destination %s not found", id)}
 			}
-			return plan, fmt.Errorf("load destination: %w", err)
+			continue
 		}
 		if dst.ChannelType == "internal" {
-			return plan, deliveryError{msg: "destination type internal cannot receive reports"}
+			if strict {
+				return plan, deliveryError{msg: "destination type internal cannot receive reports"}
+			}
+			continue
 		}
 		dests = append(dests, dst)
+		plan.DestinationIDs = append(plan.DestinationIDs, id)
 	}
-	if !plan.CustomerMode {
+	if !strict {
 		return plan, nil
+	}
+	def, err := reports.ParseDefinition(in.Definition)
+	if err != nil {
+		return plan, err
+	}
+	if len(def.HostGroupIDs) == 0 {
+		return plan, deliveryError{msg: "customer reports need at least one host group"}
 	}
 	if len(dests) != 1 || dests[0].ChannelType != "email" || !dests[0].Enabled {
 		return plan, deliveryError{msg: "customer reports need exactly one enabled e-mail destination"}
 	}
-	if err := validateCustomerCron(cronExpr, tz, time.Now()); err != nil {
+	if err := queue.CheckCustomerSMTPConfig(h.enc, dests[0].ConfigEncrypted); err != nil {
+		return plan, deliveryError{msg: err.Error()}
+	}
+	if err := validateCustomerCron(in.CronExpr, in.Timezone, time.Now()); err != nil {
 		return plan, err
 	}
 	return plan, nil
 }
 
-// validateCustomerCron rejects schedules whose next two runs are less than
-// MinCustomerReportInterval apart.
+// validateCustomerCron rejects schedules where any two consecutive runs among
+// the next customerCronLookahead runs are less than MinCustomerReportInterval
+// apart (catches irregular lists such as "0,30 9 * * *").
 func validateCustomerCron(expr, tz string, now time.Time) error {
-	n1, err := notifications.NextCronRun(expr, tz, now)
+	prev, err := notifications.NextCronRun(expr, tz, now)
 	if err != nil {
 		return deliveryError{msg: "Invalid cron_expr"}
 	}
-	n2, err := notifications.NextCronRun(expr, tz, n1)
-	if err != nil {
-		return deliveryError{msg: "Invalid cron_expr"}
-	}
-	if n2.Sub(n1) < MinCustomerReportInterval {
-		return deliveryError{msg: "customer reports can run at most once per hour"}
+	for i := 1; i < customerCronLookahead; i++ {
+		next, err := notifications.NextCronRun(expr, tz, prev)
+		if err != nil {
+			return deliveryError{msg: "Invalid cron_expr"}
+		}
+		if next.Sub(prev) < MinCustomerReportInterval {
+			return deliveryError{msg: "customer reports can run at most once per hour"}
+		}
+		prev = next
 	}
 	return nil
+}
+
+// reportNameTooLong reports whether a name exceeds MaxReportNameLength characters.
+func reportNameTooLong(name string) bool {
+	return utf8.RuneCountInString(name) > MaxReportNameLength
 }
 
 // runNowLimiter remembers the last accepted "Run now" per report (in memory,
@@ -697,6 +747,10 @@ func (h *NotificationsHandler) CreateScheduledReport(w http.ResponseWriter, r *h
 		Error(w, http.StatusBadRequest, "name required")
 		return
 	}
+	if reportNameTooLong(req.Name) {
+		Error(w, http.StatusBadRequest, fmt.Sprintf("name too long (max %d)", MaxReportNameLength))
+		return
+	}
 	cron := req.CronExpr
 	if cron == "" {
 		cron = "0 8 * * *"
@@ -707,7 +761,6 @@ func (h *NotificationsHandler) CreateScheduledReport(w http.ResponseWriter, r *h
 		Error(w, definitionErrorStatus(err), definitionErrorText(err))
 		return
 	}
-	dest, _ := json.Marshal(req.DestinationIDs)
 	en := true
 	if req.Enabled != nil {
 		en = *req.Enabled
@@ -717,11 +770,14 @@ func (h *NotificationsHandler) CreateScheduledReport(w http.ResponseWriter, r *h
 		Error(w, http.StatusBadRequest, "Invalid cron_expr")
 		return
 	}
-	plan, err := h.validateReportDelivery(r.Context(), req.EmailRecipients, req.DestinationIDs, cron, tz)
+	plan, err := h.validateReportDelivery(r.Context(), reportDeliveryInput{
+		Recipients: req.EmailRecipients, DestIDs: req.DestinationIDs, CronExpr: cron, Timezone: tz, Enabled: en, Definition: def,
+	})
 	if err != nil {
 		Error(w, definitionErrorStatus(err), definitionErrorText(err))
 		return
 	}
+	dest, _ := json.Marshal(plan.DestinationIDs)
 	id := uuid.New().String()
 	ctx := r.Context()
 	d := h.db.DB(ctx)
@@ -774,16 +830,36 @@ func (h *NotificationsHandler) UpdateScheduledReport(w http.ResponseWriter, r *h
 		Enabled        *bool                  `json:"enabled"`
 		Definition     map[string]interface{} `json:"definition"`
 		DestinationIDs []string               `json:"destination_ids"`
-		// Missing or null = internal report (the modal always sends it).
-		EmailRecipients *[]string `json:"email_recipients"`
+		// Absent = keep the stored recipients, null = internal report,
+		// [...] = customer report ([] is rejected).
+		EmailRecipients json.RawMessage `json:"email_recipients"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		Error(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-	ex, err := h.q(r.Context()).GetScheduledReportByID(r.Context(), id)
+	if reportNameTooLong(req.Name) {
+		Error(w, http.StatusBadRequest, fmt.Sprintf("name too long (max %d)", MaxReportNameLength))
+		return
+	}
+	ctx := r.Context()
+	d := h.db.DB(ctx)
+	// Lock the row first: the worker's slot claim writes next_run_at and
+	// last_run_at, and this update must never write back stale values.
+	tx, err := d.Begin(ctx)
 	if err != nil {
-		Error(w, http.StatusNotFound, "Not found")
+		Error(w, http.StatusInternalServerError, "Failed to update")
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := d.Queries.WithTx(tx)
+	ex, err := q.ForkGetScheduledReportForUpdate(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			Error(w, http.StatusNotFound, "Not found")
+			return
+		}
+		Error(w, http.StatusInternalServerError, "Failed to update")
 		return
 	}
 	name := ex.Name
@@ -798,7 +874,7 @@ func (h *NotificationsHandler) UpdateScheduledReport(w http.ResponseWriter, r *h
 	// only when the cron expression changes.
 	tz := ex.Timezone
 	if tz == "" {
-		tz = h.timezoneForRequest(r.Context())
+		tz = h.timezoneForRequest(ctx)
 	}
 	en := ex.Enabled
 	if req.Enabled != nil {
@@ -807,45 +883,57 @@ func (h *NotificationsHandler) UpdateScheduledReport(w http.ResponseWriter, r *h
 	def := ex.Definition
 	if req.Definition != nil {
 		var derr error
-		def, derr = h.validatedDefinition(r.Context(), req.Definition)
+		def, derr = h.validatedDefinition(ctx, req.Definition)
 		if derr != nil {
 			Error(w, definitionErrorStatus(derr), definitionErrorText(derr))
 			return
 		}
 	}
-	dest := ex.DestinationIds
 	destIDs := destinationIDsOf(ex.DestinationIds)
 	if req.DestinationIDs != nil {
-		dest, _ = json.Marshal(req.DestinationIDs)
 		destIDs = req.DestinationIDs
 	}
-	plan, err := h.validateReportDelivery(r.Context(), req.EmailRecipients, destIDs, cron, tz)
+	var recipients *[]string
+	switch raw := strings.TrimSpace(string(req.EmailRecipients)); raw {
+	case "":
+		if ex.ForkEmailRecipients != nil {
+			stored := ex.ForkEmailRecipients
+			recipients = &stored
+		}
+	case "null":
+	default:
+		var list []string
+		if err := json.Unmarshal(req.EmailRecipients, &list); err != nil {
+			Error(w, http.StatusBadRequest, "email_recipients must be a list of addresses or null")
+			return
+		}
+		if list == nil {
+			list = []string{}
+		}
+		recipients = &list
+	}
+	plan, err := h.validateReportDelivery(ctx, reportDeliveryInput{
+		Recipients: recipients, DestIDs: destIDs, CronExpr: cron, Timezone: tz, Enabled: en, Definition: def,
+	})
 	if err != nil {
 		Error(w, definitionErrorStatus(err), definitionErrorText(err))
 		return
 	}
+	dest, _ := json.Marshal(plan.DestinationIDs)
+	// next_run_at comes from the locked row; it is recomputed only when the
+	// schedule changed or an enabled report points at a past (or no) slot.
+	now := time.Now()
 	nextAt := ex.NextRunAt
-	if req.CronExpr != "" {
-		if n, err := notifications.NextCronRun(cron, tz, time.Now()); err == nil {
+	if cron != ex.CronExpr {
+		if n, err := notifications.NextCronRun(cron, tz, now); err == nil {
 			nextAt = pgtime.From(n)
 		}
 	}
-	// A slot in the past (or none) would enqueue an immediate run; move it
-	// to the next cron slot instead.
-	if en && nextAt.Time.Before(time.Now()) {
-		if n, err := notifications.NextCronRun(cron, tz, time.Now()); err == nil {
+	if en && (!nextAt.Valid || nextAt.Time.Before(now)) {
+		if n, err := notifications.NextCronRun(cron, tz, now); err == nil {
 			nextAt = pgtime.From(n)
 		}
 	}
-	ctx := r.Context()
-	d := h.db.DB(ctx)
-	tx, err := d.Begin(ctx)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, "Failed to update")
-		return
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	q := d.Queries.WithTx(tx)
 	_, err = q.UpdateScheduledReport(ctx, db.UpdateScheduledReportParams{
 		ID:             id,
 		Name:           name,
@@ -873,8 +961,8 @@ func (h *NotificationsHandler) UpdateScheduledReport(w http.ResponseWriter, r *h
 		return
 	}
 	// Re-enqueue if enabled and schedule changed (dedup handles existing tasks).
-	if en && nextAt.Valid {
-		_ = queue.EnqueueScheduledReportAt(h.qc, id, hostFromRequest(r), nextAt.Time)
+	if row.Enabled && row.NextRunAt.Valid {
+		_ = queue.EnqueueScheduledReportAt(h.qc, id, hostFromRequest(r), row.NextRunAt.Time)
 	}
 	JSON(w, http.StatusOK, h.scheduledReportToMap(row))
 }
@@ -972,7 +1060,8 @@ func (h *NotificationsHandler) PreviewScheduledReport(w http.ResponseWriter, r *
 		Error(w, code, msg)
 		return
 	}
-	in := reports.BuildInput{ReportName: rep.Name, Definition: rep.Definition, Timezone: rep.Timezone, Now: time.Now(), PDF: true}
+	in := reports.BuildInput{ReportName: rep.Name, Definition: rep.Definition, Timezone: rep.Timezone, Now: time.Now(), PDF: true,
+		CustomerMode: rep.ForkEmailRecipients != nil}
 	if s, sErr := d.Queries.GetFirstSettings(ctx); sErr == nil {
 		in.Branding, in.StaleAfter = reports.BrandingFromSettings(s)
 	}

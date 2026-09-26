@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -237,5 +238,37 @@ func TestPreviewSuccessWritesPDFHeaders(t *testing.T) {
 	}
 	if w.Body.String() != "%PDF-1.4" {
 		t.Errorf("body: %q", w.Body.String())
+	}
+}
+
+// The preview renders in the report's own mode: a customer report without
+// host groups is refused like the worker would refuse it (scope_invalid),
+// while an internal report of the same definition renders fleet-wide.
+func TestPreviewUsesCustomerMode(t *testing.T) {
+	freshGate(t)
+	d := newHandlerTestDB(t)
+	h := handlerWithDB(d)
+	ctx := context.Background()
+	customer, internal := uuid.NewString(), uuid.NewString()
+	if _, err := d.Exec(ctx, `INSERT INTO scheduled_reports (id, name, cron_expr, enabled, definition, destination_ids, timezone, fork_email_recipients)
+		VALUES ($1, 'Customer', '0 6 * * 1', true, '{"version":2}', '[]', 'UTC', ARRAY['a@example.com']),
+		       ($2, 'Internal', '0 6 * * 1', true, '{"version":2}', '[]', 'UTC', NULL)`, customer, internal); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.PreviewScheduledReport(w, previewRequest(customer))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "scope_invalid") {
+		t.Fatalf("fleet-wide customer preview: want 400 scope_invalid, got %d %s", w.Code, w.Body.String())
+	}
+	var gotCustomer *bool
+	previewBuild = func(_ context.Context, _ *database.DB, in reports.BuildInput) (*reports.Output, error) {
+		v := in.CustomerMode
+		gotCustomer = &v
+		return &reports.Output{PDF: []byte("%PDF-1.4"), LogoSource: "default", Model: &reports.Model{GeneratedAt: time.Now()}}, nil
+	}
+	w = httptest.NewRecorder()
+	h.PreviewScheduledReport(w, previewRequest(internal))
+	if w.Code != http.StatusOK || gotCustomer == nil || *gotCustomer {
+		t.Fatalf("internal preview: want 200 with CustomerMode=false, got %d %v", w.Code, gotCustomer)
 	}
 }
