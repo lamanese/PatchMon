@@ -4,7 +4,7 @@
 
 This repository is not affiliated with, endorsed by or supported by PatchMon Ltd. "PatchMon" and the PatchMon logo are trademarks of PatchMon Ltd; the fork is distributed and operated under its own name. See [NOTICE](NOTICE) for attribution and the notice of changes required by the AGPL.
 
-Licensed under the [GNU Affero General Public License v3](LICENSE). If you use an instance of this software over a network you are entitled to the source code of exactly the version you are using: every release is tagged (`v<upstream-base>-am.<n>`, for example `v2.0.2-am.11`), the running version is shown under *Settings → Server Version* together with a link to its tag, the login page links to the [tag list](https://github.com/lamanese/PatchMon/tags), and every tag has a [GitHub Release](https://github.com/lamanese/PatchMon/releases) describing what it contains.
+Licensed under the [GNU Affero General Public License v3](LICENSE). If you use an instance of this software over a network you are entitled to the source code of exactly the version you are using: every release is tagged (`v<upstream-base>-am.<n>`, for example `v2.0.2-am.11`), the running version is shown under *Settings → Server Version* together with a link to its tag, every signed-in user has a "Source code (AGPL v3)" link to the [tag list](https://github.com/lamanese/PatchMon/tags) in the sidebar, and every tag has a [GitHub Release](https://github.com/lamanese/PatchMon/releases) describing what it contains.
 
 ## What it is
 

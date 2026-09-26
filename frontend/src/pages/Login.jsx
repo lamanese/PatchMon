@@ -11,7 +11,7 @@ import { useEffect, useId, useState } from "react";
 
 import { useNavigate } from "react-router-dom";
 import DiscordIcon from "../components/DiscordIcon";
-import { PRODUCT_NAME, SOURCE_CODE_URL } from "../constants/branding";
+import { PRODUCT_NAME } from "../constants/branding";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { authAPI, isCorsError } from "../utils/api";
@@ -807,17 +807,6 @@ const Login = () => {
 						</a>
 					</div>
 				)}
-				{/* AGPL v3 section 13: every user of this instance gets an offer of the running source */}
-				<p className="mt-4 text-xs text-gray-300 text-center">
-					<a
-						href={SOURCE_CODE_URL}
-						target="_blank"
-						rel="noopener noreferrer"
-						className="hover:text-white transition-colors"
-					>
-						Source code (AGPL v3)
-					</a>
-				</p>
 			</div>
 		</div>
 	);
